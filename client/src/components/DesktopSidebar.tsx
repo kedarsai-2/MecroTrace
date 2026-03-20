@@ -1,8 +1,8 @@
 import { useNavigate, useLocation } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-  Home, Settings, Users, Truck, Gavel, Printer, Scale, PenLine,
-  FileText, Receipt, BookOpen, CreditCard, BarChart3, User,
+  Home, Settings, Users, Truck, Gavel, Printer,
+  FileText, Receipt, BookOpen, CreditCard, User,
   ChevronLeft, ChevronRight, Moon, Sun, LogOut, ShieldCheck,
   ShoppingBag, Box, Send
 } from 'lucide-react';
@@ -31,8 +31,6 @@ const navSections = [
       { icon: Settings, title: 'Commodity Settings', path: '/commodity-settings' },
       { icon: Truck, title: 'Arrivals', path: '/arrivals' },
       { icon: Gavel, title: 'Auctions / Sales', path: '/auctions' },
-      { icon: Scale, title: 'Weighing', path: '/weighing' },
-      { icon: PenLine, title: "Writer's Pad", path: '/writers-pad' },
       { icon: Printer, title: 'Print Hub', path: '/logistics' },
     ],
   },
@@ -51,9 +49,7 @@ const navSections = [
       { icon: Receipt, title: 'Billing', path: '/billing' },
       { icon: BookOpen, title: 'Chart of Accounts', path: '/accounting' },
       { icon: CreditCard, title: 'Vouchers & Payments', path: '/vouchers' },
-      { icon: BarChart3, title: 'Financial Reports', path: '/financial-reports' },
       { icon: Printer, title: 'Print Templates', path: '/prints' },
-      { icon: BarChart3, title: 'Reports', path: '/reports' },
     ],
   },
   {

@@ -2,12 +2,7 @@ import { useState } from 'react';
 import { useNavigate, useLocation, Outlet } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-  LayoutDashboard,
   Users,
-  Store,
-  Package,
-  BookUser,
-  Settings,
   ChevronLeft,
   ChevronRight,
   LogOut,
@@ -15,7 +10,6 @@ import {
   Sun,
   Bell,
   ShieldCheck,
-  BarChart3,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { MercotraceIcon } from '@/components/MercotraceLogo';
@@ -33,13 +27,7 @@ type AdminNavItem = {
 };
 
 const navItems: AdminNavItem[] = [
-  { icon: LayoutDashboard, label: 'Dashboard', path: '/admin', moduleKey: 'Dashboard' },
   { icon: Users, label: 'Traders', path: '/admin/traders', moduleKey: 'Traders' },
-  { icon: Store, label: 'Categories', path: '/admin/categories', moduleKey: 'Categories' },
-  { icon: Package, label: 'Commodities', path: '/admin/commodities', moduleKey: 'Commodities' },
-  { icon: BookUser, label: 'Contacts', path: '/admin/contacts', moduleKey: 'Contacts' },
-  { icon: BarChart3, label: 'Reports', path: '/admin/reports', moduleKey: 'Reports' },
-  { icon: Settings, label: 'Settings', path: '/admin/settings', moduleKey: 'Settings' },
 ];
 
 const AdminLayout = () => {
@@ -92,9 +80,7 @@ const AdminLayout = () => {
         <nav className="relative z-10 flex-1 py-3 px-2 space-y-1 overflow-y-auto no-scrollbar">
           {visibleNavItems.map((item) => {
             const isActive =
-              location.pathname === item.path ||
-              (item.path !== '/admin' && location.pathname.startsWith(item.path + '/')) ||
-              (item.path !== '/admin' && location.pathname === item.path);
+              location.pathname === item.path || location.pathname.startsWith(`${item.path}/`);
             return (
               <button
                 key={item.path}

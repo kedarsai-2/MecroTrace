@@ -42,20 +42,16 @@ import ContactsPage from "./pages/ContactsPage";
 import ArrivalsPage from "./pages/ArrivalsPage";
 import ScribblePadPage from "./pages/ScribblePadPage";
 import LogisticsPage from "./pages/LogisticsPage";
-import WeighingPage from "./pages/WeighingPage";
-import WritersPadPage from "./pages/WritersPadPage";
 import SettlementPage from "./pages/SettlementPage";
 import BillingPage from "./pages/BillingPage";
 import AccountingPage from "./pages/AccountingPage";
 import VouchersPage from "./pages/VouchersPage";
 import LedgerViewPage from "./pages/LedgerViewPage";
 import ContactLedgerViewPage from "./pages/ContactLedgerViewPage";
-import FinancialReportsPage from "./pages/FinancialReportsPage";
 import SelfSalePage from "./pages/SelfSalePage";
 import StockPurchasePage from "./pages/StockPurchasePage";
 import CDNPage from "./pages/CDNPage";
 import PrintsPage from "./pages/PrintsPage";
-import ReportsPage from "./pages/ReportsPage";
 import SettingsPage from "./pages/SettingsPage";
 import RoleManagementPage from "./pages/admin/settings/RoleManagementPage";
 import UserManagementPage from "./pages/admin/settings/UserManagementPage";
@@ -63,20 +59,10 @@ import RoleAllocationPage from "./pages/admin/settings/RoleAllocationPage";
 import RbacSettingsPage from "./pages/settings/RbacSettingsPage";
 import PresetSettingsPage from "./pages/settings/PresetSettingsPage";
 
-// Admin (lazy — less frequent access)
+// Admin (lazy — traders-only surface)
 const AdminLayout = lazy(() => import("./components/admin/AdminLayout"));
 const AdminLoginPage = lazy(() => import("./pages/admin/AdminLoginPage"));
-const AdminDashboard = lazy(() => import("./pages/admin/AdminDashboard"));
 const AdminTradersPage = lazy(() => import("./pages/admin/AdminTradersPage"));
-const AdminCategoriesPage = lazy(() => import("./pages/admin/AdminCategoriesPage"));
-const AdminCommoditiesPage = lazy(() => import("./pages/admin/AdminCommoditiesPage"));
-const AdminContactsPage = lazy(() => import("./pages/admin/AdminContactsPage"));
-const AdminReportsPage = lazy(() => import("./pages/admin/AdminReportsPage"));
-const AdminSettingsPage = lazy(() => import("./pages/admin/AdminSettingsPage"));
-const AdminRoleManagementPage = lazy(() => import("./pages/admin/settings/AdminRoleManagementPage"));
-const AdminUserManagementPage = lazy(() => import("./pages/admin/settings/AdminUserManagementPage"));
-const AdminRoleAllocationPage = lazy(() => import("./pages/admin/settings/AdminRoleAllocationPage"));
-const AdminRbacSettingsPage = lazy(() => import("./pages/admin/settings/RbacSettingsPage"));
 
 const queryClient = new QueryClient();
 
@@ -127,21 +113,21 @@ const App = () => (
                   <Route path="/arrivals" element={<ArrivalsPage />} />
                   <Route path="/scribble-pad" element={<ScribblePadPage />} />
                   <Route path="/logistics" element={<LogisticsPage />} />
-                  <Route path="/weighing" element={<WeighingPage />} />
-                  <Route path="/writers-pad" element={<WritersPadPage />} />
+                  <Route path="/weighing" element={<Navigate to="/home" replace />} />
+                  <Route path="/writers-pad" element={<Navigate to="/home" replace />} />
                   <Route path="/settlement" element={<SettlementPage />} />
                   <Route path="/billing" element={<BillingPage />} />
                   <Route path="/accounting" element={<AccountingPage />} />
                   <Route path="/vouchers" element={<VouchersPage />} />
                   <Route path="/ledger-view/:ledgerId" element={<LedgerViewPage />} />
                   <Route path="/contact-ledger/:contactId" element={<ContactLedgerViewPage />} />
-                  <Route path="/financial-reports" element={<FinancialReportsPage />} />
+                  <Route path="/financial-reports" element={<Navigate to="/home" replace />} />
                   <Route path="/self-sale" element={<SelfSalePage />} />
                   <Route path="/stock-purchase" element={<StockPurchasePage />} />
                   <Route path="/cdn" element={<CDNPage />} />
                   <Route path="/prints-reports" element={<PrintsPage />} />
                   <Route path="/prints" element={<PrintsPage />} />
-                  <Route path="/reports" element={<ReportsPage />} />
+                  <Route path="/reports" element={<Navigate to="/home" replace />} />
                   <Route path="/settings" element={<SettingsPage />} />
                   <Route path="/settings/rbac" element={<RbacSettingsPage />} />
                   <Route path="/settings/preset-settings" element={<PresetSettingsPage />} />
@@ -196,17 +182,8 @@ const App = () => (
                     </AdminAuthProvider>
                   }
                 >
-                  <Route index element={<AdminDashboard />} />
+                  <Route index element={<Navigate to="/admin/traders" replace />} />
                   <Route path="traders" element={<AdminTradersPage />} />
-                  <Route path="categories" element={<AdminCategoriesPage />} />
-                  <Route path="commodities" element={<AdminCommoditiesPage />} />
-                  <Route path="contacts" element={<AdminContactsPage />} />
-                  <Route path="reports" element={<AdminReportsPage />} />
-                  <Route path="settings" element={<AdminSettingsPage />} />
-                  <Route path="settings/rbac" element={<AdminRbacSettingsPage />} />
-                  <Route path="settings/roles" element={<AdminRoleManagementPage />} />
-                  <Route path="settings/users" element={<AdminUserManagementPage />} />
-                  <Route path="settings/role-allocation" element={<AdminRoleAllocationPage />} />
                 </Route>
 
                 <Route path="*" element={<NotFound />} />

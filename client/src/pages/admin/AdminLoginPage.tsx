@@ -32,7 +32,7 @@ const AdminLoginPage = () => {
     setError('');
     try {
       await login(email, password);
-      navigate('/admin');
+      navigate('/admin/traders');
     } catch (e: any) {
       setError(e.message || 'Invalid credentials');
     } finally {
