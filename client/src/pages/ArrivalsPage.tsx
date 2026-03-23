@@ -410,11 +410,40 @@ const ArrivalsPage = () => {
     const q = l.quantity ?? 0;
     return q <= 0 || q > 100000 || !Number.isInteger(q);
   };
+
+  const lotNameCountsBySellerId = useMemo(() => {
+    return sellers.reduce<Record<string, Record<string, number>>>((acc, seller) => {
+      const inner: Record<string, number> = {};
+      for (const lot of seller.lots) {
+        const key = (lot.lot_name ?? '').trim().toLowerCase();
+        if (!key) continue;
+        inner[key] = (inner[key] ?? 0) + 1;
+      }
+      acc[seller.seller_vehicle_id] = inner;
+      return acc;
+    }, {});
+  }, [sellers]);
+
+  const getLotNameDuplicateError = (sellerIdx: number, lotIdx: number): string | null => {
+    const seller = sellers[sellerIdx];
+    const lot = seller?.lots[lotIdx];
+    const ln = (lot?.lot_name ?? '').trim();
+    if (!ln) return null;
+    const counts = lotNameCountsBySellerId[seller?.seller_vehicle_id ?? ''] ?? {};
+    return (counts[ln.toLowerCase()] ?? 0) > 1 ? 'Lot Name already exists for this seller' : null;
+  };
+
+  const isLotNameDuplicateInvalid = (sellerIdx: number, lotIdx: number) =>
+    getLotNameDuplicateError(sellerIdx, lotIdx) != null;
+
   const canAddAnotherLot = (seller: SellerEntry) => {
     if (seller.lots.length === 0) return true;
+    const counts = lotNameCountsBySellerId[seller.seller_vehicle_id] ?? {};
     return seller.lots.every((lot) => {
       const lotName = (lot.lot_name ?? '').trim();
       if (!lotName) return false;
+      const key = lotName.toLowerCase();
+      if ((counts[key] ?? 0) > 1) return false;
       return !isLotNameInvalid(lot) && !isLotQuantityInvalid(lot);
     });
   };
@@ -425,12 +454,13 @@ const ArrivalsPage = () => {
     for (let i = 0; i < sellers.length; i++) {
       const s = sellers[i];
       if (isSellerNameInvalid(s) || isSellerMarkInvalid(s, i)) return true;
-      for (const l of s.lots) {
-        if (isLotNameInvalid(l) || isLotQuantityInvalid(l)) return true;
+      for (let li = 0; li < s.lots.length; li++) {
+        const l = s.lots[li];
+        if (isLotNameInvalid(l) || isLotQuantityInvalid(l) || isLotNameDuplicateInvalid(i, li)) return true;
       }
     }
     return false;
-  }, [isVehicleNumberInvalid, isLoadedWeightInvalid, isEmptyWeightInvalid, isDeductedWeightInvalid, isGodownInvalid, isGatepassNumberInvalid, isBrokerNameInvalid, isFreightRateInvalid, isAdvancePaidInvalid, sellers, contacts]);
+  }, [isVehicleNumberInvalid, isLoadedWeightInvalid, isEmptyWeightInvalid, isDeductedWeightInvalid, isGodownInvalid, isGatepassNumberInvalid, isBrokerNameInvalid, isFreightRateInvalid, isAdvancePaidInvalid, sellers, contacts, lotNameCountsBySellerId, isLotNameDuplicateInvalid, isSellerMarkInvalid]);
 
   // Summary stats for four cards (mobile-first, same as raghav-style UI)
   const totalVehicles = useMemo(() => apiArrivals.length, [apiArrivals]);
@@ -815,6 +845,7 @@ const ArrivalsPage = () => {
         toast.error(`${seller.seller_name || 'Seller'}: At least one lot is required`);
         return;
       }
+      const seenLotNames = new Set<string>();
       for (const lot of seller.lots) {
         const ln = lot.lot_name?.trim() ?? '';
         if (!ln) {
@@ -829,6 +860,12 @@ const ArrivalsPage = () => {
           toast.error(`Lot name may contain letters/numbers plus spaces, '-' and '_': ${lot.lot_name}`);
           return;
         }
+        const lnLower = ln.toLowerCase();
+        if (seenLotNames.has(lnLower)) {
+          toast.error(`${seller.seller_name} → ${ln}: Lot Name already exists for this seller`);
+          return;
+        }
+        seenLotNames.add(lnLower);
         if (lot.quantity <= 0 || lot.quantity > 100000 || !Number.isInteger(lot.quantity)) {
           toast.error(`${seller.seller_name} → ${ln}: Quantity must be a positive integer between 1 and 100,000`);
           return;
@@ -1332,7 +1369,7 @@ const ArrivalsPage = () => {
                                         ) : expandedDetail ? (
                                           <div className="grid grid-cols-2 gap-4 text-sm">
                                             <div className="space-y-3">
-                                              {expandedDetail.netWeight != null && (
+                                              {expandedDetail.netWeight != null && (!isArrivalPanelOpen || step === 1) && (
                                                 <div className="grid grid-cols-2 gap-2">
                                                   <div className="rounded-lg bg-blue-50 dark:bg-blue-950/20 p-2 text-center">
                                                     <p className="text-[10px] text-muted-foreground">Net Weight</p>
@@ -1367,6 +1404,7 @@ const ArrivalsPage = () => {
                                                     variant: l.variant,
                                                   })),
                                                 }))}
+                                                hidePrint={isArrivalPanelOpen && step > 1}
                                                 onRefresh={() => loadExpandedDetail(expandedDetail.vehicleId)}
                                               />
                                               <div className="flex gap-2">
@@ -1572,16 +1610,18 @@ const ArrivalsPage = () => {
                         <Input type="number" placeholder="0" value={deductedWeight} onChange={e => setDeductedWeight(e.target.value)}
                           className={cn("h-11 rounded-xl text-sm font-medium", isDeductedWeightInvalid && "border-red-500 ring-2 ring-red-500/30 bg-red-50 dark:bg-red-950/20")} min={0} max={10000} step="0.01" />
                       </div>
-                      <div className="grid grid-cols-2 gap-2">
-                        <div className="rounded-xl bg-blue-50 dark:bg-blue-950/20 p-3 text-center border border-blue-200/50 dark:border-blue-800/30">
-                          <p className="text-[10px] text-blue-600 dark:text-blue-400 font-semibold">Net Weight (LW − EW)</p>
-                          <p className="text-xl font-bold text-foreground">{netWeight}<span className="text-xs font-normal text-muted-foreground">kg</span></p>
+                      {step === 1 && (
+                        <div className="grid grid-cols-2 gap-2">
+                          <div className="rounded-xl bg-blue-50 dark:bg-blue-950/20 p-3 text-center border border-blue-200/50 dark:border-blue-800/30">
+                            <p className="text-[10px] text-blue-600 dark:text-blue-400 font-semibold">Net Weight (LW − EW)</p>
+                            <p className="text-xl font-bold text-foreground">{netWeight}<span className="text-xs font-normal text-muted-foreground">kg</span></p>
+                          </div>
+                          <div className="rounded-xl bg-violet-50 dark:bg-violet-950/20 p-3 text-center border border-violet-200/50 dark:border-violet-800/30">
+                            <p className="text-[10px] text-violet-600 dark:text-violet-400 font-semibold">Billable (NW − DW)</p>
+                            <p className="text-xl font-bold text-foreground">{finalBillableWeight}<span className="text-xs font-normal text-muted-foreground">kg</span></p>
+                          </div>
                         </div>
-                        <div className="rounded-xl bg-violet-50 dark:bg-violet-950/20 p-3 text-center border border-violet-200/50 dark:border-violet-800/30">
-                          <p className="text-[10px] text-violet-600 dark:text-violet-400 font-semibold">Billable (NW − DW)</p>
-                          <p className="text-xl font-bold text-foreground">{finalBillableWeight}<span className="text-xs font-normal text-muted-foreground">kg</span></p>
-                        </div>
-                      </div>
+                      )}
                     </div>
 
                     <div className="glass-card rounded-2xl p-4">
@@ -1856,6 +1896,7 @@ const ArrivalsPage = () => {
                                 )}
                                 {seller.lots.map((lot, li) => {
                                   const vehicleTotal = vehicleTotalBags;
+                                  const lotDuplicateError = !isLotNameInvalid(lot) ? getLotNameDuplicateError(si, li) : null;
                                   return (
                                     <div key={lot.lot_id} className="rounded-xl border border-border/30 p-3 space-y-2">
                                       <div className="flex items-center justify-between">
@@ -1873,11 +1914,12 @@ const ArrivalsPage = () => {
                                             onChange={e => updateLot(si, li, { lot_name: e.target.value })}
                                             className={cn(
                                               "h-9 w-full rounded-lg text-sm",
-                                              isLotNameInvalid(lot) && "border-red-500 ring-2 ring-red-500/30 bg-red-50 dark:bg-red-950/20"
+                                              (isLotNameInvalid(lot) || lotDuplicateError) && "border-red-500 ring-2 ring-red-500/30 bg-red-50 dark:bg-red-950/20"
                                             )}
                                             inputMode="text"
                                             maxLength={50}
                                           />
+                                          {lotDuplicateError && <p className="text-[9px] text-red-500 mt-0.5">{lotDuplicateError}</p>}
                                         </div>
                                         <div>
                                           <Input
@@ -2133,16 +2175,18 @@ const ArrivalsPage = () => {
                                 <p className="text-muted-foreground">Loading…</p>
                               ) : expandedDetail ? (
                                 <>
-                                  <div className="grid grid-cols-2 gap-2">
-                                    <div className="rounded-lg bg-blue-50 dark:bg-blue-950/20 p-2 text-center">
-                                      <p className="text-[10px] text-muted-foreground">Net Weight</p>
-                                      <p className="font-bold text-foreground">{expandedDetail.netWeight ?? 0}kg</p>
+                                  {(!isArrivalPanelOpen || step === 1) && (
+                                    <div className="grid grid-cols-2 gap-2">
+                                      <div className="rounded-lg bg-blue-50 dark:bg-blue-950/20 p-2 text-center">
+                                        <p className="text-[10px] text-muted-foreground">Net Weight</p>
+                                        <p className="font-bold text-foreground">{expandedDetail.netWeight ?? 0}kg</p>
+                                      </div>
+                                      <div className="rounded-lg bg-violet-50 dark:bg-violet-950/20 p-2 text-center">
+                                        <p className="text-[10px] text-muted-foreground">Billable</p>
+                                        <p className="font-bold text-foreground">{(expandedDetail.netWeight ?? 0) - (expandedDetail.deductedWeight ?? 0)}kg</p>
+                                      </div>
                                     </div>
-                                    <div className="rounded-lg bg-violet-50 dark:bg-violet-950/20 p-2 text-center">
-                                      <p className="text-[10px] text-muted-foreground">Billable</p>
-                                      <p className="font-bold text-foreground">{(expandedDetail.netWeight ?? 0) - (expandedDetail.deductedWeight ?? 0)}kg</p>
-                                    </div>
-                                  </div>
+                                  )}
                                   <FreightDetailsCard freightRate={expandedDetail.freightRate ?? 0} netWeight={expandedDetail.netWeight ?? 0} freightMethod={expandedDetail.freightMethod ?? 'BY_WEIGHT'} freightTotal={expandedDetail.freightTotal ?? 0} advancePaid={expandedDetail.advancePaid ?? 0} noRental={expandedDetail.noRental ?? false} />
                                   <SellerInfoCard
                                     sellers={expandedDetail.sellers.map(s => ({
@@ -2157,6 +2201,7 @@ const ArrivalsPage = () => {
                                         variant: l.variant,
                                       })),
                                     }))}
+                                    hidePrint={isArrivalPanelOpen && step > 1}
                                   />
                                   <div className="flex gap-2 pt-1">
                                     {can('Arrivals', 'Edit') && <button type="button" onClick={() => handleEditArrival(a)} className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl bg-muted/50 text-xs font-semibold"><Pencil className="w-3.5 h-3.5" /> Edit</button>}
@@ -2300,16 +2345,18 @@ const ArrivalsPage = () => {
                         <Input type="number" placeholder="0" value={deductedWeight} onChange={e => setDeductedWeight(e.target.value)}
                           className={cn("h-12 rounded-xl text-base font-medium", isDeductedWeightInvalid && "border-red-500 ring-2 ring-red-500/30 bg-red-50 dark:bg-red-950/20")} min={0} max={10000} step="0.01" />
                       </div>
-                      <div className="grid grid-cols-2 gap-2">
-                        <div className="rounded-xl bg-blue-50 dark:bg-blue-950/20 p-3 text-center border border-blue-200/50 dark:border-blue-800/30">
-                          <p className="text-[10px] text-blue-600 dark:text-blue-400 font-semibold">Net Weight (LW − EW)</p>
-                          <p className="text-xl font-bold text-foreground">{netWeight}<span className="text-xs font-normal text-muted-foreground">kg</span></p>
+                      {step === 1 && (
+                        <div className="grid grid-cols-2 gap-2">
+                          <div className="rounded-xl bg-blue-50 dark:bg-blue-950/20 p-3 text-center border border-blue-200/50 dark:border-blue-800/30">
+                            <p className="text-[10px] text-blue-600 dark:text-blue-400 font-semibold">Net Weight (LW − EW)</p>
+                            <p className="text-xl font-bold text-foreground">{netWeight}<span className="text-xs font-normal text-muted-foreground">kg</span></p>
+                          </div>
+                          <div className="rounded-xl bg-violet-50 dark:bg-violet-950/20 p-3 text-center border border-violet-200/50 dark:border-violet-800/30">
+                            <p className="text-[10px] text-violet-600 dark:text-violet-400 font-semibold">Billable (NW − DW)</p>
+                            <p className="text-xl font-bold text-foreground">{finalBillableWeight}<span className="text-xs font-normal text-muted-foreground">kg</span></p>
+                          </div>
                         </div>
-                        <div className="rounded-xl bg-violet-50 dark:bg-violet-950/20 p-3 text-center border border-violet-200/50 dark:border-violet-800/30">
-                          <p className="text-[10px] text-violet-600 dark:text-violet-400 font-semibold">Billable (NW − DW)</p>
-                          <p className="text-xl font-bold text-foreground">{finalBillableWeight}<span className="text-xs font-normal text-muted-foreground">kg</span></p>
-                        </div>
-                      </div>
+                      )}
                     </div>
 
                     <div className="glass-card rounded-2xl p-4">
@@ -2560,6 +2607,7 @@ const ArrivalsPage = () => {
                                 )}
                                 {seller.lots.map((lot, li) => {
                                   const vehicleTotal = vehicleTotalBags;
+                                  const lotDuplicateError = !isLotNameInvalid(lot) ? getLotNameDuplicateError(si, li) : null;
                                   return (
                                     <div key={lot.lot_id} className="rounded-xl border border-border/30 p-3 space-y-2">
                                       <div className="flex items-center justify-between">
@@ -2575,11 +2623,12 @@ const ArrivalsPage = () => {
                                             onChange={e => updateLot(si, li, { lot_name: e.target.value })}
                                             className={cn(
                                               "h-10 w-full rounded-lg text-sm",
-                                              isLotNameInvalid(lot) && "border-red-500 ring-2 ring-red-500/30 bg-red-50 dark:bg-red-950/20"
+                                              (isLotNameInvalid(lot) || lotDuplicateError) && "border-red-500 ring-2 ring-red-500/30 bg-red-50 dark:bg-red-950/20"
                                             )}
                                             inputMode="text"
                                             maxLength={50}
                                           />
+                                          {lotDuplicateError && <p className="text-[9px] text-red-500 mt-0.5">{lotDuplicateError}</p>}
                                         </div>
                                         <div>
                                           <Input
