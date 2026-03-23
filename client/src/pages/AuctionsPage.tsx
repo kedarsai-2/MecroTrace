@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback, useRef, Fragment } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef, useLayoutEffect, Fragment } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   ArrowLeft, Gavel, Plus, Trash2,
@@ -226,9 +226,13 @@ const AuctionsPage = () => {
   const [scribblePadResetTrigger, setScribblePadResetTrigger] = useState(0);
   /** Last segment appended from the inline scribble pad (for correcting via candidate chip in append mode). */
   const lastScribbleSegmentRef = useRef('');
-  /** Mobile numpad: alternate `(` then `)` on each tap of the parens key. */
-  const nextParenIsOpenRef = useRef(true);
-  const [activeNumpadField, setActiveNumpadField] = useState<'rate' | 'qty'>('rate');
+  const markInputRef = useRef<HTMLInputElement>(null);
+  const pendingMarkCaretPosRef = useRef<number | null>(null);
+  const markInsertPosRef = useRef<number | null>(null);
+  const forceMarkFocusRef = useRef(false);
+  const braceLockActiveRef = useRef(false);
+  const manualMarkSelectionRef = useRef(false);
+  const [activeNumpadField, setActiveNumpadField] = useState<'rate' | 'qty' | 'mark'>('rate');
   const [mobileKeyboardEnabled, setMobileKeyboardEnabled] = useState(false);
   const rateInputRef = useRef<HTMLInputElement>(null);
   const qtyInputRef = useRef<HTMLInputElement>(null);
@@ -293,10 +297,9 @@ const AuctionsPage = () => {
     showPresetMargin: boolean;
     preset: number;
     presetType: PresetType;
-    activeNumpadField: 'rate' | 'qty';
+    activeNumpadField: 'rate' | 'qty' | 'mark';
     mobileKeyboardEnabled: boolean;
     lastScribbleSegment: string;
-    nextParenIsOpen: boolean;
   };
 
   const editBidFormSnapshotRef = useRef<EditBidFormSnapshot | null>(null);
@@ -525,38 +528,82 @@ const AuctionsPage = () => {
     return list.filter(m => m.toLowerCase().includes(q));
   }, [temporaryBuyerMarks, scribbleMark]);
 
+  const clampInsideClosingParen = useCallback((value: string, proposedPos: number, allowManualExit = false) => {
+    if (!braceLockActiveRef.current) return proposedPos;
+    const closeIdx = value.indexOf(')');
+    if (closeIdx === -1) {
+      braceLockActiveRef.current = false;
+      return proposedPos;
+    }
+    const openIdx = value.lastIndexOf('(', closeIdx);
+    if (openIdx === -1) {
+      braceLockActiveRef.current = false;
+      return proposedPos;
+    }
+    if (allowManualExit && proposedPos > closeIdx) {
+      braceLockActiveRef.current = false;
+      return proposedPos;
+    }
+    return Math.min(proposedPos, closeIdx);
+  }, []);
+
   const handleScribbleSegmentDetected = useCallback((segment: string, meta?: MarkDetectionMeta) => {
     if (editingBidId) return;
     const up = segment.toUpperCase().slice(0, MAX_MARK_LEN);
     setScribbleMark((prev) => {
+      const insertAtRaw = markInsertPosRef.current;
+      const basePos = insertAtRaw == null ? prev.length : Math.max(0, Math.min(insertAtRaw, prev.length));
+      const insertAt = clampInsideClosingParen(prev, basePos);
       if (meta?.replaceLastSegment && lastScribbleSegmentRef.current) {
-        const cut = prev.slice(0, Math.max(0, prev.length - lastScribbleSegmentRef.current.length));
-        const next = (cut + up).slice(0, MAX_MARK_LEN);
+        const cutLen = lastScribbleSegmentRef.current.length;
+        const replaceStart = Math.max(0, insertAt - cutLen);
+        const next = `${prev.slice(0, replaceStart)}${up}${prev.slice(insertAt)}`.slice(0, MAX_MARK_LEN);
+        markInsertPosRef.current = clampInsideClosingParen(next, Math.min(replaceStart + up.length, next.length));
         lastScribbleSegmentRef.current = up;
         return next;
       }
-      const next = (prev + up).slice(0, MAX_MARK_LEN);
+      const next = `${prev.slice(0, insertAt)}${up}${prev.slice(insertAt)}`.slice(0, MAX_MARK_LEN);
+      markInsertPosRef.current = clampInsideClosingParen(next, Math.min(insertAt + up.length, next.length));
       lastScribbleSegmentRef.current = up;
       return next;
     });
     setSelectedBuyer(null);
     // Do not bump scribblePadResetTrigger here: InlineScribblePad append mode clears ink internally;
     // incrementing would run the reset effect and wipe candidate chips before the user can tap one.
-  }, [editingBidId]);
-
-  useEffect(() => {
-    if (scribbleMark === '') nextParenIsOpenRef.current = true;
-  }, [scribbleMark]);
+  }, [editingBidId, clampInsideClosingParen]);
 
   const appendMarkParenFromNumpad = useCallback(() => {
     if (editingBidId) return;
-    const ch = nextParenIsOpenRef.current ? '(' : ')';
-    nextParenIsOpenRef.current = !nextParenIsOpenRef.current;
     lastScribbleSegmentRef.current = '';
-    setScribbleMark((prev) => (prev + ch).slice(0, MAX_MARK_LEN));
+    setScribbleMark((prev) => {
+      const el = markInputRef.current;
+      const hasSelection = !!el && document.activeElement === el;
+      const start = hasSelection ? (el.selectionStart ?? prev.length) : prev.length;
+      const end = hasSelection ? (el.selectionEnd ?? prev.length) : prev.length;
+      const next = `${prev.slice(0, start)}()${prev.slice(end)}`.slice(0, MAX_MARK_LEN);
+      braceLockActiveRef.current = true;
+      pendingMarkCaretPosRef.current = Math.min(start + 1, next.length);
+      markInsertPosRef.current = pendingMarkCaretPosRef.current;
+      forceMarkFocusRef.current = true;
+      return next;
+    });
     setSelectedBuyer(null);
     hapticSelection();
   }, [editingBidId]);
+
+  useLayoutEffect(() => {
+    const caretPos = pendingMarkCaretPosRef.current;
+    if (caretPos == null) return;
+    const markEl = markInputRef.current;
+    if (!markEl) return;
+    const shouldForceFocus = forceMarkFocusRef.current || braceLockActiveRef.current;
+    if (shouldForceFocus) markEl.focus();
+    if (document.activeElement !== markEl && !shouldForceFocus) return;
+    markEl.setSelectionRange(caretPos, caretPos);
+    markInsertPosRef.current = caretPos;
+    pendingMarkCaretPosRef.current = null;
+    forceMarkFocusRef.current = false;
+  }, [scribbleMark]);
 
   const handleMarkBackspace = useCallback(() => {
     if (editingBidId) return;
@@ -568,6 +615,15 @@ const AuctionsPage = () => {
   const totalSold = useMemo(() => entries.reduce((s, e) => s + e.quantity, 0), [entries]);
   const remaining = selectedLot ? selectedLot.bag_count - totalSold : 0;
   const highestBid = useMemo(() => Math.max(0, ...entries.map(e => e.rate)), [entries]);
+  const previousBidRate = useMemo(() => {
+    if (entries.length === 0) return 0;
+    return Math.trunc(entries[entries.length - 1]?.rate ?? 0);
+  }, [entries]);
+  const getBidRateFromInput = useCallback((rawRate: string) => {
+    const parsed = parseInt(rawRate, 10);
+    if (!Number.isFinite(parsed)) return 0;
+    return showPresetMargin ? parsed - preset : parsed;
+  }, [showPresetMargin, preset]);
 
   const editingEntry = useMemo(() => {
     if (!editingBidId) return null;
@@ -834,7 +890,7 @@ const AuctionsPage = () => {
 
   const handleFormSubmit = () => {
     if (!selectedBuyer || !rate || !qty) return;
-    const entryRate = parseInt(rate);
+    const entryRate = getBidRateFromInput(rate);
     const entryQty = parseInt(qty);
     if (entryRate <= 0 || entryQty <= 0) return;
     const effectivePreset = showPresetMargin ? preset : 0;
@@ -858,7 +914,7 @@ const AuctionsPage = () => {
 
   const handleScribbleConfirm = (initials: string, quantity: number) => {
     if (editingBidId) return;
-    const currentRate = parseInt(rate) || highestBid || 0;
+    const currentRate = getBidRateFromInput(rate) || highestBid || 0;
     if (currentRate <= 0) return;
     const effectivePreset = showPresetMargin ? preset : 0;
     tryAddEntry({
@@ -884,7 +940,7 @@ const AuctionsPage = () => {
 
   const handleScribbleInlineAdd = () => {
     if (!scribbleMark || !rate || !qty) return;
-    const entryRate = parseInt(rate);
+    const entryRate = getBidRateFromInput(rate);
     const entryQty = parseInt(qty);
     if (entryRate <= 0 || entryQty <= 0) return;
     const effectivePreset = showPresetMargin ? preset : 0;
@@ -912,7 +968,7 @@ const AuctionsPage = () => {
 
   // Unified Add Bid: use selected contact (name + mark) or scribble mark only — fast path for live auction
   const handleUnifiedAdd = () => {
-    const entryRate = parseInt(rate);
+    const entryRate = getBidRateFromInput(rate);
     const entryQty = parseInt(qty);
     if (!rate || !qty || entryRate <= 0 || entryQty <= 0) return;
     const effectivePreset = showPresetMargin ? preset : 0;
@@ -969,12 +1025,20 @@ const AuctionsPage = () => {
     } else if (activeNumpadField === 'qty') {
       setQty(next);
       if (editingBidId) setEditBidDraft((d) => (d ? { ...d, qty: next } : d));
+    } else if (activeNumpadField === 'mark') {
+      lastScribbleSegmentRef.current = '';
+      const v = next.toUpperCase().slice(0, MAX_MARK_LEN);
+      setScribbleMark(v);
+      markInsertPosRef.current = clampInsideClosingParen(v, v.length);
+      pendingMarkCaretPosRef.current = markInsertPosRef.current;
+      setSelectedBuyer(null);
     }
   };
 
   const getCurrentNumpadValue = () => {
     if (activeNumpadField === 'rate') return rate;
     if (activeNumpadField === 'qty') return qty;
+    if (activeNumpadField === 'mark') return scribbleMark;
     return '';
   };
 
@@ -985,6 +1049,7 @@ const AuctionsPage = () => {
       return;
     }
     if (key === '.') {
+      if (activeNumpadField === 'mark') return;
       if (activeNumpadField === 'rate') {
         // Fast entry helper: dot key appends double-zero for rates.
         updateActiveNumpadField(`${current}00`.slice(0, 8));
@@ -992,17 +1057,23 @@ const AuctionsPage = () => {
       return;
     }
     if (key === '+') {
+      if (activeNumpadField === 'mark') return;
       const n = parseInt(String(current || '0'), 10) || 0;
       updateActiveNumpadField(String(n + 1));
       return;
     }
     if (key === '*') {
+      if (activeNumpadField === 'mark') return;
       const n = parseInt(String(current || '0'), 10) || 0;
       updateActiveNumpadField(String(n * 10));
     }
   };
 
   const handleNumpadBackspace = () => {
+    if (activeNumpadField === 'mark') {
+      handleMarkBackspace();
+      return;
+    }
     const current = getCurrentNumpadValue();
     updateActiveNumpadField(String(current).slice(0, -1));
   };
@@ -1015,12 +1086,13 @@ const AuctionsPage = () => {
     setMobileKeyboardEnabled(true);
     if (activeNumpadField === 'rate') rateInputRef.current?.focus();
     else if (activeNumpadField === 'qty') qtyInputRef.current?.focus();
+    else if (activeNumpadField === 'mark') markInputRef.current?.focus();
   };
 
   const handleSelfSale = () => {
     if (remaining <= 0 || !selectedLot) return;
     hapticImpact();
-    const currentRate = highestBid || parseInt(rate) || 0;
+    const currentRate = highestBid || getBidRateFromInput(rate) || 0;
     tryAddEntry({
       buyerName: 'Self Sale',
       buyerMark: 'SS',
@@ -1100,7 +1172,7 @@ const AuctionsPage = () => {
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Failed to remove bid');
     }
-  }, [selectedLot, loadTemporaryBuyerMarks, editingBidId, can]);
+  }, [selectedLot, loadTemporaryBuyerMarks, editingBidId, can, getBidRateFromInput]);
 
   const setTokenAdvanceAmount = useCallback(async (id: string, amount: number) => {
     if (!selectedLot) return;
@@ -1143,7 +1215,6 @@ const AuctionsPage = () => {
       setActiveNumpadField(snap.activeNumpadField);
       setMobileKeyboardEnabled(snap.mobileKeyboardEnabled);
       lastScribbleSegmentRef.current = snap.lastScribbleSegment;
-      nextParenIsOpenRef.current = snap.nextParenIsOpen;
     }
   }, []);
 
@@ -1165,7 +1236,6 @@ const AuctionsPage = () => {
       activeNumpadField,
       mobileKeyboardEnabled,
       lastScribbleSegment: lastScribbleSegmentRef.current,
-      nextParenIsOpen: nextParenIsOpenRef.current,
     };
 
     setShowTokenInput(null);
@@ -1331,6 +1401,12 @@ const AuctionsPage = () => {
 
   const applyPreset = (value: number) => {
     const next = preset === value ? 0 : value;
+    const currentInput = parseInt(rate, 10);
+    if (!editingBidId && showPresetMargin && Number.isFinite(currentInput) && currentInput > 0) {
+      const baseRate = currentInput - preset;
+      const nextDisplay = baseRate + next;
+      setRate(String(Math.max(0, nextDisplay)));
+    }
     setPreset(next);
     if (next !== 0) setPresetType(value >= 0 ? 'PROFIT' : 'LOSS');
 
@@ -1340,7 +1416,22 @@ const AuctionsPage = () => {
     }
   };
 
+  useEffect(() => {
+    if (editingBidId) return;
+    if (rate.trim() !== '') return;
+    if (previousBidRate <= 0) return;
+    const displayRate = showPresetMargin ? previousBidRate + preset : previousBidRate;
+    setRate(String(displayRate));
+  }, [editingBidId, previousBidRate, rate, showPresetMargin, preset]);
+
   const handleShowPresetMarginChange = useCallback((checked: boolean) => {
+    if (!editingBidId) {
+      const currentInput = parseInt(rate, 10);
+      if (Number.isFinite(currentInput) && currentInput > 0) {
+        const nextInput = checked ? currentInput + preset : currentInput - preset;
+        setRate(String(Math.max(0, nextInput)));
+      }
+    }
     setShowPresetMargin(checked);
     if (!editingBidId) return;
     setEditBidDraft((d) => {
@@ -1348,7 +1439,7 @@ const AuctionsPage = () => {
       const nextPreset = checked ? preset : 0;
       return { ...d, preset: nextPreset, presetType: nextPreset < 0 ? 'LOSS' : 'PROFIT' };
     });
-  }, [editingBidId, preset]);
+  }, [editingBidId, preset, rate]);
 
   const selectLot = useCallback((lot: LotInfo) => {
     setSelectedLot(lot);
@@ -1982,16 +2073,32 @@ const AuctionsPage = () => {
                     resetTrigger={scribblePadResetTrigger}
                   />
                   <Input
+                    ref={markInputRef}
                     type="text"
                     value={scribbleMark}
                     readOnly={!!editingBidId}
+                    onMouseDown={() => { manualMarkSelectionRef.current = true; }}
+                    onTouchStart={() => { manualMarkSelectionRef.current = true; }}
                     onChange={(e) => {
                       if (editingBidId) return;
                       lastScribbleSegmentRef.current = '';
                       const v = e.target.value.toUpperCase().slice(0, MAX_MARK_LEN);
                       setScribbleMark(v);
+                      const rawPos = e.target.selectionStart ?? v.length;
+                      const clampedPos = clampInsideClosingParen(v, rawPos);
+                      markInsertPosRef.current = clampedPos;
+                      pendingMarkCaretPosRef.current = clampedPos;
                       setSelectedBuyer(null);
                     }}
+                    onSelect={(e) => {
+                      const rawPos = e.currentTarget.selectionStart ?? scribbleMark.length;
+                      const allowManualExit = manualMarkSelectionRef.current;
+                      manualMarkSelectionRef.current = false;
+                      const clampedPos = clampInsideClosingParen(scribbleMark, rawPos, allowManualExit);
+                      markInsertPosRef.current = clampedPos;
+                      pendingMarkCaretPosRef.current = clampedPos !== rawPos ? clampedPos : null;
+                    }}
+                    onFocus={() => setActiveNumpadField('mark')}
                     placeholder="Or type mark / name to search…"
                     className="h-11 rounded-xl text-sm sm:text-base font-medium bg-muted/20 border-violet-400/20"
                   />
@@ -2295,7 +2402,7 @@ const AuctionsPage = () => {
                       <th className={cn("font-semibold text-muted-foreground uppercase tracking-wider", isDesktop ? "px-3 py-2.5 text-xs" : "px-2 py-1.5 text-[10px]")}>Mark / Buyer</th>
                       <th className={cn("font-semibold text-muted-foreground uppercase tracking-wider", isDesktop ? "px-3 py-2.5 text-xs" : "px-2 py-1.5 text-[10px]")}>Rate</th>
                       {showPresetMargin && (
-                        <th className={cn("font-semibold text-muted-foreground uppercase tracking-wider", isDesktop ? "px-3 py-2.5 text-xs" : "px-2 py-1.5 text-[10px]")}>Preset</th>
+                        <th className={cn("font-semibold text-muted-foreground uppercase tracking-wider", isDesktop ? "px-3 py-2.5 text-xs" : "px-2 py-1.5 text-[10px]")}>Extra</th>
                       )}
                       <th className={cn("font-semibold text-muted-foreground uppercase tracking-wider", isDesktop ? "px-3 py-2.5 text-xs" : "px-2 py-1.5 text-[10px]")}>Qty</th>
                       <th className={cn("font-semibold text-muted-foreground uppercase tracking-wider text-right", isDesktop ? "px-3 py-2.5 text-xs" : "px-2 py-1.5 text-[10px]")}>Action</th>
@@ -2337,12 +2444,7 @@ const AuctionsPage = () => {
                             </div>
                           </td>
                           <td className={cn("font-semibold text-foreground align-top", isDesktop ? "px-3 py-2 text-sm" : "px-2 py-1.5 text-xs")}>
-                            <div>₹{entry.rate}</div>
-                            {showPresetMargin && entry.presetApplied !== 0 && (
-                              <p className={cn("text-[9px] font-normal text-muted-foreground mt-0.5", !isDesktop && "text-[8px]")}>
-                                Seller ₹{entry.sellerRate}
-                              </p>
-                            )}
+                            <div>₹{showPresetMargin ? entry.sellerRate : entry.rate}</div>
                           </td>
                           {showPresetMargin && (
                             <td
@@ -2615,15 +2717,6 @@ const AuctionsPage = () => {
                   </span>
                   <button
                     type="button"
-                    onClick={handleMarkBackspace}
-                    disabled={!!editingBidId || !scribbleMark}
-                    className="px-1.5 py-0.5 rounded-md text-[9px] font-semibold bg-muted/70 text-foreground border border-border/60 disabled:opacity-40"
-                    aria-label="Delete last character of mark"
-                  >
-                    Del
-                  </button>
-                  <button
-                    type="button"
                     disabled={!!editingBidId}
                     onClick={() => { lastScribbleSegmentRef.current = ''; setScribbleMark(''); setScribblePadResetTrigger(t => t + 1); }}
                     className="p-1 rounded-md bg-destructive/10 text-destructive hover:bg-destructive/20 disabled:opacity-40 disabled:cursor-not-allowed"
@@ -2636,28 +2729,6 @@ const AuctionsPage = () => {
             </div>
           )}
           <div className="flex gap-1.5 mb-1 min-w-0">
-            <div className="min-w-0 flex-[1.15]">
-              <label htmlFor="sales-pad-mark-mobile" className="text-[9px] font-semibold text-muted-foreground uppercase tracking-wide mb-0.5 block truncate">
-                Mark
-              </label>
-              <Input
-                id="sales-pad-mark-mobile"
-                type="text"
-                autoComplete="off"
-                value={scribbleMark}
-                readOnly={!!editingBidId}
-                onChange={(e) => {
-                  if (editingBidId) return;
-                  lastScribbleSegmentRef.current = '';
-                  const v = e.target.value.toUpperCase().slice(0, MAX_MARK_LEN);
-                  setScribbleMark(v);
-                  setSelectedBuyer(null);
-                }}
-                placeholder="Search…"
-                aria-label="Search mark or name"
-                className="h-9 rounded-lg text-[11px] sm:text-xs font-medium bg-muted/20 border-violet-400/20 px-2 min-w-0"
-              />
-            </div>
             <div className="min-w-0 flex-1">
               <label htmlFor="sales-pad-rate-mobile" className="text-[9px] font-semibold text-muted-foreground uppercase tracking-wide mb-0.5 block truncate">
                 Rate ₹
@@ -2688,6 +2759,45 @@ const AuctionsPage = () => {
                   "h-9 rounded-lg text-center font-bold text-[11px] sm:text-sm bg-muted/20 border-primary/20 min-w-0",
                   activeNumpadField === 'rate' && "ring-2 ring-primary border-primary shadow-[0_0_0_2px_hsl(var(--primary))]"
                 )}
+              />
+            </div>
+            <div className="min-w-0 flex-[1.15]">
+              <label htmlFor="sales-pad-mark-mobile" className="text-[9px] font-semibold text-muted-foreground uppercase tracking-wide mb-0.5 block truncate">
+                Mark
+              </label>
+              <Input
+                id="sales-pad-mark-mobile"
+                ref={markInputRef}
+                type="text"
+                autoComplete="off"
+                value={scribbleMark}
+                readOnly={!!editingBidId}
+                onMouseDown={() => { manualMarkSelectionRef.current = true; }}
+                onTouchStart={() => { manualMarkSelectionRef.current = true; }}
+                onChange={(e) => {
+                  if (editingBidId) return;
+                  lastScribbleSegmentRef.current = '';
+                  const v = e.target.value.toUpperCase().slice(0, MAX_MARK_LEN);
+                  setScribbleMark(v);
+                  const rawPos = e.target.selectionStart ?? v.length;
+                  const clampedPos = clampInsideClosingParen(v, rawPos);
+                  markInsertPosRef.current = clampedPos;
+                  pendingMarkCaretPosRef.current = clampedPos;
+                  setSelectedBuyer(null);
+                }}
+                onSelect={(e) => {
+                  const rawPos = e.currentTarget.selectionStart ?? scribbleMark.length;
+                  const allowManualExit = manualMarkSelectionRef.current;
+                  manualMarkSelectionRef.current = false;
+                  const clampedPos = clampInsideClosingParen(scribbleMark, rawPos, allowManualExit);
+                  markInsertPosRef.current = clampedPos;
+                  pendingMarkCaretPosRef.current = clampedPos !== rawPos ? clampedPos : null;
+                }}
+                inputMode="none"
+                onFocus={() => { setActiveNumpadField('mark'); hideNativeKeyboard(); }}
+                placeholder="Search…"
+                aria-label="Search mark or name"
+                className="h-9 rounded-lg text-[11px] sm:text-xs font-medium bg-muted/20 border-violet-400/20 px-2 min-w-0"
               />
             </div>
             <div className="min-w-0 flex-1">
@@ -2791,6 +2901,7 @@ const AuctionsPage = () => {
               <div className="grid grid-cols-2 gap-1">
                 <button
                   type="button"
+                  onMouseDown={(e) => e.preventDefault()}
                   onClick={appendMarkParenFromNumpad}
                   disabled={!!editingBidId}
                   className="h-8 rounded-lg bg-violet-500/15 text-violet-800 dark:text-violet-200 border border-violet-500/35 text-[11px] font-bold"
@@ -2799,15 +2910,7 @@ const AuctionsPage = () => {
                 >
                   ( )
                 </button>
-                <button
-                  type="button"
-                  onClick={handleMarkBackspace}
-                  disabled={!!editingBidId || !scribbleMark}
-                  className="h-8 rounded-lg bg-muted/60 hover:bg-muted text-[10px] font-semibold text-foreground disabled:opacity-40"
-                  aria-label="Delete last character of mark"
-                >
-                  Del
-                </button>
+                <div className="h-8 rounded-lg bg-muted/20 border border-dashed border-border/60" aria-hidden="true" />
               </div>
               <div className="grid grid-cols-2 gap-1">
                 <button
