@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   ArrowLeft, FileText, Search, User, Package, Truck, Hash,
@@ -18,6 +18,7 @@ import { directPrint } from '@/utils/printTemplates';
 import { generateSalesPattiPrintHTML } from '@/utils/printDocumentTemplates';
 import ForbiddenPage from '@/components/ForbiddenPage';
 import { usePermissions } from '@/lib/permissions';
+import useAutofocusWhen from '@/hooks/useAutofocusWhen';
 
 // ── Types ─────────────────────────────────────────────────
 interface SellerSettlement {
@@ -39,7 +40,10 @@ interface SettlementEntry {
   bidNumber: number;
   buyerMark: string;
   buyerName: string;
+  /** Auction base bid per bag */
   rate: number;
+  /** From auction; seller settlement rate = rate + presetMargin */
+  presetMargin?: number;
   quantity: number;
   weight: number;
 }
@@ -126,6 +130,13 @@ function isVehicleNumberValid(v: string): boolean {
   return v.length >= VEHICLE_NUMBER_MIN && v.length <= VEHICLE_NUMBER_MAX;
 }
 
+/** Seller settlement rate per bag for patti (REQ-PUT: base bid + preset margin). */
+function sellerSettlementRatePerBag(entry: SettlementEntry): number {
+  const base = Number(entry.rate) || 0;
+  const p = entry.presetMargin ?? 0;
+  return base + (Number.isFinite(p) ? p : 0);
+}
+
 const SettlementPage = () => {
   const navigate = useNavigate();
   const isDesktop = useDesktopMode();
@@ -153,6 +164,9 @@ const SettlementPage = () => {
   const [showAddVoucher, setShowAddVoucher] = useState(false);
   const [manualVoucherLabel, setManualVoucherLabel] = useState('');
   const [manualVoucherAmount, setManualVoucherAmount] = useState('');
+
+  const manualVoucherLabelInputRef = useRef<HTMLInputElement | null>(null);
+  useAutofocusWhen(showAddVoucher, manualVoucherLabelInputRef);
 
   // Load sellers from backend only (no localStorage or mock data).
   useEffect(() => {
@@ -201,17 +215,18 @@ const SettlementPage = () => {
     
     seller.lots.forEach(lot => {
       lot.entries.forEach(entry => {
-        const existing = rateMap.get(entry.rate);
+        const sr = sellerSettlementRatePerBag(entry);
+        const existing = rateMap.get(sr);
         if (existing) {
           existing.totalQuantity += entry.quantity;
           existing.totalWeight += entry.weight;
-          existing.amount += entry.weight * entry.rate;
+          existing.amount += entry.weight * sr;
         } else {
-          rateMap.set(entry.rate, {
-            rate: entry.rate,
+          rateMap.set(sr, {
+            rate: sr,
             totalQuantity: entry.quantity,
             totalWeight: entry.weight,
-            amount: entry.weight * entry.rate,
+            amount: entry.weight * sr,
           });
         }
         totalWeight += entry.weight;
@@ -875,7 +890,10 @@ const SettlementPage = () => {
               {showAddVoucher && (
                 <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }}
                   className="mt-2 p-3 rounded-xl bg-primary/5 border border-primary/20 space-y-2 overflow-hidden">
-                  <Input placeholder="Voucher / Charge label (5–30 chars)" value={manualVoucherLabel}
+                  <Input
+                    ref={manualVoucherLabelInputRef}
+                    placeholder="Voucher / Charge label (5–30 chars)"
+                    value={manualVoucherLabel}
                     onChange={e => setManualVoucherLabel(e.target.value.slice(0, VOUCHER_LABEL_MAX))}
                     maxLength={VOUCHER_LABEL_MAX}
                     className={cn("h-8 rounded-lg text-xs",
@@ -1109,7 +1127,10 @@ const SettlementPage = () => {
         ) : (
           filteredSellers.map((seller, i) => {
             const totalBags = seller.lots.reduce((s, l) => s + l.entries.reduce((s2, e) => s2 + e.quantity, 0), 0);
-            const totalAmount = seller.lots.reduce((s, l) => s + l.entries.reduce((s2, e) => s2 + (e.weight * e.rate), 0), 0);
+            const totalAmount = seller.lots.reduce(
+              (s, l) => s + l.entries.reduce((s2, e) => s2 + e.weight * sellerSettlementRatePerBag(e), 0),
+              0
+            );
             return (
               <motion.button key={seller.sellerId}
                 initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}

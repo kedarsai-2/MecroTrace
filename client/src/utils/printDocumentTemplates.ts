@@ -200,6 +200,80 @@ export interface WeighingSlipPrintData {
   roundOffApplied: boolean;
 }
 
+// ── Auction Completion Slip (AuctionsPage) ─────────────────
+export interface AuctionCompletionPrintData {
+  auctionId: number | string;
+  lotId: number | string;
+  lotName: string;
+  sellerName: string;
+  vehicleNumber: string;
+  commodityName: string;
+  completedAt?: string;
+  entries: {
+    bidNumber: number;
+    buyerMark: string;
+    buyerName: string;
+    rate: number;
+    quantity: number;
+    amount: number;
+    presetApplied?: number;
+    presetType?: 'PROFIT' | 'LOSS';
+  }[];
+}
+
+export function generateAuctionCompletionPrintHTML(auction: AuctionCompletionPrintData): string {
+  const completedAt = auction.completedAt ? new Date(auction.completedAt) : new Date();
+  const dateStr = completedAt.toLocaleDateString();
+  const timeStr = completedAt.toLocaleTimeString();
+  const totalQty = auction.entries.reduce((s, e) => s + (Number(e.quantity) || 0), 0);
+  const totalAmount = auction.entries.reduce((s, e) => s + (Number(e.amount) || 0), 0);
+  const highestRate = auction.entries.reduce((max, e) => Math.max(max, Number(e.rate) || 0), 0);
+  const rows = auction.entries.map((entry) => {
+    const preset = Number(entry.presetApplied ?? 0);
+    const presetTxt = preset === 0 ? '—' : `${preset > 0 ? '+' : ''}${preset} (${entry.presetType ?? (preset < 0 ? 'LOSS' : 'PROFIT')})`;
+    return `
+      <div class="section" style="margin-bottom:6px;padding-bottom:6px">
+        <div class="row"><span class="muted">Bid #</span><span class="bold">${entry.bidNumber}</span></div>
+        <div class="row"><span class="muted">Buyer</span><span class="bold">${escapeHtml(entry.buyerName)} (${escapeHtml(entry.buyerMark)})</span></div>
+        <div class="row"><span class="muted">Rate</span><span class="bold">₹${entry.rate}</span></div>
+        <div class="row"><span class="muted">Preset</span><span>${presetTxt}</span></div>
+        <div class="row"><span class="muted">Qty</span><span class="bold">${entry.quantity} bags</span></div>
+        <div class="row"><span class="muted">Amount</span><span class="bold">₹${entry.amount.toLocaleString()}</span></div>
+      </div>
+    `;
+  }).join('');
+
+  const body = `
+    <div class="wrap">
+      <div class="center section">
+        <p class="bold">MERCOTRACE</p>
+        <p class="muted">Auction Completion</p>
+        <p class="muted">${dateStr} ${timeStr}</p>
+      </div>
+      <div class="section">
+        <div class="row"><span class="muted">Auction ID</span><span class="bold">${auction.auctionId}</span></div>
+        <div class="row"><span class="muted">Lot</span><span class="bold">${escapeHtml(auction.lotName || String(auction.lotId))}</span></div>
+        <div class="row"><span class="muted">Seller</span><span class="bold">${escapeHtml(auction.sellerName)}</span></div>
+        <div class="row"><span class="muted">Vehicle</span><span class="bold">${escapeHtml(auction.vehicleNumber || '—')}</span></div>
+        <div class="row"><span class="muted">Commodity</span><span class="bold">${escapeHtml(auction.commodityName || '—')}</span></div>
+      </div>
+      <div class="section">
+        <p class="bold">BIDS (${auction.entries.length})</p>
+        ${rows || '<p class="muted">No bids found.</p>'}
+      </div>
+      <div class="row"><span class="muted">Total Qty</span><span class="bold">${totalQty} bags</span></div>
+      <div class="row"><span class="muted">Highest Rate</span><span class="bold">₹${highestRate.toLocaleString()}</span></div>
+      <div class="row total section-t">
+        <span class="bold">TOTAL SALE</span>
+        <span class="grand">₹${totalAmount.toLocaleString()}</span>
+      </div>
+      <div class="center section-t"><p class="muted">--- END OF AUCTION ---</p></div>
+    </div>
+  `;
+
+  return wrapPrintDocument(body);
+}
+
 export function generateWeighingSlipPrintHTML(slip: WeighingSlipPrintData, totalWeight: number): string {
   const avgWeight = slip.bagWeights.length > 0
     ? (slip.bagWeights.reduce((s, b) => s + b.weight, 0) / slip.bagWeights.length).toFixed(2)

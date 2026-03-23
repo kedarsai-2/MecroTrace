@@ -12,6 +12,7 @@ import type { BusinessCategory } from '@/types/models';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 import loginBg from '@/assets/login-bg.jpg';
+import useUnsavedChangesGuard from '@/hooks/useUnsavedChangesGuard';
 
 const STATES = ['Karnataka'];
 const GSTIN_REGEX = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/;
@@ -89,6 +90,35 @@ const TraderSetupPage = () => {
   const [isFetchingLocation, setIsFetchingLocation] = useState(false);
   const [showCategoryDropdown, setShowCategoryDropdown] = useState(false);
   const [showStateDropdown, setShowStateDropdown] = useState(false);
+  const [initialSnapshot] = useState(() =>
+    JSON.stringify({
+      form: {
+        businessName: '',
+        ownerName: '',
+        email: '',
+        mobile: '',
+        password: '',
+        confirmPassword: '',
+        address: '',
+        city: '',
+        shopNo: '',
+        state: 'Karnataka',
+        categoryId: '',
+        categoryName: '',
+        gstNumber: '',
+        rmcApmcCode: '',
+        description: '',
+      },
+      companyImage: false,
+    }),
+  );
+
+  const isDirty =
+    JSON.stringify({ form, companyImage: !!companyImage }) !== initialSnapshot;
+
+  const { confirmIfDirty, UnsavedChangesDialog } = useUnsavedChangesGuard({
+    when: isDirty && !isSubmitting,
+  });
 
   useEffect(() => {
     categoryApi
@@ -294,6 +324,7 @@ const TraderSetupPage = () => {
 
   return (
     <div className="h-[100dvh] relative overflow-hidden flex flex-col">
+      <UnsavedChangesDialog />
       {/* Background — identical to login/register */}
       <img src={loginBg} alt="" className="absolute inset-0 w-full h-full object-cover z-0" fetchPriority="high" decoding="async" width={1920} height={1080} />
       <div className="absolute inset-0 bg-gradient-to-br from-blue-900/75 via-blue-800/65 to-violet-900/75 z-[1]" />
@@ -315,7 +346,17 @@ const TraderSetupPage = () => {
       <div className="relative z-10 flex-1 flex flex-col min-h-0">
         {/* Top bar */}
         <div className="flex items-center justify-between px-5 pt-[max(1rem,env(safe-area-inset-top))]">
-          <button onClick={() => navigate('/login')} className="w-11 h-11 rounded-2xl bg-white/20 backdrop-blur-md flex items-center justify-center text-white border border-white/20" aria-label="Go back">
+          <button
+            onClick={() => {
+              void (async () => {
+                const ok = await confirmIfDirty();
+                if (!ok) return;
+                navigate('/login');
+              })();
+            }}
+            className="w-11 h-11 rounded-2xl bg-white/20 backdrop-blur-md flex items-center justify-center text-white border border-white/20"
+            aria-label="Go back"
+          >
             <ArrowLeft className="w-5 h-5" />
           </button>
           <button onClick={toggleTheme} className="w-11 h-11 rounded-2xl bg-white/20 backdrop-blur-md flex items-center justify-center text-white border border-white/20" aria-label={isDark ? 'Switch to light mode' : 'Switch to dark mode'}>

@@ -3,6 +3,7 @@ package com.mercotrace.web.rest;
 import com.mercotrace.security.AuthoritiesConstants;
 import com.mercotrace.service.AuctionService;
 import com.mercotrace.service.AuctionService.AuctionConflictException;
+import com.mercotrace.service.AuctionService.StaleBidEditException;
 import com.mercotrace.service.dto.AuctionBidCreateRequest;
 import com.mercotrace.service.dto.AuctionBidUpdateRequest;
 import com.mercotrace.service.dto.AuctionResultDTO;
@@ -77,6 +78,19 @@ public class ModuleAuctionResource {
     }
 
     /**
+     * {@code GET  /module-auctions/temporary-buyer-marks/today} : distinct scribble marks for the current trader
+     * for the current calendar day (Asia/Kolkata); excludes marks that match registered contacts.
+     */
+    @Operation(summary = "Temporary buyer marks (today)", description = "Scribble marks from today's bids, trader-scoped")
+    @ApiResponses({ @ApiResponse(responseCode = "200", description = "OK") })
+    @GetMapping("/temporary-buyer-marks/today")
+    @PreAuthorize("hasAuthority(\"" + AuthoritiesConstants.AUCTIONS_VIEW + "\")")
+    public ResponseEntity<List<String>> listTemporaryBuyerMarksToday() {
+        LOG.debug("REST request to list temporary buyer marks for today");
+        return ResponseEntity.ok(auctionService.listTemporaryBuyerMarksForCurrentCalendarDay());
+    }
+
+    /**
      * {@code GET  /module-auctions/lots/:lotId/session} : get or start an auction session for a lot.
      */
     @Operation(summary = "Get or start session", description = "Returns current auction session for the lot or creates one")
@@ -128,10 +142,12 @@ public class ModuleAuctionResource {
     /**
      * {@code PATCH  /module-auctions/lots/:lotId/session/bids/:bidId} : update editable fields on a bid.
      */
-    @Operation(summary = "Update bid", description = "Update token advance, extra rate, preset on a bid")
+    @Operation(summary = "Update bid", description = "Update rate, quantity, token advance, extra rate, preset on a bid; 409 on stale version or quantity conflict")
     @ApiResponses({
         @ApiResponse(responseCode = "200", description = "OK"),
-        @ApiResponse(responseCode = "404", description = "Bid or lot not found; body: { message, status, errors }")
+        @ApiResponse(responseCode = "400", description = "Validation error"),
+        @ApiResponse(responseCode = "404", description = "Bid or lot not found; body: { message, status, errors }"),
+        @ApiResponse(responseCode = "409", description = "Stale bid or quantity conflict; body: { message, status, errors }")
     })
     @PatchMapping("/lots/{lotId}/session/bids/{bidId}")
     @PreAuthorize("hasAuthority(\"" + AuthoritiesConstants.AUCTIONS_EDIT + "\")")
@@ -144,6 +160,12 @@ public class ModuleAuctionResource {
         try {
             AuctionSessionDTO session = auctionService.updateBid(lotId, bidId, request);
             return ResponseEntity.ok(session);
+        } catch (StaleBidEditException ex) {
+            return buildErrorResponse(HttpStatus.CONFLICT, ex.getMessage(), "stale_bid");
+        } catch (AuctionConflictException conflict) {
+            return buildQuantityConflictResponse(conflict);
+        } catch (IllegalArgumentException ex) {
+            throw new BadRequestAlertException(ex.getMessage(), ENTITY_NAME, "validation");
         } catch (EntityNotFoundException ex) {
             return buildErrorResponse(HttpStatus.NOT_FOUND, ex.getMessage(), "bidId");
         }

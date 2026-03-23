@@ -282,4 +282,5 @@ class ModuleAuctionResourceIT {
             .andExpect(status().isOk())
             .andExpect(header().string("X-Total-Count", org.hamcrest.Matchers.notNullValue()));
     }
+
 }

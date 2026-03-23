@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import BottomNav from '@/components/BottomNav';
 import { Plus, Trash2, AlertTriangle, ChevronDown, ChevronUp, ArrowLeft, Save, Package, RotateCcw } from 'lucide-react';
@@ -16,6 +16,7 @@ import { usePermissions } from '@/lib/permissions';
 import ForbiddenPage from '@/components/ForbiddenPage';
 import { ConfirmDeleteDialog } from '@/components/ConfirmDeleteDialog';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
+import useUnsavedChangesGuard from '@/hooks/useUnsavedChangesGuard';
 
 import onionImg from '@/assets/commodities/onion.jpg';
 import potatoImg from '@/assets/commodities/potato.jpg';
@@ -100,6 +101,53 @@ const CommoditySettings = () => {
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const [restorePendingName, setRestorePendingName] = useState<string | null>(null);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
+  const baselineSnapshotRef = useRef<string | null>(null);
+
+  const serializeItemsForDirty = useCallback((list: LocalCommodityConfig[]) => {
+    return list.map((item) => ({
+      commodity_id: item.commodity.commodity_id,
+      commodity_name: item.commodity.commodity_name,
+      config: item.config,
+      charges: item.charges,
+      deductionRules: item.deductionRules,
+      hamaliSlabs: item.hamaliSlabs,
+      hamaliEnabled: item.hamaliEnabled,
+      billPrefix: item.billPrefix,
+      gstApplicable: item.gstApplicable,
+    }));
+  }, []);
+
+  const createSnapshot = useCallback(() => {
+    return JSON.stringify({
+      items: serializeItemsForDirty(items),
+      showAddForm,
+      newCommodityName,
+    });
+  }, [items, showAddForm, newCommodityName, serializeItemsForDirty]);
+
+  const isDirty = useMemo(() => {
+    if (!canView || loading || baselineSnapshotRef.current == null) return false;
+    return createSnapshot() !== baselineSnapshotRef.current;
+  }, [canView, loading, createSnapshot]);
+
+  const { confirmIfDirty, UnsavedChangesDialog } = useUnsavedChangesGuard({
+    when: isDirty,
+  });
+
+  const refreshDirtyBaseline = useCallback(() => {
+    baselineSnapshotRef.current = JSON.stringify({
+      items: serializeItemsForDirty(items),
+      showAddForm,
+      newCommodityName,
+    });
+  }, [items, showAddForm, newCommodityName, serializeItemsForDirty]);
+
+  useEffect(() => {
+    if (!canView || loading) return;
+    if (baselineSnapshotRef.current == null) {
+      baselineSnapshotRef.current = createSnapshot();
+    }
+  }, [canView, loading, createSnapshot]);
 
   useEffect(() => {
     const load = async () => {
@@ -118,6 +166,7 @@ const CommoditySettings = () => {
           return fullConfigToLocal(c, { commodityId: Number(c.commodity_id) || 0 });
         });
         setItems(result);
+      baselineSnapshotRef.current = null;
       } catch (err) {
         console.error('Load commodities:', err);
         toast.error('Failed to load commodity settings');
@@ -208,6 +257,7 @@ const CommoditySettings = () => {
       setNewCommodityName('');
       setShowAddForm(false);
       setExpanded(items.length);
+      baselineSnapshotRef.current = null;
       toast.success(`"${name}" added successfully`);
     } catch (err) {
       if (err instanceof CommodityApiError && err.errorKey === 'commoditynameexistsinactive') {
@@ -231,6 +281,7 @@ const CommoditySettings = () => {
       setRestorePendingName(null);
       setNewCommodityName('');
       setRefreshTrigger(prev => prev + 1);
+      baselineSnapshotRef.current = null;
       toast.success(`"${restorePendingName}" restored. You can use it again.`);
     } catch (err) {
       console.error('Restore commodity error:', err);
@@ -253,6 +304,7 @@ const CommoditySettings = () => {
       setItems(prev => prev.filter(it => it.commodity.commodity_id !== commodityId));
       setExpanded(null);
       setDeleteConfirmId(null);
+      baselineSnapshotRef.current = null;
       toast.success(`"${name}" removed`);
     } catch (err) {
       console.error('Delete commodity error:', err);
@@ -288,13 +340,21 @@ const CommoditySettings = () => {
     if (cfg.min_weight > 0 && cfg.max_weight > 0 && cfg.min_weight > cfg.max_weight) { toast.error(`${commodityName}: Min weight cannot exceed Max weight`); return; }
     if (cfg.commission_percent < 0 || cfg.commission_percent > 100) { toast.error(`${commodityName}: Commission must be between 0% and 100%`); return; }
     if (cfg.user_fee_percent < 0 || cfg.user_fee_percent > 100) { toast.error(`${commodityName}: User fee must be between 0% and 100%`); return; }
-    if (item.gstApplicable && !cfg.hsn_code.trim()) { toast.error(`${commodityName}: HSN/SAC Code is required when GST is applicable`); return; }
-    if (item.gstApplicable && cfg.hsn_code.trim()) {
-      const hsn = cfg.hsn_code.trim().replace(/\D/g, '');
-      if (hsn.length !== 6 && hsn.length !== 8) {
-        toast.error(`${commodityName}: HSN must be 6 digits, SAC must be 8 digits (digits only)`); return;
+
+    // Validate HSN/SAC code when GST is applicable
+    if (item.gstApplicable) {
+      const raw = cfg.hsn_code ?? '';
+      const digitsOnly = raw.replace(/\D/g, '');
+      if (!digitsOnly) {
+        toast.error(`${commodityName}: HSN/SAC Code is required when GST is applicable`);
+        return;
+      }
+      if (!(digitsOnly.length === 6 || digitsOnly.length === 8)) {
+        toast.error(`${commodityName}: HSN must be 6 digits or SAC must be 8 digits`);
+        return;
       }
     }
+
     // Parse GST rate (can be string from raw input or number from loaded config)
     let gstRateValue: number | undefined;
     if (typeof cfg.gst_rate === 'string') {
@@ -307,6 +367,7 @@ const CommoditySettings = () => {
     } else {
       gstRateValue = (cfg.gst_rate ?? undefined) as number | undefined;
     }
+
     if (item.gstApplicable) {
       if (gstRateValue == null || Number.isNaN(gstRateValue)) {
         toast.error(`${commodityName}: GST Rate (%) is required when GST is applicable`); return;
@@ -318,8 +379,8 @@ const CommoditySettings = () => {
       if (decimalPart != null && decimalPart.length > 2) {
         toast.error(`${commodityName}: GST rate allows max 2 decimal places (e.g. 12.50)`); return;
       }
-    } else if (gstRateValue != null && (!Number.isInteger(gstRateValue) || gstRateValue < 0 || gstRateValue > 99)) {
-      toast.error(`${commodityName}: GST Rate must be a 2-digit whole number (0–99) when provided`); return;
+    } else if (gstRateValue != null && (gstRateValue < 0 || gstRateValue > 100)) {
+      toast.error(`${commodityName}: GST Rate must be between 0 and 100 when provided`); return;
     }
 
     const weighingThresholdValue = (cfg.weighing_threshold ?? undefined) as number | undefined;
@@ -400,6 +461,7 @@ const CommoditySettings = () => {
       await commodityApi.saveFullConfig(item.commodity.commodity_id, payload);
       toast.success(`✅ ${commodityName} settings saved successfully!`);
       setExpanded(null); // Close the expanded panel so list shows as normal
+      refreshDirtyBaseline();
     } catch (err) {
       console.error('Save commodity config:', err);
       toast.error('Failed to save settings');
@@ -420,6 +482,7 @@ const CommoditySettings = () => {
 
   return (
     <div className="min-h-[100dvh] bg-gradient-to-b from-background via-background to-blue-50/30 dark:to-blue-950/10 pb-28 lg:pb-6">
+      <UnsavedChangesDialog />
       {/* Mobile Header */}
       {!isDesktop && (
       <div className="bg-gradient-to-br from-blue-400 via-blue-500 to-violet-500 pt-[max(2rem,env(safe-area-inset-top))] pb-6 px-4 rounded-b-3xl mb-4 relative overflow-hidden">
@@ -434,7 +497,16 @@ const CommoditySettings = () => {
           ))}
         </div>
         <div className="relative z-10 flex items-center gap-3">
-          <button onClick={() => navigate('/home')} className="w-10 h-10 rounded-full bg-white/20 backdrop-blur flex items-center justify-center">
+          <button
+            onClick={() => {
+              void (async () => {
+                const ok = await confirmIfDirty();
+                if (!ok) return;
+                navigate('/home');
+              })();
+            }}
+            className="w-10 h-10 rounded-full bg-white/20 backdrop-blur flex items-center justify-center"
+          >
             <ArrowLeft className="w-5 h-5 text-white" />
           </button>
           <div className="flex-1">
@@ -501,7 +573,18 @@ const CommoditySettings = () => {
               >
                   Add
                 </Button>
-                <Button variant="ghost" onClick={() => { setShowAddForm(false); setNewCommodityName(''); }} className="h-12 px-3 rounded-xl">
+                <Button
+                  variant="ghost"
+                  onClick={() => {
+                    void (async () => {
+                      const ok = await confirmIfDirty();
+                      if (!ok) return;
+                      setShowAddForm(false);
+                      setNewCommodityName('');
+                    })();
+                  }}
+                  className="h-12 px-3 rounded-xl"
+                >
                   Cancel
                 </Button>
               </div>
@@ -671,8 +754,12 @@ const CommoditySettings = () => {
                                 type="text"
                                 inputMode="numeric"
                                 pattern="[0-9]*"
+                                autoComplete="off"
                                 value={item.config.hsn_code}
-                                onChange={e => updateConfig(index, { hsn_code: e.target.value.replace(/\D/g, '').slice(0, 8) })}
+                                onChange={e => {
+                                  const next = e.target.value.replace(/\D/g, '').slice(0, 8);
+                                  updateConfig(index, { hsn_code: next });
+                                }}
                                 placeholder="HSN 6 digits or SAC 8 digits (e.g. 070310, 99831412)"
                                 className="h-12 rounded-xl bg-white dark:bg-white/10 border-2 border-slate-200 dark:border-slate-700/50 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 text-base"
                                 maxLength={8}

@@ -75,7 +75,7 @@ const ContactPortalLayout = () => {
           </div>
         </header>
 
-        <main className="max-w-5xl mx-auto px-4 py-5">
+        <main id="route-autofocus-root" className="max-w-5xl mx-auto px-4 py-5">
           <Outlet />
         </main>
         <ContactPortalBottomNav />
@@ -150,7 +150,10 @@ const ContactPortalLayout = () => {
           </div>
         </header>
 
-        <main className="relative z-10 max-w-5xl mx-auto px-6 lg:px-8 py-6 lg:py-8">
+        <main
+          id="route-autofocus-root"
+          className="relative z-10 max-w-5xl mx-auto px-6 lg:px-8 py-6 lg:py-8"
+        >
           <Outlet />
         </main>
       </div>

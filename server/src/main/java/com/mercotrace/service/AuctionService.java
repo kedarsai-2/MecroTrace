@@ -21,6 +21,8 @@ import jakarta.persistence.EntityNotFoundException;
 import jakarta.validation.Valid;
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.*;
 import java.util.Collection;
 import java.util.stream.Collectors;
@@ -40,6 +42,9 @@ import org.springframework.transaction.annotation.Transactional;
 public class AuctionService {
 
     private static final Logger LOG = LoggerFactory.getLogger(AuctionService.class);
+
+    /** Calendar day for temporary-buyer expiry (scribble marks); aligns with primary market timezone. */
+    private static final ZoneId BUSINESS_CALENDAR_ZONE = ZoneId.of("Asia/Kolkata");
 
     private final AuctionRepository auctionRepository;
     private final AuctionEntryRepository auctionEntryRepository;
@@ -229,6 +234,38 @@ public class AuctionService {
     }
 
     /**
+     * Distinct temporary (scribble) buyer marks for the current trader for the current calendar day only.
+     * Excludes marks that match an active registered contact's mark so the strip does not duplicate Row 1.
+     */
+    @Transactional(readOnly = true)
+    public List<String> listTemporaryBuyerMarksForCurrentCalendarDay() {
+        Long traderId = resolveTraderId();
+        LocalDate today = LocalDate.now(BUSINESS_CALENDAR_ZONE);
+        Instant start = today.atStartOfDay(BUSINESS_CALENDAR_ZONE).toInstant();
+        Instant end = today.plusDays(1).atStartOfDay(BUSINESS_CALENDAR_ZONE).toInstant();
+
+        List<String> raw = auctionEntryRepository.findDistinctScribbleBuyerMarksForTraderCreatedBetween(traderId, start, end);
+        if (raw.isEmpty()) {
+            return List.of();
+        }
+
+        Set<String> registeredMarksLower = contactRepository
+            .findAllByTraderIdAndActiveTrue(traderId)
+            .stream()
+            .map(Contact::getMark)
+            .filter(m -> m != null && !m.isBlank())
+            .map(m -> m.trim().toLowerCase(Locale.ROOT))
+            .collect(Collectors.toSet());
+
+        return raw
+            .stream()
+            .filter(m -> m != null && !m.isBlank())
+            .filter(m -> !registeredMarksLower.contains(m.trim().toLowerCase(Locale.ROOT)))
+            .sorted(String.CASE_INSENSITIVE_ORDER)
+            .toList();
+    }
+
+    /**
      * Get or start an auction session for a lot.
      */
     public AuctionSessionDTO getOrStartSession(Long lotId) {
@@ -243,9 +280,9 @@ public class AuctionService {
             .orElseGet(() -> {
                 Auction a = new Auction();
                 a.setLotId(lotId);
+                a.setTraderId(traderId);
                 a.setAuctionDatetime(Instant.now());
                 a.setCreatedAt(Instant.now());
-                // trader context can be integrated later; for now use null / default
                 return auctionRepository.save(a);
             });
 
@@ -268,6 +305,7 @@ public class AuctionService {
             .orElseGet(() -> {
                 Auction a = new Auction();
                 a.setLotId(lotId);
+                a.setTraderId(traderId);
                 a.setAuctionDatetime(Instant.now());
                 a.setCreatedAt(Instant.now());
                 return auctionRepository.save(a);
@@ -328,8 +366,9 @@ public class AuctionService {
             entry.setPresetMargin(preset);
             entry.setPresetType(type);
 
-            BigDecimal sellerRate = calcSellerRate(rate, preset, type);
-            entry.setSellerRate(sellerRate);
+            // seller_rate stores the base auction bid only; preset_margin is stored separately
+            // (Billing, PrintHub, Settlement compute effective seller rate = bid_rate + preset_margin when needed).
+            entry.setSellerRate(rate);
             entry.setBuyerRate(rate.add(extra));
 
             entry.setQuantity(request.getQuantity());
@@ -365,6 +404,46 @@ public class AuctionService {
             .findById(entry.getAuctionId())
             .orElseThrow(() -> new EntityNotFoundException("Auction not found for bid: " + bidId));
 
+        if (!Objects.equals(auction.getLotId(), lotId)) {
+            throw new EntityNotFoundException("Bid not found: " + bidId);
+        }
+
+        if (request.getExpectedLastModifiedMs() != null && entry.getLastModifiedDate() != null) {
+            if (entry.getLastModifiedDate().toEpochMilli() != request.getExpectedLastModifiedMs()) {
+                throw new StaleBidEditException("This bid was changed elsewhere. Refresh and try again.");
+            }
+        }
+
+        if (request.getRate() != null && request.getRate().compareTo(BigDecimal.ONE) < 0) {
+            throw new IllegalArgumentException("Rate must be at least 1");
+        }
+        if (request.getQuantity() != null && request.getQuantity() < 1) {
+            throw new IllegalArgumentException("Quantity must be at least 1");
+        }
+
+        List<AuctionEntry> existingEntries = auctionEntryRepository.findAllByAuctionId(auction.getId());
+        int currentSold = existingEntries.stream().mapToInt(e -> e.getQuantity() != null ? e.getQuantity() : 0).sum();
+        int entryQty = entry.getQuantity() != null ? entry.getQuantity() : 0;
+        int newQty = request.getQuantity() != null ? request.getQuantity() : entryQty;
+        int otherSold = currentSold - entryQty;
+        int newTotal = otherSold + newQty;
+        int lotTotal = lot.getBagCount() != null ? lot.getBagCount() : 0;
+
+        if (newTotal > lotTotal && !request.isAllowLotIncrease()) {
+            throw new AuctionConflictException("Updating this bid exceeds lot quantity", "quantity", otherSold, lotTotal, newQty, newTotal);
+        }
+        if (newTotal > lotTotal && request.isAllowLotIncrease()) {
+            lot.setBagCount(newTotal);
+            lotRepository.save(lot);
+        }
+
+        if (request.getRate() != null) {
+            entry.setBidRate(request.getRate());
+        }
+        if (request.getQuantity() != null) {
+            entry.setQuantity(newQty);
+        }
+
         if (request.getTokenAdvance() != null) {
             entry.setTokenAdvance(request.getTokenAdvance());
         }
@@ -378,10 +457,11 @@ public class AuctionService {
             entry.setPresetType(request.getPresetType());
         }
 
-        BigDecimal sellerRate = calcSellerRate(entry.getBidRate(), entry.getPresetMargin(), entry.getPresetType());
-        entry.setSellerRate(sellerRate);
-        entry.setBuyerRate(entry.getBidRate().add(entry.getExtraRate() != null ? entry.getExtraRate() : BigDecimal.ZERO));
-        entry.setAmount(entry.getBuyerRate().multiply(BigDecimal.valueOf(entry.getQuantity())));
+        BigDecimal bidRate = entry.getBidRate();
+        BigDecimal extra = entry.getExtraRate() != null ? entry.getExtraRate() : BigDecimal.ZERO;
+        entry.setSellerRate(bidRate);
+        entry.setBuyerRate(bidRate.add(extra));
+        entry.setAmount(entry.getBuyerRate().multiply(BigDecimal.valueOf(entry.getQuantity() != null ? entry.getQuantity() : 0)));
         entry.setLastModifiedDate(Instant.now());
 
         auctionEntryRepository.save(entry);
@@ -663,14 +743,11 @@ public class AuctionService {
         return traderContextService.getCurrentTraderId();
     }
 
-    private BigDecimal calcSellerRate(BigDecimal bidRate, BigDecimal preset, AuctionPresetType type) {
-        if (bidRate == null || preset == null) {
-            return bidRate != null ? bidRate : BigDecimal.ZERO;
+    public static class StaleBidEditException extends RuntimeException {
+
+        public StaleBidEditException(String message) {
+            super(message);
         }
-        if (preset.compareTo(BigDecimal.ZERO) == 0) {
-            return bidRate;
-        }
-        return type == AuctionPresetType.PROFIT ? bidRate.subtract(preset) : bidRate.add(preset);
     }
 
     public static class AuctionConflictException extends RuntimeException {

@@ -20,6 +20,7 @@ import type { FullCommodityConfigDto } from '@/services/api/commodities';
 import type { ArrivalDetail } from '@/services/api/arrivals';
 import ForbiddenPage from '@/components/ForbiddenPage';
 import { usePermissions } from '@/lib/permissions';
+import useUnsavedChangesGuard from '@/hooks/useUnsavedChangesGuard';
 
 /** REQ-WGH-004: Government deduction from API full-config */
 function getGovtDeductionFromConfigs(weight: number, fullConfigs: FullCommodityConfigDto[]): number {
@@ -68,9 +69,6 @@ const WeighingPage = () => {
   const isDesktop = useDesktopMode();
   const { canAccessModule, can } = usePermissions();
   const canView = canAccessModule('Weighing');
-  if (!canView) {
-    return <ForbiddenPage moduleName="Weighing" />;
-  }
   const [searchParams] = useSearchParams();
   const [bids, setBids] = useState<BidForWeighing[]>([]);
   const [selectedBid, setSelectedBid] = useState<BidForWeighing | null>(null);
@@ -328,6 +326,22 @@ const WeighingPage = () => {
     recalcWeights(updatedBags);
   };
 
+  const isWeighingDirty = !!session && !showSlip && (
+    session.bagWeights.length > 0 ||
+    currentWeight.trim() !== "" ||
+    manualMode ||
+    roundOffEnabled ||
+    !govtDeductionEnabled
+  );
+
+  const { confirmIfDirty, UnsavedChangesDialog } = useUnsavedChangesGuard({
+    when: isWeighingDirty,
+  });
+
+  if (!canView) {
+    return <ForbiddenPage moduleName="Weighing" />;
+  }
+
   // ═══ REQ-WGH-008: POST-WEIGHING SLIP (Thermal printout) ═══
   if (showSlip && completedSession) {
     const totalWeight = completedSession.bagWeights.reduce((s, b) => s + b.weight, 0);
@@ -453,13 +467,22 @@ const WeighingPage = () => {
 
     return (
       <div className="min-h-[100dvh] bg-gradient-to-b from-background via-background to-blue-50/30 dark:to-blue-950/10 pb-28 lg:pb-6">
+        <UnsavedChangesDialog />
         {/* Header */}
         {!isDesktop ? (
         <div className="bg-gradient-to-br from-orange-400 via-amber-500 to-yellow-500 pt-[max(1.5rem,env(safe-area-inset-top))] pb-5 px-4 rounded-b-[2rem] relative overflow-hidden">
           <div className="absolute inset-0 bg-[radial-gradient(circle_at_30%_20%,rgba(255,255,255,0.2)_0%,transparent_50%)]" />
           <div className="relative z-10">
             <div className="flex items-center gap-3 mb-3">
-              <button onClick={() => { setSession(null); setSelectedBid(null); }}
+              <button
+                onClick={() => {
+                  void (async () => {
+                    const ok = await confirmIfDirty();
+                    if (!ok) return;
+                    setSession(null);
+                    setSelectedBid(null);
+                  })();
+                }}
                 aria-label="Go back" className="w-10 h-10 rounded-full bg-white/20 backdrop-blur flex items-center justify-center">
                 <ArrowLeft className="w-5 h-5 text-white" />
               </button>
@@ -496,7 +519,19 @@ const WeighingPage = () => {
         ) : (
         <div className="px-8 py-5">
           <div className="flex items-center gap-4 mb-4">
-            <Button onClick={() => { setSession(null); setSelectedBid(null); }} variant="outline" size="sm" className="rounded-xl h-9">
+            <Button
+              onClick={() => {
+                void (async () => {
+                  const ok = await confirmIfDirty();
+                  if (!ok) return;
+                  setSession(null);
+                  setSelectedBid(null);
+                })();
+              }}
+              variant="outline"
+              size="sm"
+              className="rounded-xl h-9"
+            >
               <ArrowLeft className="w-4 h-4 mr-1.5" /> Back
             </Button>
             <div className="flex-1">

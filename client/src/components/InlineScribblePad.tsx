@@ -28,8 +28,13 @@ async function recognizeHandwriting(
   return [];
 }
 
+/** Max length for a single recognized segment (and replace-mode full mark). Auctions append mode composes up to this length per stroke. */
+export const MAX_MARK_LEN = 20;
+
+export type MarkDetectionMeta = { replaceLastSegment?: boolean };
+
 interface InlineScribblePadProps {
-  onMarkDetected: (mark: string) => void;
+  onMarkDetected: (mark: string, meta?: MarkDetectionMeta) => void;
   className?: string;
   canvasHeight?: number;
   /** When this value changes, the canvas is cleared (e.g. after selecting a contact/mark from list). */
@@ -38,6 +43,11 @@ interface InlineScribblePadProps {
   showStatus?: boolean;
   /** Fill parent height (used in dock to avoid blank area). */
   fillAvailableHeight?: boolean;
+  /**
+   * When true, each recognition/candidate selection passes one segment to `onMarkDetected`, then the canvas is cleared
+   * so the user can add the next stroke. When false (default), behavior replaces the parent mark with the full recognized string.
+   */
+  appendMode?: boolean;
 }
 
 const InlineScribblePad = ({
@@ -47,6 +57,7 @@ const InlineScribblePad = ({
   resetTrigger,
   showStatus = true,
   fillAvailableHeight = false,
+  appendMode = false,
 }: InlineScribblePadProps) => {
   const [recognizing, setRecognizing] = useState(false);
   const [recognizeStatus, setRecognizeStatus] = useState('');
@@ -91,6 +102,32 @@ const InlineScribblePad = ({
     if (drawTimeout.current) clearTimeout(drawTimeout.current);
   }, [resetTrigger]);
 
+  const clearCanvas = useCallback(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    strokesRef.current = [];
+    currentStroke.current = { xs: [], ys: [], ts: [] };
+    setSelectedMark('');
+    setRecognizeStatus('');
+    setCandidates([]);
+    if (drawTimeout.current) clearTimeout(drawTimeout.current);
+  }, []);
+
+  /** Clears ink only; keeps status/candidates so user can pick an alternate in append mode. */
+  const clearStrokeInkOnly = useCallback(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    strokesRef.current = [];
+    currentStroke.current = { xs: [], ys: [], ts: [] };
+    if (drawTimeout.current) clearTimeout(drawTimeout.current);
+  }, []);
+
   const doRecognition = useCallback(async () => {
     const canvas = canvasRef.current;
     if (!canvas || strokesRef.current.length === 0) return;
@@ -102,7 +139,7 @@ const InlineScribblePad = ({
       if (results.length > 0) {
         const best = results[0].trim().toUpperCase().replace(/\s+/g, '').replace(/[^A-Z0-9]/g, '');
         if (best) {
-          const mark = best.slice(0, 5);
+          const mark = best.slice(0, MAX_MARK_LEN);
           setSelectedMark(mark);
           setRecognizeStatus(`Detected: ${mark}`);
           onMarkDetected(mark);
@@ -111,6 +148,7 @@ const InlineScribblePad = ({
             .filter((r, i, arr) => r && arr.indexOf(r) === i)
             .slice(0, 4);
           setCandidates(alts);
+          if (appendMode) clearStrokeInkOnly();
         } else {
           setRecognizeStatus('Could not detect');
         }
@@ -122,7 +160,7 @@ const InlineScribblePad = ({
     } finally {
       setRecognizing(false);
     }
-  }, [onMarkDetected]);
+  }, [onMarkDetected, appendMode, clearStrokeInkOnly]);
 
   const getPos = (e: React.TouchEvent | React.MouseEvent) => {
     const canvas = canvasRef.current;
@@ -179,25 +217,16 @@ const InlineScribblePad = ({
     drawTimeout.current = setTimeout(() => doRecognition(), 800);
   };
 
-  const clearCanvas = () => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    strokesRef.current = [];
-    currentStroke.current = { xs: [], ys: [], ts: [] };
-    setSelectedMark('');
-    setRecognizeStatus('');
-    setCandidates([]);
-    if (drawTimeout.current) clearTimeout(drawTimeout.current);
-  };
-
   const selectCandidate = (c: string) => {
-    const mark = c.slice(0, 5);
+    const mark = c.slice(0, MAX_MARK_LEN);
     setSelectedMark(mark);
     setRecognizeStatus(`Selected: ${mark}`);
-    onMarkDetected(mark);
+    onMarkDetected(mark, appendMode ? { replaceLastSegment: true } : undefined);
+    if (appendMode) clearCanvas();
+  };
+
+  const handleClearButton = () => {
+    clearCanvas();
   };
 
   return (
@@ -217,46 +246,46 @@ const InlineScribblePad = ({
           onTouchEnd={endDraw}
         />
         <button
-          onClick={clearCanvas}
+          onClick={handleClearButton}
           className="absolute top-2 right-2 w-7 h-7 rounded-lg bg-white/90 backdrop-blur-md flex items-center justify-center text-muted-foreground hover:text-foreground transition-colors shadow-sm border border-border/30"
         >
           <RotateCcw className="w-3.5 h-3.5" />
         </button>
-        <p className="absolute bottom-1.5 left-2.5 text-[10px] text-muted-foreground/40 italic pointer-events-none select-none flex items-center gap-1">
-          <PenLine className="w-3 h-3" /> Write buyer mark
+        <p className="absolute bottom-2 left-2.5 text-xs sm:text-sm text-muted-foreground/50 italic pointer-events-none select-none flex items-center gap-1.5">
+          <PenLine className="w-3.5 h-3.5 text-muted-foreground/60 shrink-0" /> Write buyer mark
         </p>
       </div>
 
       {/* Status + Candidates */}
       {showStatus && (
-      <div className="mt-2 flex items-center gap-2 flex-wrap min-h-[28px]">
+      <div className="mt-2.5 flex items-center gap-2 flex-wrap min-h-[32px]">
         {recognizing ? (
           <div className="flex items-center gap-1.5 text-violet-500">
-            <Loader2 className="w-3 h-3 animate-spin" />
-            <span className="text-[10px] font-medium">{recognizeStatus || 'Reading...'}</span>
+            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            <span className="text-xs sm:text-sm font-medium">{recognizeStatus || 'Reading...'}</span>
           </div>
         ) : selectedMark ? (
           <div className="flex items-center gap-1.5">
-            <div className="px-2.5 py-1 rounded-lg bg-gradient-to-r from-violet-500 to-fuchsia-500 text-white text-xs font-bold shadow-sm">
+            <div className="px-3 py-1.5 rounded-lg bg-gradient-to-r from-violet-500 to-fuchsia-500 text-white text-sm font-bold shadow-sm">
               {selectedMark}
             </div>
-            <span className="text-[10px] text-muted-foreground">{recognizeStatus}</span>
+            <span className="text-xs text-muted-foreground">{recognizeStatus}</span>
           </div>
         ) : recognizeStatus ? (
-          <span className="text-[10px] text-muted-foreground">{recognizeStatus}</span>
+          <span className="text-xs sm:text-sm text-muted-foreground">{recognizeStatus}</span>
         ) : null}
 
         <AnimatePresence>
           {candidates.length > 1 && (
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex items-center gap-1 ml-auto">
-              <Sparkles className="w-3 h-3 text-muted-foreground/50" />
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex items-center gap-1.5 ml-auto flex-wrap">
+              <Sparkles className="w-3.5 h-3.5 text-muted-foreground/50 shrink-0" />
               {candidates.filter(c => c !== selectedMark).map(c => (
                 <button
                   key={c}
                   onClick={() => selectCandidate(c)}
-                  className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-muted/50 text-foreground hover:bg-muted transition-colors"
+                  className="px-2.5 py-1 rounded-md text-xs sm:text-sm font-bold bg-muted/50 text-foreground hover:bg-muted transition-colors"
                 >
-                  {c.slice(0, 5)}
+                  {c.slice(0, MAX_MARK_LEN)}
                 </button>
               ))}
             </motion.div>

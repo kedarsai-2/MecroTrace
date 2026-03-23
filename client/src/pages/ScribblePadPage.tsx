@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/input';
 import BottomNav from '@/components/BottomNav';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
+import useUnsavedChangesGuard from '@/hooks/useUnsavedChangesGuard';
 
 interface Stroke {
   xs: number[];
@@ -65,6 +66,17 @@ const ScribblePadPage = () => {
 
   // In-memory only; no localStorage for business data. TODO: backend API for scribble entries if persistence needed.
   const saveEntries = (newEntries: ScribbleEntry[]) => setEntries(newEntries);
+
+  const isScribbleDirty =
+    entries.length > 0 ||
+    initials.trim() !== '' ||
+    quantity.trim() !== '' ||
+    drawingPreview != null ||
+    candidates.length > 0;
+
+  const { UnsavedChangesDialog } = useUnsavedChangesGuard({
+    when: isScribbleDirty,
+  });
 
   // Resize canvas
   useEffect(() => {
@@ -219,6 +231,7 @@ const ScribblePadPage = () => {
 
   return (
     <div className="mobile-app-shell min-h-[100dvh] bg-gradient-to-b from-background via-background to-blue-50/30 dark:to-blue-950/10 pb-28 lg:pb-6">
+      <UnsavedChangesDialog />
       {/* Header */}
       <div className="bg-gradient-to-br from-violet-500 via-fuchsia-500 to-purple-600 pt-[max(1.5rem,env(safe-area-inset-top))] pb-6 px-4 rounded-b-[2rem] relative overflow-hidden">
         <div className="absolute inset-0 bg-[radial-gradient(circle_at_30%_20%,rgba(255,255,255,0.25)_0%,transparent_50%)]" />

@@ -47,7 +47,10 @@ export interface SettlementEntryDTO {
   bidNumber: number;
   buyerMark: string;
   buyerName: string;
+  /** Auction base bid per bag */
   rate: number;
+  /** Preset margin from auction; seller settlement rate = rate + presetMargin */
+  presetMargin?: number;
   quantity: number;
   weight: number;
 }

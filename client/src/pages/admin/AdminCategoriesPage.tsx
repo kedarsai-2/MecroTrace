@@ -1,9 +1,10 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Plus, Search, Edit2, Trash2, Store, Check, X, Layers, Sparkles } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
+import useAutofocusWhen from '@/hooks/useAutofocusWhen';
 import { categoryApi } from '@/services/api';
 import type { BusinessCategory } from '@/types/models';
 import { useAdminPermissions } from '@/admin/lib/adminPermissions';
@@ -18,6 +19,9 @@ const AdminCategoriesPage = () => {
   const [editId, setEditId] = useState<string | null>(null);
   const [form, setForm] = useState({ category_name: '' });
   const { canAccessModule, can } = useAdminPermissions();
+
+  const categoryNameInputRef = useRef<HTMLInputElement | null>(null);
+  useAutofocusWhen(showAdd, categoryNameInputRef);
 
   const canView = canAccessModule('Categories');
   const canCreate = can('Categories', 'Create');
@@ -206,7 +210,13 @@ const AdminCategoriesPage = () => {
                   </div>
                   <h3 className="text-lg font-bold text-foreground">Add Business Category</h3>
                 </div>
-                <Input placeholder="Category Name (e.g., Vegetables)" value={form.category_name} onChange={e => setForm(p => ({ ...p, category_name: e.target.value }))} className="h-12 rounded-xl" />
+                <Input
+                  ref={categoryNameInputRef}
+                  placeholder="Category Name (e.g., Vegetables)"
+                  value={form.category_name}
+                  onChange={e => setForm(p => ({ ...p, category_name: e.target.value }))}
+                  className="h-12 rounded-xl"
+                />
                 <div className="flex gap-3">
                   <Button
                     onClick={handleAdd}

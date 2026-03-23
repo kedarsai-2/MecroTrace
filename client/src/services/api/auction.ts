@@ -43,6 +43,8 @@ export interface AuctionEntryDTO {
   buyer_name: string;
   buyer_mark: string;
   created_at?: string;
+  /** Epoch ms — optimistic concurrency when PATCHing this bid */
+  last_modified_ms?: number;
 }
 
 export interface AuctionSessionDTO {
@@ -71,10 +73,15 @@ export interface AuctionBidCreateRequest {
 }
 
 export interface AuctionBidUpdateRequest {
+  rate?: number;
+  quantity?: number;
   token_advance?: number;
   extra_rate?: number;
   preset_applied?: number;
   preset_type?: PresetType;
+  allow_lot_increase?: boolean;
+  /** Must match `last_modified_ms` from session entry when edit started */
+  expected_last_modified_ms?: number | null;
 }
 
 export interface AuctionResultEntryDTO {
@@ -140,6 +147,13 @@ async function parseJsonOrThrow(res: Response, defaultMessage: string): Promise<
 }
 
 export const auctionApi = {
+  /** Distinct scribble (temporary) buyer marks for the trader for the current calendar day (server). */
+  async listTemporaryBuyerMarksToday(): Promise<string[]> {
+    const res = await apiFetch(`${BASE}/temporary-buyer-marks/today`, { method: 'GET' });
+    if (!res.ok) await parseJsonOrThrow(res, 'Failed to load temporary buyer marks');
+    return res.json();
+  },
+
   async listLots(params: ListLotsParams = {}): Promise<LotSummaryDTO[]> {
     const searchParams = new URLSearchParams();
     if (params.page != null) searchParams.set('page', String(params.page));
@@ -186,6 +200,26 @@ export const auctionApi = {
       method: 'PATCH',
       body: JSON.stringify(body),
     });
+    if (res.status === 409) {
+      let message = 'Bid update conflict';
+      let field: string | undefined;
+      try {
+        const contentType = res.headers.get('content-type') || '';
+        if (contentType.includes('application/json') || contentType.includes('application/problem+json')) {
+          const errBody = await res.json();
+          if (errBody?.message) message = errBody.message;
+          else if (errBody?.detail) message = errBody.detail;
+          if (Array.isArray(errBody?.errors) && errBody.errors[0]?.field) field = errBody.errors[0].field;
+          else if (errBody?.field) field = errBody.field;
+        }
+      } catch {
+        // ignore
+      }
+      const err = new Error(message) as Error & { isConflict?: boolean; isStaleBid?: boolean };
+      if (field === 'stale_bid') err.isStaleBid = true;
+      else err.isConflict = true;
+      throw err;
+    }
     if (!res.ok) {
       if (res.status === 404) throw new Error('Bid or lot not found');
       await parseJsonOrThrow(res, 'Failed to update bid');

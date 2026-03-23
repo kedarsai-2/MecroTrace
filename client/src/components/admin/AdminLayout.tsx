@@ -209,7 +209,7 @@ const AdminLayout = () => {
         </header>
 
         {/* Page Content */}
-        <main className="p-6 relative z-10">
+        <main id="route-autofocus-root" className="p-6 relative z-10">
           <Outlet />
         </main>
       </motion.div>

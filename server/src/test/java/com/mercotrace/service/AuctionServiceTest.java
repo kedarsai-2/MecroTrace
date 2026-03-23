@@ -5,12 +5,14 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyCollection;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
 import com.mercotrace.domain.Auction;
 import com.mercotrace.domain.AuctionEntry;
+import com.mercotrace.domain.Contact;
 import com.mercotrace.domain.Lot;
 import com.mercotrace.domain.SellerInVehicle;
 import com.mercotrace.domain.Vehicle;
@@ -323,8 +325,8 @@ class AuctionServiceTest {
         assertThat(saved.getPresetMargin()).isEqualByComparingTo("10");
         assertThat(saved.getPresetType()).isEqualTo(AuctionPresetType.PROFIT);
 
-        // sellerRate = bidRate - preset for PROFIT
-        assertThat(saved.getSellerRate()).isEqualByComparingTo("110");
+        // seller_rate column stores base bid only; preset is in preset_margin
+        assertThat(saved.getSellerRate()).isEqualByComparingTo("120");
         // buyerRate = bidRate + extra
         assertThat(saved.getBuyerRate()).isEqualByComparingTo("122");
         // amount = buyerRate * quantity
@@ -461,8 +463,8 @@ class AuctionServiceTest {
         assertThat(entry.getPresetMargin()).isEqualByComparingTo("5");
         assertThat(entry.getPresetType()).isEqualTo(AuctionPresetType.LOSS);
 
-        // sellerRate = bidRate + preset for LOSS
-        assertThat(entry.getSellerRate()).isEqualByComparingTo("105");
+        // seller_rate stores base bid; preset kept in preset_margin
+        assertThat(entry.getSellerRate()).isEqualByComparingTo("100");
         // buyerRate = bidRate + extra
         assertThat(entry.getBuyerRate()).isEqualByComparingTo("102");
         assertThat(entry.getAmount()).isEqualByComparingTo("510");
@@ -572,6 +574,19 @@ class AuctionServiceTest {
         assertThat(result.getEntries()).hasSize(2);
         assertThat(result.getEntries().get(0).getBidNumber()).isEqualTo(1);
         assertThat(result.getEntries().get(1).getBidNumber()).isEqualTo(2);
+    }
+
+    @Test
+    void listTemporaryBuyerMarksForCurrentCalendarDay_excludesRegisteredMarksAndSorts() {
+        when(auctionEntryRepository.findDistinctScribbleBuyerMarksForTraderCreatedBetween(eq(1L), any(Instant.class), any(Instant.class)))
+            .thenReturn(List.of("zebra", "alpha", "dup"));
+        Contact c = new Contact();
+        c.setMark("Dup");
+        when(contactRepository.findAllByTraderIdAndActiveTrue(1L)).thenReturn(List.of(c));
+
+        List<String> result = auctionService.listTemporaryBuyerMarksForCurrentCalendarDay();
+
+        assertThat(result).containsExactly("alpha", "zebra");
     }
 }
 

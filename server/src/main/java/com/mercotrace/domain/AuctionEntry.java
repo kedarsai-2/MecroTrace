@@ -43,6 +43,11 @@ public class AuctionEntry extends AbstractAuditingEntity<Long> implements Serial
     @Column(name = "bid_rate", precision = 19, scale = 2, nullable = false)
     private BigDecimal bidRate;
 
+    /**
+     * Signed preset margin for this bid (from Sales Pad). Stored separately from the base bid.
+     * Downstream modules (settlement, billing, print) should compute effective seller rate as
+     * {@code bid_rate + preset_margin} when a combined value is required.
+     */
     @NotNull
     @Column(name = "preset_margin", precision = 19, scale = 2, nullable = false)
     private BigDecimal presetMargin;
@@ -52,6 +57,9 @@ public class AuctionEntry extends AbstractAuditingEntity<Long> implements Serial
     @Column(name = "preset_type", length = 10, nullable = false)
     private AuctionPresetType presetType;
 
+    /**
+     * Base auction bid rate (same as {@link #bidRate}). Not merged with preset; see {@link #presetMargin}.
+     */
     @NotNull
     @Column(name = "seller_rate", precision = 19, scale = 2, nullable = false)
     private BigDecimal sellerRate;

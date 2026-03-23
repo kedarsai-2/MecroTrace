@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { ArrowLeft, BookOpen, Plus, Lock, Unlock, Shield, Search, ChevronRight, Layers, Wallet, TrendingUp, TrendingDown, Building2, PiggyBank } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
@@ -8,6 +8,7 @@ import type { COALedger, AccountingClass, LedgerClassification } from '@/types/a
 import { chartOfAccountsApi, dtoToCOALedger } from '@/services/api/chartOfAccounts';
 import BottomNav from '@/components/BottomNav';
 import { useDesktopMode } from '@/hooks/use-desktop';
+import useAutofocusWhen from '@/hooks/useAutofocusWhen';
 import ForbiddenPage from '@/components/ForbiddenPage';
 import { usePermissions } from '@/lib/permissions';
 
@@ -51,6 +52,9 @@ const AccountingPage = () => {
   const [newClassification, setNewClassification] = useState<LedgerClassification>('RECEIVABLE');
   const [newOpening, setNewOpening] = useState('0');
   const [errors, setErrors] = useState<{ name?: string; opening?: string; classification?: string }>({});
+
+  const ledgerNameInputRef = useRef<HTMLInputElement | null>(null);
+  useAutofocusWhen(showAdd, ledgerNameInputRef);
 
   useEffect(() => {
     let cancelled = false;
@@ -336,8 +340,16 @@ const AccountingPage = () => {
               <div className="space-y-4">
                 <div>
                   <label className="text-xs font-bold text-muted-foreground mb-1.5 block uppercase tracking-wide">Ledger Name</label>
-                  <input value={newName} onChange={e => { setNewName(e.target.value); setErrors(prev => ({ ...prev, name: undefined })); }} placeholder="e.g., ABC Traders – Receivable"
-                    className={cn('w-full px-4 py-3.5 rounded-xl bg-muted text-foreground text-sm border outline-none focus:ring-2 focus:ring-primary/30', errors.name ? 'border-destructive' : 'border-border')} />
+                  <input
+                    ref={ledgerNameInputRef}
+                    value={newName}
+                    onChange={e => { setNewName(e.target.value); setErrors(prev => ({ ...prev, name: undefined })); }}
+                    placeholder="e.g., ABC Traders – Receivable"
+                    className={cn(
+                      'w-full px-4 py-3.5 rounded-xl bg-muted text-foreground text-sm border outline-none focus:ring-2 focus:ring-primary/30',
+                      errors.name ? 'border-destructive' : 'border-border',
+                    )}
+                  />
                   {errors.name && <p className="text-xs text-destructive mt-1">{errors.name}</p>}
                 </div>
                 <div>

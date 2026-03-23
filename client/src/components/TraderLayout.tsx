@@ -66,7 +66,11 @@ const TraderLayout = () => {
   }
 
   if (!isDesktop) {
-    return <Outlet />;
+    return (
+      <div id="route-autofocus-root" className="min-h-[100dvh]">
+        <Outlet />
+      </div>
+    );
   }
 
   const pageTitle = pageTitles[location.pathname] || 
@@ -126,7 +130,7 @@ const TraderLayout = () => {
           </div>
         </header>
 
-        <main className="relative z-10">
+        <main id="route-autofocus-root" className="relative z-10">
           {!isApproved && (
             <div
               className="mx-4 mt-4 flex items-center gap-3 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-amber-800 dark:text-amber-200"

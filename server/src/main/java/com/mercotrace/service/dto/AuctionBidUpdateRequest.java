@@ -11,6 +11,12 @@ import java.math.BigDecimal;
 @SuppressWarnings("common-java:DuplicatedBlocks")
 public class AuctionBidUpdateRequest implements Serializable {
 
+    @JsonProperty("rate")
+    private BigDecimal rate;
+
+    @JsonProperty("quantity")
+    private Integer quantity;
+
     @JsonProperty("token_advance")
     private BigDecimal tokenAdvance;
 
@@ -22,6 +28,29 @@ public class AuctionBidUpdateRequest implements Serializable {
 
     @JsonProperty("preset_type")
     private AuctionPresetType presetType;
+
+    @JsonProperty("allow_lot_increase")
+    private boolean allowLotIncrease;
+
+    /** Client copy of session entry {@code last_modified_ms} when edit started; mismatch → 409. */
+    @JsonProperty("expected_last_modified_ms")
+    private Long expectedLastModifiedMs;
+
+    public BigDecimal getRate() {
+        return rate;
+    }
+
+    public void setRate(BigDecimal rate) {
+        this.rate = rate;
+    }
+
+    public Integer getQuantity() {
+        return quantity;
+    }
+
+    public void setQuantity(Integer quantity) {
+        this.quantity = quantity;
+    }
 
     public BigDecimal getTokenAdvance() {
         return tokenAdvance;
@@ -53,6 +82,22 @@ public class AuctionBidUpdateRequest implements Serializable {
 
     public void setPresetType(AuctionPresetType presetType) {
         this.presetType = presetType;
+    }
+
+    public boolean isAllowLotIncrease() {
+        return allowLotIncrease;
+    }
+
+    public void setAllowLotIncrease(boolean allowLotIncrease) {
+        this.allowLotIncrease = allowLotIncrease;
+    }
+
+    public Long getExpectedLastModifiedMs() {
+        return expectedLastModifiedMs;
+    }
+
+    public void setExpectedLastModifiedMs(Long expectedLastModifiedMs) {
+        this.expectedLastModifiedMs = expectedLastModifiedMs;
     }
 }
 

@@ -150,7 +150,11 @@ public final class SettlementDTOs {
         private Integer bidNumber;
         private String buyerMark;
         private String buyerName;
+        /** Auction floor bid (base) per bag — same as completed-auction result rate. */
         private BigDecimal rate;
+        /** Signed preset margin from auction; effective seller rate for settlement = rate + presetMargin. */
+        @JsonProperty("presetMargin")
+        private BigDecimal presetMargin;
         private Integer quantity;
         private BigDecimal weight;
 
@@ -162,6 +166,8 @@ public final class SettlementDTOs {
         public void setBuyerName(String buyerName) { this.buyerName = buyerName; }
         public BigDecimal getRate() { return rate; }
         public void setRate(BigDecimal rate) { this.rate = rate; }
+        public BigDecimal getPresetMargin() { return presetMargin; }
+        public void setPresetMargin(BigDecimal presetMargin) { this.presetMargin = presetMargin; }
         public Integer getQuantity() { return quantity; }
         public void setQuantity(Integer quantity) { this.quantity = quantity; }
         public BigDecimal getWeight() { return weight; }

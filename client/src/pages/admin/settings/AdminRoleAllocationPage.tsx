@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { UserCog, Search, Save, ArrowLeft, Shield } from 'lucide-react';
@@ -13,6 +13,7 @@ import type { Profile, Role, UserRole } from '@/types/rbac';
 import { rbacApi } from '@/services/api';
 import { useAdminPermissions } from '@/admin/lib/adminPermissions';
 import AdminForbiddenPage from '@/admin/components/AdminForbiddenPage';
+import useUnsavedChangesGuard from '@/hooks/useUnsavedChangesGuard';
 
 const AdminRoleAllocationPage = () => {
   const navigate = useNavigate();
@@ -26,6 +27,7 @@ const AdminRoleAllocationPage = () => {
   const [selectedProfile, setSelectedProfile] = useState<Profile | null>(null);
   const [selectedRoleIds, setSelectedRoleIds] = useState<Set<string>>(new Set());
   const [saving, setSaving] = useState(false);
+  const dialogBaselineRef = useRef<string | null>(null);
 
   const fetchAll = async () => {
     try {
@@ -50,9 +52,23 @@ const AdminRoleAllocationPage = () => {
     fetchAll();
   }, []);
 
-  if (!canAccessModule('Settings')) {
-    return <AdminForbiddenPage moduleName="Settings" />;
-  }
+  const getDialogSnapshot = useCallback(
+    () =>
+      JSON.stringify({
+        profileId: selectedProfile?.id ?? null,
+        roleIds: Array.from(selectedRoleIds).sort(),
+      }),
+    [selectedProfile, selectedRoleIds],
+  );
+
+  const isDialogDirty = useMemo(() => {
+    if (!dialogOpen || dialogBaselineRef.current == null) return false;
+    return getDialogSnapshot() !== dialogBaselineRef.current;
+  }, [dialogOpen, getDialogSnapshot]);
+
+  const { confirmIfDirty, UnsavedChangesDialog } = useUnsavedChangesGuard({
+    when: isDialogDirty && !saving,
+  });
 
   const getUserRoles = (profileId: string) =>
     userRoles
@@ -65,12 +81,30 @@ const AdminRoleAllocationPage = () => {
     const currentRoleIds = userRoles.filter(ur => ur.user_id === profile.id).map(ur => ur.role_id);
     setSelectedRoleIds(new Set(currentRoleIds));
     setDialogOpen(true);
+    dialogBaselineRef.current = JSON.stringify({
+      profileId: profile.id,
+      roleIds: [...currentRoleIds].sort(),
+    });
+  };
+
+  const handleDialogOpenChange = (open: boolean) => {
+    if (open) {
+      setDialogOpen(true);
+      return;
+    }
+    void (async () => {
+      const ok = await confirmIfDirty();
+      if (!ok) return;
+      setDialogOpen(false);
+      dialogBaselineRef.current = null;
+    })();
   };
 
   const toggleRole = (roleId: string) => {
     setSelectedRoleIds(prev => {
       const s = new Set(prev);
-      s.has(roleId) ? s.delete(roleId) : s.add(roleId);
+      if (s.has(roleId)) s.delete(roleId);
+      else s.add(roleId);
       return s;
     });
   };
@@ -83,6 +117,7 @@ const AdminRoleAllocationPage = () => {
       await rbacApi.setUserRoles(selectedProfile.id, newRoleIds);
       toast.success('Roles updated successfully');
       setDialogOpen(false);
+      dialogBaselineRef.current = null;
       fetchAll();
     } catch (error) {
       console.error(error);
@@ -113,13 +148,24 @@ const AdminRoleAllocationPage = () => {
     'bg-rose-500/10 text-rose-600 border-rose-500/20',
   ];
 
+  if (!canAccessModule('Settings')) {
+    return <AdminForbiddenPage moduleName="Settings" />;
+  }
+
   return (
     <div className="min-h-[100dvh] bg-background pb-6">
+      <UnsavedChangesDialog />
       <div className="px-4 md:px-8 pt-4 lg:pt-6 space-y-6">
         {/* Header */}
         <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="flex items-center gap-3">
           <button
-            onClick={() => navigate('/admin/settings')}
+            onClick={() => {
+              void (async () => {
+                const ok = await confirmIfDirty();
+                if (!ok) return;
+                navigate('/admin/settings');
+              })();
+            }}
             aria-label="Back to settings"
             className="w-11 h-11 min-w-[44px] min-h-[44px] rounded-xl glass flex items-center justify-center hover:bg-muted/50 transition-colors border border-border/30"
           >
@@ -251,7 +297,7 @@ const AdminRoleAllocationPage = () => {
         )}
 
         {/* Allocate Dialog */}
-        <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+        <Dialog open={dialogOpen} onOpenChange={handleDialogOpenChange}>
           <DialogContent className="max-w-md">
             <DialogHeader>
               <div className="flex items-center gap-3">
@@ -293,7 +339,17 @@ const AdminRoleAllocationPage = () => {
               )}
             </div>
             <DialogFooter>
-              <Button variant="outline" onClick={() => setDialogOpen(false)}>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  void (async () => {
+                    const ok = await confirmIfDirty();
+                    if (!ok) return;
+                    setDialogOpen(false);
+                    dialogBaselineRef.current = null;
+                  })();
+                }}
+              >
                 Cancel
               </Button>
               <Button onClick={handleSave} disabled={saving} className="gap-2 shadow-lg shadow-primary/20">

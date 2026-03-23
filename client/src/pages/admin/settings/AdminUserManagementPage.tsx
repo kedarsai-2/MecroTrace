@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { Users, Plus, Edit2, Search, UserCheck, UserX, Eye, ArrowLeft, Mail, Phone } from 'lucide-react';
@@ -13,6 +13,7 @@ import type { Profile, Role, UserRole } from '@/types/rbac';
 import { rbacApi } from '@/services/api';
 import { useAdminPermissions } from '@/admin/lib/adminPermissions';
 import AdminForbiddenPage from '@/admin/components/AdminForbiddenPage';
+import useUnsavedChangesGuard from '@/hooks/useUnsavedChangesGuard';
 
 const AdminUserManagementPage = () => {
   const navigate = useNavigate();
@@ -30,12 +31,29 @@ const AdminUserManagementPage = () => {
   const [formPassword, setFormPassword] = useState('');
   const [saving, setSaving] = useState(false);
   const savingRef = useRef(false);
+  const formBaselineRef = useRef<string | null>(null);
 
   const MOBILE_REGEX = /^\d{10}$/;
 
-  if (!canAccessModule('Settings')) {
-    return <AdminForbiddenPage moduleName="Settings" />;
-  }
+  const getFormSnapshot = useCallback(
+    () =>
+      JSON.stringify({
+        name: formName.trim(),
+        email: formEmail.trim(),
+        mobile: formMobile.trim(),
+        password: formPassword,
+      }),
+    [formName, formEmail, formMobile, formPassword],
+  );
+
+  const isDialogDirty = useMemo(() => {
+    if (!dialogOpen || formBaselineRef.current == null) return false;
+    return getFormSnapshot() !== formBaselineRef.current;
+  }, [dialogOpen, getFormSnapshot]);
+
+  const { confirmIfDirty, UnsavedChangesDialog } = useUnsavedChangesGuard({
+    when: isDialogDirty && !saving,
+  });
 
   const fetchProfiles = async () => {
     try {
@@ -76,6 +94,12 @@ const AdminUserManagementPage = () => {
     setFormMobileError('');
     setFormPassword('');
     setDialogOpen(true);
+    formBaselineRef.current = JSON.stringify({
+      name: '',
+      email: '',
+      mobile: '',
+      password: '',
+    });
   };
 
   const openEdit = (profile: Profile) => {
@@ -86,6 +110,25 @@ const AdminUserManagementPage = () => {
     setFormMobileError('');
     setFormPassword('');
     setDialogOpen(true);
+    formBaselineRef.current = JSON.stringify({
+      name: profile.full_name.trim(),
+      email: profile.email.trim(),
+      mobile: (profile.mobile || '').trim(),
+      password: '',
+    });
+  };
+
+  const handleDialogOpenChange = (open: boolean) => {
+    if (open) {
+      setDialogOpen(true);
+      return;
+    }
+    void (async () => {
+      const ok = await confirmIfDirty();
+      if (!ok) return;
+      setDialogOpen(false);
+      formBaselineRef.current = null;
+    })();
   };
 
   const handleSave = async () => {
@@ -125,6 +168,7 @@ const AdminUserManagementPage = () => {
         toast.success('User created successfully');
       }
       setDialogOpen(false);
+      formBaselineRef.current = null;
       fetchProfiles();
     } catch (error: any) {
       console.error(error);
@@ -160,14 +204,25 @@ const AdminUserManagementPage = () => {
     'from-cyan-500 to-blue-600',
   ];
 
+  if (!canAccessModule('Settings')) {
+    return <AdminForbiddenPage moduleName="Settings" />;
+  }
+
   return (
     <div className="min-h-[100dvh] bg-background pb-6">
+      <UnsavedChangesDialog />
       <div className="px-4 md:px-8 pt-4 lg:pt-6 space-y-6">
         {/* Header */}
         <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="flex items-center justify-between">
           <div className="flex items-center gap-3">
             <button
-              onClick={() => navigate('/admin/settings')}
+              onClick={() => {
+                void (async () => {
+                  const ok = await confirmIfDirty();
+                  if (!ok) return;
+                  navigate('/admin/settings');
+                })();
+              }}
               aria-label="Back to settings"
               className="w-11 h-11 min-w-[44px] min-h-[44px] rounded-xl glass flex items-center justify-center hover:bg-muted/50 transition-colors border border-border/30"
             >
@@ -393,7 +448,7 @@ const AdminUserManagementPage = () => {
         )}
 
         {/* Create/Edit Dialog */}
-        <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+        <Dialog open={dialogOpen} onOpenChange={handleDialogOpenChange}>
           <DialogContent className="max-w-md">
             <DialogHeader>
               <div className="flex items-center gap-3">
@@ -455,7 +510,17 @@ const AdminUserManagementPage = () => {
               </div>
             </div>
             <DialogFooter>
-              <Button variant="outline" onClick={() => setDialogOpen(false)}>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  void (async () => {
+                    const ok = await confirmIfDirty();
+                    if (!ok) return;
+                    setDialogOpen(false);
+                    formBaselineRef.current = null;
+                  })();
+                }}
+              >
                 Cancel
               </Button>
               <Button onClick={handleSave} disabled={saving} className="shadow-lg shadow-primary/20">

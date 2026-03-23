@@ -16,9 +16,10 @@ interface SellerInfoCardProps {
   }>;
   onPrint?: () => void;
   onRefresh?: () => void;
+  hidePrint?: boolean;
 }
 
-const SellerInfoCard = ({ sellers, onPrint, onRefresh }: SellerInfoCardProps) => {
+const SellerInfoCard = ({ sellers, onPrint, onRefresh, hidePrint }: SellerInfoCardProps) => {
   if (!sellers || sellers.length === 0) return null;
 
   return (
@@ -38,20 +39,22 @@ const SellerInfoCard = ({ sellers, onPrint, onRefresh }: SellerInfoCardProps) =>
               <RotateCcw className="w-3 h-3 text-muted-foreground" />
             </button>
           )}
-          <button
-            type="button"
-            onClick={e => {
-              e.stopPropagation();
-              if (onPrint) {
-                onPrint();
-              } else if (typeof window !== 'undefined' && window.print) {
-                window.print();
-              }
-            }}
-            className="w-6 h-6 rounded-md bg-muted/50 flex items-center justify-center hover:bg-muted transition-colors"
-          >
-            <Printer className="w-3 h-3 text-muted-foreground" />
-          </button>
+          {!hidePrint && (
+            <button
+              type="button"
+              onClick={e => {
+                e.stopPropagation();
+                if (onPrint) {
+                  onPrint();
+                } else if (typeof window !== 'undefined' && window.print) {
+                  window.print();
+                }
+              }}
+              className="w-6 h-6 rounded-md bg-muted/50 flex items-center justify-center hover:bg-muted transition-colors"
+            >
+              <Printer className="w-3 h-3 text-muted-foreground" />
+            </button>
+          )}
         </div>
       </div>
 

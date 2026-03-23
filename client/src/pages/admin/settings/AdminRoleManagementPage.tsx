@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Shield, Plus, Edit2, Trash2, ChevronDown, ChevronRight, Search, ArrowLeft, Layers } from 'lucide-react';
@@ -16,6 +16,7 @@ import { ADMIN_AVAILABLE_MODULES } from '@/admin/types/rbac';
 import { rbacApi } from '@/services/api';
 import { useAdminPermissions } from '@/admin/lib/adminPermissions';
 import AdminForbiddenPage from '@/admin/components/AdminForbiddenPage';
+import useUnsavedChangesGuard from '@/hooks/useUnsavedChangesGuard';
 
 const emptyPermissions = (): ModulePermissions => {
   const perms: ModulePermissions = {};
@@ -42,10 +43,26 @@ const AdminRoleManagementPage = () => {
   const [expandedModules, setExpandedModules] = useState<Set<string>>(new Set());
   const [saving, setSaving] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
+  const formBaselineRef = useRef<string | null>(null);
 
-  if (!canAccessModule('Settings')) {
-    return <AdminForbiddenPage moduleName="Settings" />;
-  }
+  const getFormSnapshot = useCallback(
+    () =>
+      JSON.stringify({
+        name: formName.trim(),
+        description: formDesc.trim(),
+        permissions: formPerms,
+      }),
+    [formName, formDesc, formPerms],
+  );
+
+  const isDialogDirty = useMemo(() => {
+    if (!dialogOpen || formBaselineRef.current == null) return false;
+    return getFormSnapshot() !== formBaselineRef.current;
+  }, [dialogOpen, getFormSnapshot]);
+
+  const { confirmIfDirty, UnsavedChangesDialog } = useUnsavedChangesGuard({
+    when: isDialogDirty && !saving,
+  });
 
   const fetchRoles = async () => {
     try {
@@ -71,6 +88,11 @@ const AdminRoleManagementPage = () => {
     setFormPerms(emptyPermissions());
     setExpandedModules(new Set());
     setDialogOpen(true);
+    formBaselineRef.current = JSON.stringify({
+      name: '',
+      description: '',
+      permissions: emptyPermissions(),
+    });
   };
 
   const openEdit = (role: Role) => {
@@ -89,6 +111,24 @@ const AdminRoleManagementPage = () => {
     setFormPerms(merged);
     setExpandedModules(new Set());
     setDialogOpen(true);
+    formBaselineRef.current = JSON.stringify({
+      name: role.name.trim(),
+      description: role.description.trim(),
+      permissions: merged,
+    });
+  };
+
+  const handleDialogOpenChange = (open: boolean) => {
+    if (open) {
+      setDialogOpen(true);
+      return;
+    }
+    void (async () => {
+      const ok = await confirmIfDirty();
+      if (!ok) return;
+      setDialogOpen(false);
+      formBaselineRef.current = null;
+    })();
   };
 
   const toggleModule = (mod: string) => {
@@ -114,7 +154,8 @@ const AdminRoleManagementPage = () => {
   const toggleExpand = (mod: string) => {
     setExpandedModules(prev => {
       const s = new Set(prev);
-      s.has(mod) ? s.delete(mod) : s.add(mod);
+      if (s.has(mod)) s.delete(mod);
+      else s.add(mod);
       return s;
     });
   };
@@ -139,6 +180,7 @@ const AdminRoleManagementPage = () => {
         toast.success('Role created');
       }
       setDialogOpen(false);
+      formBaselineRef.current = null;
       fetchRoles();
     } catch (error) {
       console.error(error);
@@ -178,14 +220,25 @@ const AdminRoleManagementPage = () => {
     Settings: 'from-slate-500/15 to-zinc-500/10',
   };
 
+  if (!canAccessModule('Settings')) {
+    return <AdminForbiddenPage moduleName="Settings" />;
+  }
+
   return (
     <div className="min-h-[100dvh] bg-background pb-6">
+      <UnsavedChangesDialog />
       <div className="px-4 md:px-8 pt-4 lg:pt-6 space-y-6">
         {/* Header */}
         <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="flex items-center justify-between">
           <div className="flex items-center gap-3">
             <button
-              onClick={() => navigate('/admin/settings')}
+              onClick={() => {
+                void (async () => {
+                  const ok = await confirmIfDirty();
+                  if (!ok) return;
+                  navigate('/admin/settings');
+                })();
+              }}
               aria-label="Back to settings"
               className="w-11 h-11 min-w-[44px] min-h-[44px] rounded-xl glass flex items-center justify-center hover:bg-muted/50 transition-colors border border-border/30"
             >
@@ -362,7 +415,7 @@ const AdminRoleManagementPage = () => {
         )}
 
         {/* Create/Edit Dialog */}
-        <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+        <Dialog open={dialogOpen} onOpenChange={handleDialogOpenChange}>
           <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
             <DialogHeader>
               <div className="flex items-center gap-3">
@@ -442,7 +495,17 @@ const AdminRoleManagementPage = () => {
               </div>
             </div>
             <DialogFooter>
-              <Button variant="outline" onClick={() => setDialogOpen(false)}>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  void (async () => {
+                    const ok = await confirmIfDirty();
+                    if (!ok) return;
+                    setDialogOpen(false);
+                    formBaselineRef.current = null;
+                  })();
+                }}
+              >
                 Cancel
               </Button>
               <Button onClick={handleSave} disabled={saving} className="shadow-lg shadow-primary/20">

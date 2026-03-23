@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { Sliders, ArrowLeft, Plus, Pencil, Trash2 } from 'lucide-react';
@@ -25,6 +25,7 @@ import { toast } from 'sonner';
 import BottomNav from '@/components/BottomNav';
 import { usePermissions } from '@/lib/permissions';
 import ForbiddenPage from '@/components/ForbiddenPage';
+import useUnsavedChangesGuard from '@/hooks/useUnsavedChangesGuard';
 
 const PREDEFINED_MARK_MIN = 1;
 const PREDEFINED_MARK_MAX = 20;
@@ -75,11 +76,31 @@ const PresetSettingsPage = () => {
   const [formErrors, setFormErrors] = useState<{ mark?: string; amount?: string }>({});
   const [saving, setSaving] = useState(false);
   const [deleteConfirmId, setDeleteConfirmId] = useState<number | null>(null);
+  const dialogBaselineRef = useRef<string | null>(null);
 
   const canViewPresetSettings = can('Preset Settings', 'View');
   const canCreatePreset = can('Preset Settings', 'Create');
   const canEditPreset = can('Preset Settings', 'Edit');
   const canDeletePreset = can('Preset Settings', 'Delete');
+
+  const getDialogSnapshot = useCallback(
+    () =>
+      JSON.stringify({
+        editingId,
+        mark: formMark.trim(),
+        amount: formAmount.trim(),
+      }),
+    [editingId, formMark, formAmount],
+  );
+
+  const isDialogDirty = useMemo(() => {
+    if (!dialogOpen || dialogBaselineRef.current == null) return false;
+    return getDialogSnapshot() !== dialogBaselineRef.current;
+  }, [dialogOpen, getDialogSnapshot]);
+
+  const { confirmIfDirty, UnsavedChangesDialog } = useUnsavedChangesGuard({
+    when: isDialogDirty && !saving,
+  });
 
   const fetchList = async () => {
     try {
@@ -105,6 +126,7 @@ const PresetSettingsPage = () => {
     setFormAmount('');
     setFormErrors({});
     setDialogOpen(true);
+    dialogBaselineRef.current = JSON.stringify({ editingId: null, mark: '', amount: '' });
   };
 
   const openEdit = (row: PresetMarkSettingDTO) => {
@@ -113,6 +135,24 @@ const PresetSettingsPage = () => {
     setFormAmount(String(row.extra_amount ?? ''));
     setFormErrors({});
     setDialogOpen(true);
+    dialogBaselineRef.current = JSON.stringify({
+      editingId: row.id ?? null,
+      mark: (row.predefined_mark ?? '').trim(),
+      amount: String(row.extra_amount ?? '').trim(),
+    });
+  };
+
+  const handleDialogOpenChange = (open: boolean) => {
+    if (open) {
+      setDialogOpen(true);
+      return;
+    }
+    void (async () => {
+      const ok = await confirmIfDirty();
+      if (!ok) return;
+      setDialogOpen(false);
+      dialogBaselineRef.current = null;
+    })();
   };
 
   const validateForm = (): boolean => {
@@ -141,6 +181,7 @@ const PresetSettingsPage = () => {
         toast.success('Preset added');
       }
       setDialogOpen(false);
+      dialogBaselineRef.current = null;
       fetchList();
     } catch (e) {
       console.error(e);
@@ -168,9 +209,21 @@ const PresetSettingsPage = () => {
 
   return (
     <div className="min-h-[100dvh] bg-background pb-28 lg:pb-6">
+      <UnsavedChangesDialog />
       <div className="px-4 md:px-8 pt-4 lg:pt-6 space-y-6">
         <div className="flex items-center gap-3">
-          <Button variant="ghost" size="icon" onClick={() => navigate('/settings')} className="shrink-0">
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => {
+              void (async () => {
+                const ok = await confirmIfDirty();
+                if (!ok) return;
+                navigate('/settings');
+              })();
+            }}
+            className="shrink-0"
+          >
             <ArrowLeft className="w-5 h-5" />
           </Button>
           <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-amber-500 to-orange-600 flex items-center justify-center shadow-lg shadow-amber-500/20">
@@ -249,7 +302,7 @@ const PresetSettingsPage = () => {
         </motion.div>
       </div>
 
-      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+      <Dialog open={dialogOpen} onOpenChange={handleDialogOpenChange}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>{editingId != null ? 'Edit Preset' : 'Add Preset'}</DialogTitle>
@@ -286,7 +339,20 @@ const PresetSettingsPage = () => {
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setDialogOpen(false)} disabled={saving}>Cancel</Button>
+            <Button
+              variant="outline"
+              onClick={() => {
+                void (async () => {
+                  const ok = await confirmIfDirty();
+                  if (!ok) return;
+                  setDialogOpen(false);
+                  dialogBaselineRef.current = null;
+                })();
+              }}
+              disabled={saving}
+            >
+              Cancel
+            </Button>
             <Button onClick={handleSave} disabled={saving}>{saving ? 'Saving…' : 'Save'}</Button>
           </DialogFooter>
         </DialogContent>

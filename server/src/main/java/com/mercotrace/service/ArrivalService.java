@@ -758,8 +758,10 @@ public class ArrivalService {
             }
             if (seller.getLots() != null) {
                 for (ArrivalLotDTO lot : seller.getLots()) {
-                    if (lot.getLotName() != null && !lot.getLotName().trim().isEmpty() && !lot.getLotName().trim().matches("^[0-9]+$")) {
-                        throw new IllegalArgumentException("Lot name must contain only numbers (digits), not letters: " + lot.getLotName());
+                    if (lot.getLotName() != null
+                        && !lot.getLotName().trim().isEmpty()
+                        && !lot.getLotName().trim().matches("^[a-zA-Z0-9][a-zA-Z0-9\\s_\\-]*$")) {
+                        throw new IllegalArgumentException("Lot name must be alphanumeric (spaces), and may include '-' and '_' : " + lot.getLotName());
                     }
                 }
             }
@@ -789,8 +791,8 @@ public class ArrivalService {
                 if (lot.getLotName() == null || lot.getLotName().isBlank()) {
                     throw new IllegalArgumentException("Lot name is required");
                 }
-                if (!lot.getLotName().trim().matches("^[0-9]+$")) {
-                    throw new IllegalArgumentException("Lot name must contain only numbers (digits), not letters: " + lot.getLotName());
+                if (!lot.getLotName().trim().matches("^[a-zA-Z0-9][a-zA-Z0-9\\s_\\-]*$")) {
+                    throw new IllegalArgumentException("Lot name must be alphanumeric (spaces), and may include '-' and '_' : " + lot.getLotName());
                 }
                 if (lot.getBagCount() <= 0) {
                     throw new IllegalArgumentException("Lot bag count must be greater than 0");
