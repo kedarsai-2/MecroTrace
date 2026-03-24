@@ -38,6 +38,9 @@ public class Lot extends AbstractAuditingEntity<Long> implements Serializable {
     @Column(name = "seller_serial_no", nullable = false)
     private Integer sellerSerialNo;
 
+    @Column(name = "lot_serial_no", nullable = false)
+    private Integer lotSerialNo;
+
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
 
@@ -96,6 +99,14 @@ public class Lot extends AbstractAuditingEntity<Long> implements Serializable {
         this.sellerSerialNo = sellerSerialNo;
     }
 
+    public Integer getLotSerialNo() {
+        return lotSerialNo;
+    }
+
+    public void setLotSerialNo(Integer lotSerialNo) {
+        this.lotSerialNo = lotSerialNo;
+    }
+
     public Instant getCreatedAt() {
         return createdAt;
     }
@@ -145,6 +156,7 @@ public class Lot extends AbstractAuditingEntity<Long> implements Serializable {
             ", lotName='" + getLotName() + "'" +
             ", bagCount=" + getBagCount() +
             ", sellerSerialNo=" + getSellerSerialNo() +
+            ", lotSerialNo=" + getLotSerialNo() +
             ", createdAt='" + getCreatedAt() + "'" +
             "}";
     }

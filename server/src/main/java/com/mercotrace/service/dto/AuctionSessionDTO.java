@@ -33,6 +33,9 @@ public class AuctionSessionDTO implements Serializable {
     @JsonProperty("status")
     private String status;
 
+    @JsonProperty("self_sale_context")
+    private AuctionSelfSaleContextDTO selfSaleContext;
+
     public Long getAuctionId() {
         return auctionId;
     }
@@ -87,6 +90,14 @@ public class AuctionSessionDTO implements Serializable {
 
     public void setStatus(String status) {
         this.status = status;
+    }
+
+    public AuctionSelfSaleContextDTO getSelfSaleContext() {
+        return selfSaleContext;
+    }
+
+    public void setSelfSaleContext(AuctionSelfSaleContextDTO selfSaleContext) {
+        this.selfSaleContext = selfSaleContext;
     }
 }
 

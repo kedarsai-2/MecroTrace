@@ -3,6 +3,7 @@ import type { FreightMethod } from '@/types/models';
 
 export interface ArrivalLotPayload {
   lot_name: string;
+  lot_serial_number?: number;
   quantity: number;
   commodity_name: string;
   broker_tag?: string;
@@ -12,6 +13,7 @@ export interface ArrivalLotPayload {
 /** When from contact: contact_id set. When free-text: contact_id null/omitted, seller_name + seller_phone required. */
 export interface ArrivalSellerPayload {
   contact_id?: number | null;
+  seller_serial_number?: number;
   seller_name: string;
   seller_phone: string;
   seller_mark?: string;
@@ -113,6 +115,7 @@ export interface ArrivalFullDetail {
 export interface ArrivalLotFullDetail {
   id: number;
   lotName: string;
+  lotSerialNumber?: number | null;
   commodityName: string;
   bagCount: number;
   brokerTag?: string | null;
@@ -121,6 +124,7 @@ export interface ArrivalLotFullDetail {
 
 export interface ArrivalSellerFullDetail {
   contactId?: number;
+  sellerSerialNumber?: number | null;
   sellerName: string;
   sellerPhone?: string;
   sellerMark?: string;
@@ -219,11 +223,13 @@ export const arrivalsApi = {
       origin: payload.origin,
       sellers: payload.sellers.map(s => ({
         contactId: s.contact_id !== undefined && s.contact_id !== null ? s.contact_id : null,
+        sellerSerialNumber: s.seller_serial_number,
         sellerName: s.seller_name,
         sellerPhone: s.seller_phone,
         sellerMark: s.seller_mark,
         lots: s.lots.map(l => ({
           lotName: l.lot_name,
+          lotSerialNumber: l.lot_serial_number,
           bagCount: l.quantity,
           commodityName: l.commodity_name,
           brokerTag: l.broker_tag,
@@ -266,11 +272,13 @@ export const arrivalsApi = {
     if (payload.sellers !== undefined && payload.sellers.length > 0) {
       body.sellers = payload.sellers.map(s => ({
         contactId: s.contact_id !== undefined && s.contact_id !== null ? s.contact_id : null,
+        sellerSerialNumber: s.seller_serial_number,
         sellerName: s.seller_name,
         sellerPhone: s.seller_phone,
         sellerMark: s.seller_mark,
         lots: s.lots.map(l => ({
           lotName: l.lot_name,
+          lotSerialNumber: l.lot_serial_number,
           bagCount: l.quantity,
           commodityName: l.commodity_name,
           brokerTag: l.broker_tag,

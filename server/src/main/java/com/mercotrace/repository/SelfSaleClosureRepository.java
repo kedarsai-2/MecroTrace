@@ -2,6 +2,7 @@ package com.mercotrace.repository;
 
 import com.mercotrace.domain.SelfSaleClosure;
 import java.math.BigDecimal;
+import java.util.List;
 import java.util.Set;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -17,6 +18,8 @@ public interface SelfSaleClosureRepository extends JpaRepository<SelfSaleClosure
      * Paginated list of closures for a trader (excluding soft-deleted), sorted by closedAt desc by default.
      */
     Page<SelfSaleClosure> findByTraderIdAndIsDeletedFalse(Long traderId, Pageable pageable);
+
+    List<SelfSaleClosure> findAllByTraderIdAndIsDeletedFalse(Long traderId);
 
     /**
      * Sum of (appliedRate * lot.bagCount) for all non-deleted closures of the trader. For "Total Sold" in client (align with client_origin).
@@ -36,4 +39,9 @@ public interface SelfSaleClosureRepository extends JpaRepository<SelfSaleClosure
      * Whether the lot has an active (non-deleted) self-sale closure for this trader.
      */
     boolean existsByLotIdAndTraderIdAndIsDeletedFalse(Long lotId, Long traderId);
+
+    /**
+     * Latest active self-sale closure for the given lot and trader.
+     */
+    java.util.Optional<SelfSaleClosure> findFirstByLotIdAndTraderIdAndIsDeletedFalseOrderByClosedAtDesc(Long lotId, Long traderId);
 }

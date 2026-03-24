@@ -20,9 +20,11 @@ import InlineScribblePad, { MAX_MARK_LEN, type MarkDetectionMeta } from '@/compo
 import { contactApi, auctionApi, presetMarksApi } from '@/services/api';
 import type {
   LotSummaryDTO,
+  AuctionSelfSaleUnitDTO,
   AuctionSessionDTO,
   AuctionEntryDTO,
   AuctionResultDTO,
+  AuctionSelfSaleContextDTO,
   AuctionBidCreateRequest,
   AuctionBidUpdateRequest,
 } from '@/services/api/auction';
@@ -32,10 +34,12 @@ import ForbiddenPage from '@/components/ForbiddenPage';
 import { usePermissions } from '@/lib/permissions';
 import { directPrint } from '@/utils/printTemplates';
 import { generateAuctionCompletionPrintHTML } from '@/utils/printDocumentTemplates';
+import { useAuth } from '@/context/AuthContext';
 
 // ── Types ─────────────────────────────────────────────────
 interface LotInfo {
   lot_id: string;
+  selfSaleUnitId?: string | null;
   lot_name: string;
   bag_count: number;
   original_bag_count: number;
@@ -48,9 +52,15 @@ interface LotInfo {
   status?: LotStatus;
   vehicle_total_qty?: number;
   seller_total_qty?: number;
+  selfSaleQty?: number;
+  remainingQty?: number;
+  selfSaleRate?: number;
+  selfSaleAmount?: number;
+  createdAt?: string;
 }
 
-type LotStatus = 'available' | 'sold' | 'partial' | 'pending';
+type LotStatus = 'available' | 'sold' | 'partial' | 'pending' | 'self_sale';
+type LotSource = 'regular' | 'self_sale';
 
 type PresetType = 'PROFIT' | 'LOSS';
 
@@ -111,9 +121,15 @@ function clearDraft() {
 function getLotStatus(lotId: string, bagCount: number, apiStatus?: string): LotStatus {
   const draft = loadDraft();
   if (draft?.selectedLotId === lotId && draft.entries.length > 0) return 'pending';
-  if (apiStatus === 'sold' || apiStatus === 'partial' || apiStatus === 'available' || apiStatus === 'pending')
+  if (apiStatus === 'sold' || apiStatus === 'partial' || apiStatus === 'available' || apiStatus === 'pending' || apiStatus === 'self_sale')
     return apiStatus as LotStatus;
   return 'available';
+}
+
+/** Badge row status: Self-Sale tab shows Self-Sale label; otherwise auction-derived status. */
+function getRowLotStatus(lot: LotInfo, statusFilter: LotStatus | 'all'): LotStatus {
+  if (statusFilter === 'self_sale') return 'self_sale';
+  return getLotStatus(lot.lot_id, lot.bag_count, lot.status);
 }
 
 const STATUS_CONFIG: Record<LotStatus, { label: string; bg: string; text: string; dot: string }> = {
@@ -121,6 +137,7 @@ const STATUS_CONFIG: Record<LotStatus, { label: string; bg: string; text: string
   sold: { label: 'Sold', bg: 'bg-rose-500/15', text: 'text-rose-600 dark:text-rose-400', dot: 'bg-rose-500' },
   partial: { label: 'Partial', bg: 'bg-amber-500/15', text: 'text-amber-600 dark:text-amber-400', dot: 'bg-amber-500' },
   pending: { label: 'Pending', bg: 'bg-blue-500/15', text: 'text-blue-600 dark:text-blue-400', dot: 'bg-blue-500' },
+  self_sale: { label: 'Self-Sale', bg: 'bg-fuchsia-500/15', text: 'text-fuchsia-700 dark:text-fuchsia-400', dot: 'bg-fuchsia-500' },
 };
 
 /**
@@ -160,6 +177,32 @@ function lotSummaryToLotInfo(dto: LotSummaryDTO): LotInfo {
     vehicle_total_qty: dto.vehicle_total_qty,
     seller_total_qty: dto.seller_total_qty,
   };
+}
+
+function selfSaleUnitToLotInfo(dto: AuctionSelfSaleUnitDTO): LotInfo {
+  return {
+    lot_id: String(dto.lot_id),
+    selfSaleUnitId: String(dto.self_sale_unit_id),
+    lot_name: dto.lot_name ?? '',
+    bag_count: dto.remaining_qty ?? dto.bag_count ?? 0,
+    original_bag_count: dto.original_bag_count ?? dto.self_sale_qty ?? dto.bag_count ?? 0,
+    commodity_name: dto.commodity_name ?? '',
+    seller_name: dto.seller_name ?? '',
+    seller_mark: dto.seller_mark ?? '',
+    seller_vehicle_id: String(dto.seller_vehicle_id ?? ''),
+    vehicle_number: dto.vehicle_number ?? '',
+    was_modified: false,
+    status: 'self_sale',
+    selfSaleQty: dto.self_sale_qty ?? 0,
+    remainingQty: dto.remaining_qty ?? 0,
+    selfSaleRate: dto.rate ?? 0,
+    selfSaleAmount: dto.amount ?? 0,
+    createdAt: dto.created_at,
+  };
+}
+
+function getLotRenderKey(lot: LotInfo): string {
+  return lot.selfSaleUnitId ? `self-sale-${lot.selfSaleUnitId}` : `lot-${lot.lot_id}`;
 }
 
 /** Display signed preset margin in grid (+10, −20) or em dash when zero. */
@@ -208,6 +251,7 @@ function sessionEntryToSaleEntry(e: AuctionEntryDTO): SaleEntry {
 const AuctionsPage = () => {
   const navigate = useNavigate();
   const isDesktop = useDesktopMode();
+  const { trader } = useAuth();
   const { canAccessModule, can } = usePermissions();
   const canView = canAccessModule('Auctions / Sales');
   if (!canView) {
@@ -240,7 +284,10 @@ const AuctionsPage = () => {
   // Lot selection
   const [showLotSelector, setShowLotSelector] = useState(true);
   const [availableLots, setAvailableLots] = useState<LotInfo[]>([]);
+  const [selfSaleLots, setSelfSaleLots] = useState<LotInfo[]>([]);
   const [selectedLot, setSelectedLot] = useState<LotInfo | null>(null);
+  const [selectedLotSource, setSelectedLotSource] = useState<LotSource>('regular');
+  const [selfSaleContext, setSelfSaleContext] = useState<AuctionSelfSaleContextDTO | null>(null);
   const [lotSearchQuery, setLotSearchQuery] = useState('');
   const [lotNavMode, setLotNavMode] = useState<'all' | 'vehicle' | 'seller' | 'lot_number'>('all');
   const [lotNumberSearch, setLotNumberSearch] = useState('');
@@ -385,6 +432,23 @@ const AuctionsPage = () => {
     }
   }, []);
 
+  const loadSelfSaleLots = useCallback(async (opts?: { q?: string }) => {
+    try {
+      const list = await auctionApi.listSelfSaleUnits({
+        page: 0,
+        size: 500,
+        q: opts?.q || undefined,
+      });
+      const lots: LotInfo[] = list.map(selfSaleUnitToLotInfo);
+      setSelfSaleLots(lots);
+      return lots;
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Failed to load self-sale lots');
+      setSelfSaleLots([]);
+      return [];
+    }
+  }, []);
+
   const loadTemporaryBuyerMarks = useCallback(async () => {
     try {
       const marks = await auctionApi.listTemporaryBuyerMarksToday();
@@ -399,6 +463,7 @@ const AuctionsPage = () => {
     contactApi.list({ scope: 'participants' }).then(setBuyers);
     loadTemporaryBuyerMarks();
     loadLots();
+    loadSelfSaleLots();
     presetMarksApi
       .list()
       .then((list) => {
@@ -412,7 +477,7 @@ const AuctionsPage = () => {
         }
       })
       .catch(() => { /* keep default presets */ });
-  }, [loadTemporaryBuyerMarks, loadLots]);
+  }, [loadTemporaryBuyerMarks, loadLots, loadSelfSaleLots]);
 
   // ── Restore draft after lots are loaded from API ─────────
   useEffect(() => {
@@ -460,7 +525,7 @@ const AuctionsPage = () => {
 
   // Filter lots (lot identifier format e.g. 320/320/110-110 also searchable)
   const filteredLots = useMemo(() => {
-    let result = availableLots;
+    let result = statusFilter === 'self_sale' ? selfSaleLots : availableLots;
     if (lotSearchQuery) {
       const q = lotSearchQuery.toLowerCase();
       result = result.filter(l =>
@@ -480,11 +545,16 @@ const AuctionsPage = () => {
         formatLotDisplayName(l).toLowerCase().includes(q)
       );
     }
-    if (statusFilter !== 'all') {
+    if (statusFilter !== 'all' && statusFilter !== 'self_sale') {
       result = result.filter(l => getLotStatus(l.lot_id, l.bag_count, l.status) === statusFilter);
     }
     return result;
-  }, [availableLots, lotSearchQuery, lotNumberSearch, statusFilter]);
+  }, [availableLots, selfSaleLots, lotSearchQuery, lotNumberSearch, statusFilter]);
+
+  const selectorLots = useMemo(
+    () => (statusFilter === 'self_sale' ? selfSaleLots : availableLots),
+    [statusFilter, selfSaleLots, availableLots]
+  );
 
   // Group lots by vehicle for navigation
   const lotsByVehicle = useMemo(() => {
@@ -615,6 +685,8 @@ const AuctionsPage = () => {
   const totalSold = useMemo(() => entries.reduce((s, e) => s + e.quantity, 0), [entries]);
   const remaining = selectedLot ? selectedLot.bag_count - totalSold : 0;
   const highestBid = useMemo(() => Math.max(0, ...entries.map(e => e.rate)), [entries]);
+  const isSelfSaleReauction = selectedLotSource === 'self_sale';
+  const previousSelfSaleEntries = selfSaleContext?.previous_entries ?? [];
   const previousBidRate = useMemo(() => {
     if (entries.length === 0) return 0;
     return Math.trunc(entries[entries.length - 1]?.rate ?? 0);
@@ -632,7 +704,9 @@ const AuctionsPage = () => {
 
   const applyAuctionSession = useCallback((session: AuctionSessionDTO) => {
     setEntries(session.entries.map(sessionEntryToSaleEntry));
+    setSelfSaleContext(session.self_sale_context ?? null);
     const lotId = selectedLot?.lot_id;
+    const selfSaleUnitId = selectedLot?.selfSaleUnitId;
     if (session.lot && lotId) {
       setSelectedLot(prev =>
         prev && prev.lot_id === lotId
@@ -656,44 +730,97 @@ const AuctionsPage = () => {
             : l
         )
       );
+      setSelfSaleLots(prev =>
+        prev.map(l =>
+          l.selfSaleUnitId === selfSaleUnitId && session.lot
+            ? {
+                ...l,
+                bag_count: session.lot!.bag_count ?? l.bag_count,
+                original_bag_count: session.lot!.original_bag_count ?? l.original_bag_count,
+                was_modified: session.lot!.was_modified ?? l.was_modified,
+                remainingQty: session.lot!.bag_count ?? l.remainingQty,
+              }
+            : l
+        )
+      );
     }
-  }, [selectedLot?.lot_id]);
+  }, [selectedLot?.lot_id, selectedLot?.selfSaleUnitId]);
 
   const refetchAuctionSession = useCallback(async () => {
     if (!selectedLot) return;
     try {
-      const session = await auctionApi.getOrStartSession(selectedLot.lot_id);
+      const session = selectedLotSource === 'self_sale'
+        ? await auctionApi.getOrStartSelfSaleSession(selectedLot.selfSaleUnitId ?? selectedLot.lot_id)
+        : await auctionApi.getOrStartSession(selectedLot.lot_id);
       applyAuctionSession(session);
     } catch {
       toast.error('Failed to refresh session');
     }
-  }, [selectedLot, applyAuctionSession]);
+  }, [selectedLot, selectedLotSource, applyAuctionSession]);
+
+  const addBidForCurrentSelection = useCallback(async (body: AuctionBidCreateRequest) => {
+    if (!selectedLot) throw new Error('No lot selected');
+    return selectedLotSource === 'self_sale'
+      ? auctionApi.addSelfSaleBid(selectedLot.selfSaleUnitId ?? selectedLot.lot_id, body)
+      : auctionApi.addBid(selectedLot.lot_id, body);
+  }, [selectedLot, selectedLotSource]);
+
+  const updateBidForCurrentSelection = useCallback(async (bidId: number, body: AuctionBidUpdateRequest) => {
+    if (!selectedLot) throw new Error('No lot selected');
+    return selectedLotSource === 'self_sale'
+      ? auctionApi.updateSelfSaleBid(selectedLot.selfSaleUnitId ?? selectedLot.lot_id, bidId, body)
+      : auctionApi.updateBid(selectedLot.lot_id, bidId, body);
+  }, [selectedLot, selectedLotSource]);
+
+  const deleteBidForCurrentSelection = useCallback(async (bidId: number) => {
+    if (!selectedLot) throw new Error('No lot selected');
+    return selectedLotSource === 'self_sale'
+      ? auctionApi.deleteSelfSaleBid(selectedLot.selfSaleUnitId ?? selectedLot.lot_id, bidId)
+      : auctionApi.deleteBid(selectedLot.lot_id, bidId);
+  }, [selectedLot, selectedLotSource]);
+
+  const completeAuctionForCurrentSelection = useCallback(async () => {
+    if (!selectedLot) throw new Error('No lot selected');
+    return selectedLotSource === 'self_sale'
+      ? auctionApi.completeSelfSaleAuction(selectedLot.selfSaleUnitId ?? selectedLot.lot_id)
+      : auctionApi.completeAuction(selectedLot.lot_id);
+  }, [selectedLot, selectedLotSource]);
 
   // ── Lot navigation (prev/next) ─────────────────────────
+  const navigationLots = useMemo(
+    () => (selectedLotSource === 'self_sale' || statusFilter === 'self_sale' ? selfSaleLots : availableLots),
+    [selectedLotSource, statusFilter, selfSaleLots, availableLots]
+  );
+
   const currentLotIndex = useMemo(() => {
     if (!selectedLot) return -1;
-    return availableLots.findIndex(l => l.lot_id === selectedLot.lot_id);
-  }, [selectedLot, availableLots]);
+    return navigationLots.findIndex(l =>
+      selectedLotSource === 'self_sale'
+        ? l.selfSaleUnitId === selectedLot.selfSaleUnitId
+        : l.lot_id === selectedLot.lot_id
+    );
+  }, [selectedLot, selectedLotSource, navigationLots]);
 
   const navigateToLot = (direction: 'prev' | 'next') => {
     if (currentLotIndex === -1) return;
     const newIndex = direction === 'prev' ? currentLotIndex - 1 : currentLotIndex + 1;
-    if (newIndex < 0 || newIndex >= availableLots.length) return;
-    selectLot(availableLots[newIndex]);
+    if (newIndex < 0 || newIndex >= navigationLots.length) return;
+    selectLot(navigationLots[newIndex], selectedLotSource);
   };
 
   const canGoPrev = currentLotIndex > 0;
-  const canGoNext = currentLotIndex >= 0 && currentLotIndex < availableLots.length - 1;
+  const canGoNext = currentLotIndex >= 0 && currentLotIndex < navigationLots.length - 1;
 
   // Status counts for lot selector
   const statusCounts = useMemo(() => {
-    const counts = { available: 0, sold: 0, partial: 0, pending: 0 };
+    const counts = { available: 0, sold: 0, partial: 0, pending: 0, self_sale: 0 };
     availableLots.forEach(l => {
       const s = getLotStatus(l.lot_id, l.bag_count, l.status);
       counts[s]++;
     });
+    counts.self_sale = selfSaleLots.length;
     return counts;
-  }, [availableLots]);
+  }, [availableLots, selfSaleLots]);
 
   /** Seller final = base bid rate + signed preset margin (matches server AuctionService). */
   const calcSellerRate = useCallback((bidRate: number, presetVal: number) => {
@@ -760,36 +887,10 @@ const AuctionsPage = () => {
       allow_lot_increase: allow,
     };
     try {
-      const session = await auctionApi.addBid(selectedLot.lot_id, body);
-      setEntries(session.entries.map(sessionEntryToSaleEntry));
+      const session = await addBidForCurrentSelection(body);
+      applyAuctionSession(session);
       void loadTemporaryBuyerMarks();
       hapticNotification(NotificationType.Success);
-      // Align with client_origin: update selectedLot/availableLots from session.lot so remaining bags and progress bar stay correct (e.g. after quantity increase).
-      if (session.lot) {
-        const lotId = selectedLot.lot_id;
-        setSelectedLot(prev =>
-          prev && prev.lot_id === lotId
-            ? {
-                ...prev,
-                bag_count: session.lot!.bag_count ?? prev.bag_count,
-                original_bag_count: session.lot!.original_bag_count ?? prev.original_bag_count,
-                was_modified: session.lot!.was_modified ?? prev.was_modified,
-              }
-            : prev
-        );
-        setAvailableLots(prev =>
-          prev.map(l =>
-            l.lot_id === lotId && session.lot
-              ? {
-                  ...l,
-                  bag_count: session.lot!.bag_count ?? l.bag_count,
-                  original_bag_count: session.lot!.original_bag_count ?? l.original_bag_count,
-                  was_modified: session.lot!.was_modified ?? l.was_modified,
-                }
-              : l
-          )
-        );
-      }
       setRate('');
       setQty('');
       setSelectedBuyer(null);
@@ -805,7 +906,7 @@ const AuctionsPage = () => {
         toast.error(err instanceof Error ? err.message : 'Failed to add bid');
       }
     }
-  }, [selectedLot, addBidRetryAllowIncrease, loadTemporaryBuyerMarks]);
+  }, [selectedLot, addBidRetryAllowIncrease, loadTemporaryBuyerMarks, addBidForCurrentSelection, applyAuctionSession]);
 
   const confirmQtyIncrease = async () => {
     if (!qtyIncreaseDialog || !selectedLot) return;
@@ -820,9 +921,9 @@ const AuctionsPage = () => {
     const mergeEffectivePreset = showPresetMargin ? preset : 0;
     if (existingEntry.rate === newRate) {
       try {
-        await auctionApi.deleteBid(selectedLot.lot_id, Number(existingEntry.id));
+        await deleteBidForCurrentSelection(Number(existingEntry.id));
         const mergedQty = existingEntry.quantity + newQty;
-        const session = await auctionApi.addBid(selectedLot.lot_id, {
+        const session = await addBidForCurrentSelection({
           buyer_name: duplicateMarkDialog.buyerName,
           buyer_mark: duplicateMarkDialog.mark,
           buyer_id: duplicateMarkDialog.buyerContactId ? parseInt(duplicateMarkDialog.buyerContactId, 10) : undefined,
@@ -835,23 +936,8 @@ const AuctionsPage = () => {
           preset_type: presetType,
           token_advance: existingEntry.tokenAdvance ?? 0,
         });
-        setEntries(session.entries.map(sessionEntryToSaleEntry));
+        applyAuctionSession(session);
         void loadTemporaryBuyerMarks();
-        if (session.lot) {
-          const lotId = selectedLot.lot_id;
-          setSelectedLot(prev =>
-            prev && prev.lot_id === lotId
-              ? { ...prev, bag_count: session.lot!.bag_count ?? prev.bag_count, original_bag_count: session.lot!.original_bag_count ?? prev.original_bag_count, was_modified: session.lot!.was_modified ?? prev.was_modified }
-              : prev
-          );
-          setAvailableLots(prev =>
-            prev.map(l =>
-              l.lot_id === lotId && session.lot
-                ? { ...l, bag_count: session.lot!.bag_count ?? l.bag_count, original_bag_count: session.lot!.original_bag_count ?? l.original_bag_count, was_modified: session.lot!.was_modified ?? l.was_modified }
-                : l
-            )
-          );
-        }
         toast.success(`Merged ${newQty} bags into existing bid #${existingEntry.bidNumber}`);
         setRate('');
         setQty('');
@@ -1120,15 +1206,18 @@ const AuctionsPage = () => {
       return;
     }
     try {
-      const completed = await auctionApi.completeAuction(selectedLot.lot_id);
+      const completed = await completeAuctionForCurrentSelection();
       setCompletedAuction(completed);
       setShowPrint(true);
       clearDraft();
       setShowLotSelector(true);
       setSelectedLot(null);
+      setSelectedLotSource('regular');
+      setSelfSaleContext(null);
       setEntries([]);
       void loadTemporaryBuyerMarks();
       loadLots();
+      loadSelfSaleLots();
       toast.success(remaining > 0 ? 'Auction saved (partial). Navigate to Logistics or Weighing.' : 'Auction saved! Navigate to Logistics or Weighing.');
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Failed to complete auction');
@@ -1166,8 +1255,8 @@ const AuctionsPage = () => {
       return;
     }
     try {
-      const session = await auctionApi.deleteBid(selectedLot.lot_id, Number(id));
-      setEntries(session.entries.map(sessionEntryToSaleEntry));
+      const session = await deleteBidForCurrentSelection(Number(id));
+      applyAuctionSession(session);
       void loadTemporaryBuyerMarks();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Failed to remove bid');
@@ -1185,13 +1274,13 @@ const AuctionsPage = () => {
       return;
     }
     try {
-      const session = await auctionApi.updateBid(selectedLot.lot_id, Number(id), { token_advance: amount });
+      const session = await updateBidForCurrentSelection(Number(id), { token_advance: amount });
       applyAuctionSession(session);
       setShowTokenInput(null);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Failed to update token advance');
     }
-  }, [selectedLot, editingBidId, can, applyAuctionSession]);
+  }, [selectedLot, editingBidId, can, applyAuctionSession, updateBidForCurrentSelection]);
 
   const cancelEditBid = useCallback(() => {
     const snap = editBidFormSnapshotRef.current;
@@ -1326,7 +1415,7 @@ const AuctionsPage = () => {
       return;
     }
     try {
-      const session = await auctionApi.updateBid(selectedLot.lot_id, Number(entry.id), body);
+      const session = await updateBidForCurrentSelection(Number(entry.id), body);
       applyAuctionSession(session);
       // After successful update, clear entry inputs so next action starts fresh.
       setSelectedBuyer(null);
@@ -1372,7 +1461,7 @@ const AuctionsPage = () => {
     const { pendingBody, bidNumericId } = editBidQtyDialog;
     setEditBidQtyDialog(null);
     try {
-      const session = await auctionApi.updateBid(selectedLot.lot_id, bidNumericId, { ...pendingBody, allow_lot_increase: true });
+      const session = await updateBidForCurrentSelection(bidNumericId, { ...pendingBody, allow_lot_increase: true });
       applyAuctionSession(session);
       // Keep behavior same as normal update: clear entry inputs afterwards.
       setSelectedBuyer(null);
@@ -1441,8 +1530,10 @@ const AuctionsPage = () => {
     });
   }, [editingBidId, preset, rate]);
 
-  const selectLot = useCallback((lot: LotInfo) => {
+  const selectLot = useCallback((lot: LotInfo, source: LotSource = statusFilter === 'self_sale' ? 'self_sale' : 'regular') => {
+    setSelectedLotSource(source);
     setSelectedLot(lot);
+    setSelfSaleContext(null);
     setShowLotSelector(false);
     setShowLotList(false);
     setEntries([]);
@@ -1455,30 +1546,36 @@ const AuctionsPage = () => {
     setQty('');
     setLotNumberSearch('');
     setSessionLoading(true);
-    auctionApi
-      .getOrStartSession(lot.lot_id)
+    const loadSession = source === 'self_sale'
+      ? auctionApi.getOrStartSelfSaleSession(lot.selfSaleUnitId ?? lot.lot_id)
+      : auctionApi.getOrStartSession(lot.lot_id);
+    loadSession
       .then((session: AuctionSessionDTO) => {
         const info = lotSummaryToLotInfo(session.lot);
         // Keep seller/vehicle/commodity from list lot if session.lot has empty (backend may omit in some paths)
         setSelectedLot({
           ...info,
+          selfSaleUnitId: source === 'self_sale' ? lot.selfSaleUnitId ?? null : null,
+          status: source === 'self_sale' ? 'self_sale' : info.status,
           seller_name: info.seller_name || lot.seller_name || '',
           seller_mark: info.seller_mark || lot.seller_mark || '',
           vehicle_number: info.vehicle_number || lot.vehicle_number || '',
           commodity_name: info.commodity_name || lot.commodity_name || '',
         });
         setEntries(session.entries.map(sessionEntryToSaleEntry));
+        setSelfSaleContext(session.self_sale_context ?? null);
         void loadTemporaryBuyerMarks();
       })
       .catch(() => toast.error('Failed to load session'))
       .finally(() => setSessionLoading(false));
-  }, [loadTemporaryBuyerMarks]);
+  }, [loadTemporaryBuyerMarks, statusFilter]);
 
   const goBackToSelector = () => {
     // Don't clear entries — they're auto-saved
     setShowLotSelector(true);
     // Refetch lots so status (Available / Pending / Partial / Sold) is up to date
     loadLots();
+    loadSelfSaleLots();
   };
 
   // ═══ AUCTION PRINT PREVIEW ═══
@@ -1654,7 +1751,7 @@ const AuctionsPage = () => {
                 <h2 className="text-lg font-bold text-foreground flex items-center gap-2">
                   <Gavel className="w-5 h-5 text-blue-500" /> Sales Pad — Lot Selection
                 </h2>
-                <p className="text-sm text-muted-foreground">{availableLots.length} lots available · Select a lot to begin auction</p>
+                <p className="text-sm text-muted-foreground">{selectorLots.length} lots available · Select a lot to begin auction</p>
               </div>
               <div className="flex gap-3">
                 <div className="relative w-56">
@@ -1680,19 +1777,19 @@ const AuctionsPage = () => {
             <div className="grid grid-cols-4 gap-4">
               <div className="glass-card rounded-2xl p-4 border-l-4 border-l-blue-500">
                 <p className="text-[10px] text-muted-foreground uppercase font-semibold">Total Lots</p>
-                <p className="text-2xl font-black text-foreground">{availableLots.length}</p>
+                <p className="text-2xl font-black text-foreground">{selectorLots.length}</p>
               </div>
               <div className="glass-card rounded-2xl p-4 border-l-4 border-l-emerald-500">
                 <p className="text-[10px] text-muted-foreground uppercase font-semibold">Total Bags</p>
-                <p className="text-2xl font-black text-foreground">{availableLots.reduce((s, l) => s + l.bag_count, 0)}</p>
+                <p className="text-2xl font-black text-foreground">{selectorLots.reduce((s, l) => s + l.bag_count, 0)}</p>
               </div>
               <div className="glass-card rounded-2xl p-4 border-l-4 border-l-violet-500">
                 <p className="text-[10px] text-muted-foreground uppercase font-semibold">Vehicles</p>
-                <p className="text-2xl font-black text-foreground">{new Set(availableLots.map(l => l.vehicle_number)).size}</p>
+                <p className="text-2xl font-black text-foreground">{new Set(selectorLots.map(l => l.vehicle_number)).size}</p>
               </div>
               <div className="glass-card rounded-2xl p-4 border-l-4 border-l-amber-500">
                 <p className="text-[10px] text-muted-foreground uppercase font-semibold">Sellers</p>
-                <p className="text-2xl font-black text-foreground">{new Set(availableLots.map(l => l.seller_name)).size}</p>
+                <p className="text-2xl font-black text-foreground">{new Set(selectorLots.map(l => l.seller_name)).size}</p>
               </div>
             </div>
           </div>
@@ -1748,14 +1845,16 @@ const AuctionsPage = () => {
             <div className="glass-card rounded-2xl p-8 text-center">
               <p className="text-sm text-muted-foreground font-medium">Loading lots…</p>
             </div>
-          ) : availableLots.length === 0 ? (
+          ) : selectorLots.length === 0 ? (
             <div className="glass-card rounded-2xl p-8 text-center">
               <Gavel className="w-10 h-10 text-muted-foreground/30 mx-auto mb-3" />
-              <p className="text-sm text-muted-foreground font-medium">No lots available</p>
-              <p className="text-xs text-muted-foreground/70 mt-1">Register arrivals first to create lots</p>
-              <Button onClick={() => navigate('/arrivals')} className="mt-4 bg-gradient-to-r from-blue-500 to-violet-500 text-white rounded-xl">
-                Go to Arrivals
-              </Button>
+              <p className="text-sm text-muted-foreground font-medium">{statusFilter === 'self_sale' ? 'No self-sale lots found' : 'No lots available'}</p>
+              <p className="text-xs text-muted-foreground/70 mt-1">{statusFilter === 'self_sale' ? 'Self-sale lots will appear here after they are closed to the trader account.' : 'Register arrivals first to create lots'}</p>
+              {statusFilter !== 'self_sale' && (
+                <Button onClick={() => navigate('/arrivals')} className="mt-4 bg-gradient-to-r from-blue-500 to-violet-500 text-white rounded-xl">
+                  Go to Arrivals
+                </Button>
+              )}
             </div>
           ) : filteredLots.length === 0 ? (
             <div className="glass-card rounded-2xl p-8 text-center">
@@ -1778,7 +1877,7 @@ const AuctionsPage = () => {
                 </div>
                 <div className="divide-y divide-border/20">
                   {lots.map(lot => (
-                    <LotRow key={lot.lot_id} lot={lot} onSelect={selectLot} />
+                    <LotRow key={getLotRenderKey(lot)} lot={lot} onSelect={selectLot} statusFilter={statusFilter} />
                   ))}
                 </div>
               </div>
@@ -1806,7 +1905,7 @@ const AuctionsPage = () => {
                   </div>
                   <div className="divide-y divide-border/20">
                     {lots.map(lot => (
-                      <LotRow key={lot.lot_id} lot={lot} onSelect={selectLot} />
+                      <LotRow key={getLotRenderKey(lot)} lot={lot} onSelect={selectLot} statusFilter={statusFilter} />
                     ))}
                   </div>
                 </div>
@@ -1814,7 +1913,7 @@ const AuctionsPage = () => {
             })()
           ) : (
             filteredLots.map(lot => (
-              <LotRow key={lot.lot_id} lot={lot} onSelect={selectLot} />
+              <LotRow key={getLotRenderKey(lot)} lot={lot} onSelect={selectLot} statusFilter={statusFilter} />
             ))
           )}
         </div>
@@ -1877,12 +1976,21 @@ const AuctionsPage = () => {
           {/* Lot Info Strip */}
           {selectedLot && (
             <div className="grid grid-cols-4 gap-2">
-              {[
-                { icon: User, label: 'Seller', value: selectedLot.seller_name },
-                { icon: Truck, label: 'Vehicle', value: selectedLot.vehicle_number },
-                { icon: Package, label: 'Lot', value: formatLotDisplayName(selectedLot) },
-                { icon: ShoppingCart, label: 'Bags', value: `${remaining}/${selectedLot.bag_count}${selectedLot.was_modified ? '*' : ''}` },
-              ].map((item) => (
+              {(
+                isSelfSaleReauction
+                  ? [
+                      { icon: User, label: 'Trader', value: trader?.business_name || 'Trader' },
+                      { icon: Package, label: 'Lot', value: formatLotDisplayName(selectedLot) },
+                      { icon: ShoppingCart, label: 'Remaining', value: `${remaining}/${selectedLot.bag_count}${selectedLot.was_modified ? '*' : ''}` },
+                      { icon: Gavel, label: 'Prev Bids', value: String(previousSelfSaleEntries.length) },
+                    ]
+                  : [
+                      { icon: User, label: 'Seller', value: selectedLot.seller_name },
+                      { icon: Truck, label: 'Vehicle', value: selectedLot.vehicle_number },
+                      { icon: Package, label: 'Lot', value: formatLotDisplayName(selectedLot) },
+                      { icon: ShoppingCart, label: 'Bags', value: `${remaining}/${selectedLot.bag_count}${selectedLot.was_modified ? '*' : ''}` },
+                    ]
+              ).map((item) => (
                 <div key={item.label} className="bg-white/15 backdrop-blur-md rounded-xl p-2 text-center">
                   <item.icon className="w-3.5 h-3.5 text-white/70 mx-auto mb-0.5" />
                   <p className="text-[9px] text-white/60 uppercase">{item.label}</p>
@@ -1895,7 +2003,7 @@ const AuctionsPage = () => {
           {/* Lot position indicator */}
           {selectedLot && (
             <div className="mt-2 flex items-center justify-center gap-2">
-              <span className="text-[10px] text-white/60">Lot {currentLotIndex + 1} of {availableLots.length}</span>
+              <span className="text-[10px] text-white/60">Lot {currentLotIndex + 1} of {navigationLots.length}</span>
             </div>
           )}
         </div>
@@ -1912,7 +2020,7 @@ const AuctionsPage = () => {
               </h2>
               <p className="text-sm text-muted-foreground">
                 {selectedLot ? formatLotDisplayName(selectedLot) : 'No lot selected'}
-                {selectedLot && <span className="ml-2 text-primary font-medium">({currentLotIndex + 1}/{availableLots.length})</span>}
+                {selectedLot && <span className="ml-2 text-primary font-medium">({currentLotIndex + 1}/{navigationLots.length})</span>}
               </p>
             </div>
             <div className="flex items-center gap-2">
@@ -1937,27 +2045,66 @@ const AuctionsPage = () => {
           {selectedLot && (
             <div className="grid grid-cols-5 gap-4">
               <div className="glass-card rounded-2xl p-4 border-l-4 border-l-blue-500">
-                <p className="text-[10px] text-muted-foreground uppercase font-semibold">Seller</p>
-                <p className="text-sm font-bold text-foreground truncate">{selectedLot.seller_name}</p>
+                <p className="text-[10px] text-muted-foreground uppercase font-semibold">{isSelfSaleReauction ? 'Trader' : 'Seller'}</p>
+                <p className="text-sm font-bold text-foreground truncate">{isSelfSaleReauction ? (trader?.business_name || 'Trader') : selectedLot.seller_name}</p>
               </div>
               <div className="glass-card rounded-2xl p-4 border-l-4 border-l-violet-500">
-                <p className="text-[10px] text-muted-foreground uppercase font-semibold">Vehicle</p>
-                <p className="text-sm font-bold text-foreground">{selectedLot.vehicle_number}</p>
+                <p className="text-[10px] text-muted-foreground uppercase font-semibold">{isSelfSaleReauction ? 'Prev Bids' : 'Vehicle'}</p>
+                <p className="text-sm font-bold text-foreground">{isSelfSaleReauction ? previousSelfSaleEntries.length : selectedLot.vehicle_number}</p>
               </div>
               <div className="glass-card rounded-2xl p-4 border-l-4 border-l-emerald-500">
                 <p className="text-[10px] text-muted-foreground uppercase font-semibold">Remaining</p>
                 <p className="text-2xl font-black text-emerald-600 dark:text-emerald-400">{remaining}<span className="text-xs font-normal ml-1">bags</span></p>
               </div>
               <div className="glass-card rounded-2xl p-4 border-l-4 border-l-amber-500">
-                <p className="text-[10px] text-muted-foreground uppercase font-semibold">Highest Bid</p>
-                <p className="text-2xl font-black text-amber-600 dark:text-amber-400">₹{highestBid}</p>
+                <p className="text-[10px] text-muted-foreground uppercase font-semibold">{isSelfSaleReauction ? 'Self-Sale Rate' : 'Highest Bid'}</p>
+                <p className="text-2xl font-black text-amber-600 dark:text-amber-400">₹{isSelfSaleReauction ? Number(selfSaleContext?.rate ?? 0) : highestBid}</p>
               </div>
               <div className="glass-card rounded-2xl p-4 border-l-4 border-l-rose-500">
-                <p className="text-[10px] text-muted-foreground uppercase font-semibold">Entries</p>
-                <p className="text-2xl font-black text-foreground">{entries.length}</p>
+                <p className="text-[10px] text-muted-foreground uppercase font-semibold">{isSelfSaleReauction ? 'Self-Sale Qty' : 'Entries'}</p>
+                <p className="text-2xl font-black text-foreground">{isSelfSaleReauction ? (selfSaleContext?.quantity ?? 0) : entries.length}</p>
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {selectedLot && isSelfSaleReauction && selfSaleContext && (
+        <div className={cn(isDesktop ? "px-8 pb-2" : "px-4 mt-3")}>
+          <div className="glass-card rounded-2xl p-4 border border-fuchsia-500/20 bg-fuchsia-500/5">
+            <div className="flex items-center justify-between gap-3 flex-wrap mb-3">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wider text-fuchsia-700 dark:text-fuchsia-300">Self-Sale History</p>
+                <p className="text-sm text-muted-foreground">
+                  Closed at ₹{Number(selfSaleContext.rate ?? 0).toLocaleString()} for {selfSaleContext.quantity ?? 0} bags
+                  {selfSaleContext.created_at ? ` · ${new Date(selfSaleContext.created_at).toLocaleString()}` : ''}
+                </p>
+              </div>
+              <div className="text-xs font-medium text-muted-foreground">
+                Remaining: <span className="text-foreground">{selfSaleContext.remaining_qty ?? 0}</span>
+              </div>
+            </div>
+            <div className="rounded-xl border border-border/40 overflow-hidden">
+              <div className="grid grid-cols-[1.2fr_1fr_0.8fr_0.8fr] gap-2 px-3 py-2 bg-muted/40 text-[10px] uppercase font-semibold text-muted-foreground">
+                <span>Buyer</span>
+                <span>Mark</span>
+                <span>Rate</span>
+                <span>Qty</span>
+              </div>
+              {previousSelfSaleEntries.length === 0 ? (
+                <div className="px-3 py-3 text-xs text-muted-foreground">No previous auction entries were found for this self-sale lot.</div>
+              ) : (
+                previousSelfSaleEntries.map((entry) => (
+                  <div key={`${entry.bidNumber}-${entry.buyerMark}`} className="grid grid-cols-[1.2fr_1fr_0.8fr_0.8fr] gap-2 px-3 py-2 border-t border-border/30 text-sm">
+                    <span className="truncate text-foreground">{entry.buyerName || 'Buyer'}</span>
+                    <span className="truncate text-muted-foreground">{entry.buyerMark}</span>
+                    <span className="font-medium text-foreground">₹{entry.rate}</span>
+                    <span className="font-medium text-foreground">{entry.quantity}</span>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
         </div>
       )}
 
@@ -1977,18 +2124,20 @@ const AuctionsPage = () => {
               </div>
               <div className="space-y-1">
                 {(lotNumberSearch
-                  ? availableLots.filter(l =>
+                  ? navigationLots.filter(l =>
                       l.lot_name.toLowerCase().includes(lotNumberSearch.toLowerCase()) ||
                       l.lot_id.toLowerCase().includes(lotNumberSearch.toLowerCase()) ||
                       formatLotDisplayName(l).toLowerCase().includes(lotNumberSearch.toLowerCase())
                     )
-                  : availableLots
+                  : navigationLots
                 ).map(lot => {
-                  const status = getLotStatus(lot.lot_id, lot.bag_count, lot.status);
+                  const status = getRowLotStatus(lot, statusFilter);
                   const cfg = STATUS_CONFIG[status];
-                  const isActive = selectedLot?.lot_id === lot.lot_id;
+                  const isActive = selectedLotSource === 'self_sale'
+                    ? selectedLot?.selfSaleUnitId === lot.selfSaleUnitId
+                    : selectedLot?.lot_id === lot.lot_id;
                   return (
-                    <button key={lot.lot_id} onClick={() => selectLot(lot)}
+                    <button key={getLotRenderKey(lot)} onClick={() => selectLot(lot)}
                       className={cn("w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-left text-xs transition-all",
                         isActive ? 'bg-primary/15 ring-1 ring-primary/30' : 'hover:bg-muted/50')}>
                       <span className={cn("w-2 h-2 rounded-full flex-shrink-0", cfg.dot)} />
@@ -2362,10 +2511,12 @@ const AuctionsPage = () => {
                       >
                         <Plus className="w-4 h-4 mr-1" /> Add Bid
                       </Button>
+                      {!isSelfSaleReauction && (
                       <Button onClick={handleSelfSale} disabled={remaining <= 0}
                         variant="outline" className="h-11 rounded-xl px-4 border-amber-400/50 text-amber-600 dark:text-amber-400 hover:bg-amber-500/10">
                         Self Sale
                       </Button>
+                      )}
                     </>
                   )}
                 </div>
@@ -2970,6 +3121,7 @@ const AuctionsPage = () => {
                   </>
                 ) : (
                   <>
+                    {!isSelfSaleReauction && (
                     <button
                       type="button"
                       onClick={handleSelfSale}
@@ -2978,6 +3130,7 @@ const AuctionsPage = () => {
                     >
                       Self Sale
                     </button>
+                    )}
                     <button
                       type="button"
                       onClick={handleUnifiedAdd}
@@ -3101,8 +3254,8 @@ const AuctionsPage = () => {
 };
 
 // ── Lot Row Component with Status Badge ──────────────────
-const LotRow = ({ lot, onSelect }: { lot: LotInfo; onSelect: (lot: LotInfo) => void }) => {
-  const status = getLotStatus(lot.lot_id, lot.bag_count, lot.status);
+const LotRow = ({ lot, onSelect, statusFilter }: { lot: LotInfo; onSelect: (lot: LotInfo) => void; statusFilter: LotStatus | 'all' }) => {
+  const status = getRowLotStatus(lot, statusFilter);
   const cfg = STATUS_CONFIG[status];
 
   return (

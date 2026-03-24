@@ -7,6 +7,7 @@ import com.mercotrace.service.AuctionService.StaleBidEditException;
 import com.mercotrace.service.dto.AuctionBidCreateRequest;
 import com.mercotrace.service.dto.AuctionBidUpdateRequest;
 import com.mercotrace.service.dto.AuctionResultDTO;
+import com.mercotrace.service.dto.AuctionSelfSaleUnitDTO;
 import com.mercotrace.service.dto.AuctionSessionDTO;
 import com.mercotrace.service.dto.LotSummaryDTO;
 import com.mercotrace.web.rest.errors.BadRequestAlertException;
@@ -60,7 +61,7 @@ public class ModuleAuctionResource {
     /**
      * {@code GET  /module-auctions/lots} : list lots with auction-aware status.
      *
-     * Query params: page (0-based), size (default 10), sort, status (optional), q (optional search on lot name).
+     * Query params: page (0-based), size (default 10), sort, status (optional: AVAILABLE, SOLD, PARTIAL, PENDING), q (optional search on lot name).
      */
     @Operation(summary = "List lots with auction status", description = "Paginated list; supports sort, status filter, and search (q)")
     @ApiResponses({ @ApiResponse(responseCode = "200", description = "OK") })
@@ -73,6 +74,23 @@ public class ModuleAuctionResource {
     ) {
         LOG.debug("REST request to get Auction lots page: {} status={} q={}", pageable, status, q);
         Page<LotSummaryDTO> page = auctionService.listLotsWithStatus(pageable, status, q);
+        HttpHeaders headers = PaginationUtil.generatePaginationHttpHeaders(ServletUriComponentsBuilder.fromCurrentRequest(), page);
+        return ResponseEntity.ok().headers(headers).body(page.getContent());
+    }
+
+    /**
+     * {@code GET /module-auctions/self-sale-units} : list open/partial self-sale units for re-auction.
+     */
+    @Operation(summary = "List self-sale units", description = "Paginated list of quantity-based self-sale units for Sales Pad re-auction")
+    @ApiResponses({ @ApiResponse(responseCode = "200", description = "OK") })
+    @GetMapping("/self-sale-units")
+    @PreAuthorize("hasAuthority(\"" + AuthoritiesConstants.AUCTIONS_VIEW + "\")")
+    public ResponseEntity<List<AuctionSelfSaleUnitDTO>> listSelfSaleUnits(
+        @org.springdoc.core.annotations.ParameterObject Pageable pageable,
+        @RequestParam(required = false) String q
+    ) {
+        LOG.debug("REST request to get self-sale units page: {} q={}", pageable, q);
+        Page<AuctionSelfSaleUnitDTO> page = auctionService.listSelfSaleUnits(pageable, q);
         HttpHeaders headers = PaginationUtil.generatePaginationHttpHeaders(ServletUriComponentsBuilder.fromCurrentRequest(), page);
         return ResponseEntity.ok().headers(headers).body(page.getContent());
     }
@@ -107,6 +125,139 @@ public class ModuleAuctionResource {
             return ResponseEntity.ok(session);
         } catch (EntityNotFoundException ex) {
             return buildErrorResponse(HttpStatus.NOT_FOUND, ex.getMessage(), "lotId");
+        }
+    }
+
+    /**
+     * {@code GET  /module-auctions/self-sale-units/:id/session} : get or start a re-auction session for a self-sale unit.
+     */
+    @Operation(summary = "Get or start self-sale re-auction session", description = "Returns active session for the self-sale unit or creates a fresh re-auction session while preserving history")
+    @ApiResponses({
+        @ApiResponse(responseCode = "200", description = "OK"),
+        @ApiResponse(responseCode = "404", description = "Self-sale unit not found")
+    })
+    @GetMapping("/self-sale-units/{id}/session")
+    @PreAuthorize("hasAuthority(\"" + AuthoritiesConstants.AUCTIONS_VIEW + "\")")
+    public ResponseEntity<?> getSelfSaleSession(@PathVariable("id") Long selfSaleUnitId) {
+        LOG.debug("REST request to get Self-Sale Auction session for unit {}", selfSaleUnitId);
+        try {
+            AuctionSessionDTO session = auctionService.getOrStartSelfSaleSession(selfSaleUnitId);
+            return ResponseEntity.ok(session);
+        } catch (EntityNotFoundException ex) {
+            return buildErrorResponse(HttpStatus.NOT_FOUND, ex.getMessage(), "selfSaleUnitId");
+        }
+    }
+
+    /**
+     * {@code POST /module-auctions/self-sale-units/:id/session/bids} : add a bid to a self-sale re-auction session.
+     */
+    @Operation(summary = "Add self-sale re-auction bid", description = "Add a bid to the current self-sale unit session; 409 if quantity exceeds remaining self-sale quantity")
+    @ApiResponses({
+        @ApiResponse(responseCode = "200", description = "OK"),
+        @ApiResponse(responseCode = "400", description = "Validation error"),
+        @ApiResponse(responseCode = "404", description = "Self-sale unit not found"),
+        @ApiResponse(responseCode = "409", description = "Quantity conflict")
+    })
+    @PostMapping("/self-sale-units/{id}/session/bids")
+    @PreAuthorize("hasAuthority(\"" + AuthoritiesConstants.AUCTIONS_CREATE + "\")")
+    public ResponseEntity<?> addSelfSaleBid(
+        @PathVariable("id") Long selfSaleUnitId,
+        @Valid @RequestBody AuctionBidCreateRequest request
+    ) {
+        LOG.debug("REST request to add self-sale bid for unit {}: {}", selfSaleUnitId, request);
+        try {
+            AuctionSessionDTO session = auctionService.addBidToSelfSaleUnit(selfSaleUnitId, request);
+            return ResponseEntity.ok(session);
+        } catch (AuctionConflictException conflict) {
+            return buildQuantityConflictResponse(conflict);
+        } catch (IllegalArgumentException ex) {
+            throw new BadRequestAlertException(ex.getMessage(), ENTITY_NAME, "validation");
+        } catch (EntityNotFoundException ex) {
+            return buildErrorResponse(HttpStatus.NOT_FOUND, ex.getMessage(), "selfSaleUnitId");
+        }
+    }
+
+    /**
+     * {@code PATCH /module-auctions/self-sale-units/:id/session/bids/:bidId} : update a bid in self-sale re-auction session.
+     */
+    @Operation(summary = "Update self-sale re-auction bid", description = "Update rate, quantity, token advance, extra rate, preset on a self-sale re-auction bid")
+    @ApiResponses({
+        @ApiResponse(responseCode = "200", description = "OK"),
+        @ApiResponse(responseCode = "400", description = "Validation error"),
+        @ApiResponse(responseCode = "404", description = "Self-sale unit or bid not found"),
+        @ApiResponse(responseCode = "409", description = "Stale bid or quantity conflict")
+    })
+    @PatchMapping("/self-sale-units/{id}/session/bids/{bidId}")
+    @PreAuthorize("hasAuthority(\"" + AuthoritiesConstants.AUCTIONS_EDIT + "\")")
+    public ResponseEntity<?> updateSelfSaleBid(
+        @PathVariable("id") Long selfSaleUnitId,
+        @PathVariable("bidId") Long bidId,
+        @RequestBody AuctionBidUpdateRequest request
+    ) {
+        LOG.debug("REST request to update self-sale bid {} for unit {}: {}", bidId, selfSaleUnitId, request);
+        try {
+            AuctionSessionDTO session = auctionService.updateBidInSelfSaleUnit(selfSaleUnitId, bidId, request);
+            return ResponseEntity.ok(session);
+        } catch (StaleBidEditException ex) {
+            return buildErrorResponse(HttpStatus.CONFLICT, ex.getMessage(), "stale_bid");
+        } catch (AuctionConflictException conflict) {
+            return buildQuantityConflictResponse(conflict);
+        } catch (IllegalArgumentException ex) {
+            throw new BadRequestAlertException(ex.getMessage(), ENTITY_NAME, "validation");
+        } catch (EntityNotFoundException ex) {
+            return buildErrorResponse(HttpStatus.NOT_FOUND, ex.getMessage(), "bidId");
+        }
+    }
+
+    /**
+     * {@code DELETE /module-auctions/self-sale-units/:id/session/bids/:bidId} : delete a bid from self-sale re-auction session.
+     */
+    @Operation(summary = "Delete self-sale re-auction bid", description = "Remove a bid from the self-sale unit session")
+    @ApiResponses({
+        @ApiResponse(responseCode = "200", description = "OK"),
+        @ApiResponse(responseCode = "404", description = "Self-sale unit or bid not found")
+    })
+    @DeleteMapping("/self-sale-units/{id}/session/bids/{bidId}")
+    @PreAuthorize("hasAuthority(\"" + AuthoritiesConstants.AUCTIONS_DELETE + "\")")
+    public ResponseEntity<?> deleteSelfSaleBid(
+        @PathVariable("id") Long selfSaleUnitId,
+        @PathVariable("bidId") Long bidId
+    ) {
+        LOG.debug("REST request to delete self-sale bid {} for unit {}", bidId, selfSaleUnitId);
+        try {
+            AuctionSessionDTO session = auctionService.deleteBidFromSelfSaleUnit(selfSaleUnitId, bidId);
+            return ResponseEntity.ok(session);
+        } catch (EntityNotFoundException ex) {
+            return buildErrorResponse(HttpStatus.NOT_FOUND, ex.getMessage(), "bidId");
+        }
+    }
+
+    /**
+     * {@code POST /module-auctions/self-sale-units/:id/complete} : complete the re-auction for a self-sale unit.
+     */
+    @Operation(summary = "Complete self-sale re-auction", description = "Marks self-sale re-auction completed and decrements remaining self-sale quantity")
+    @ApiResponses({
+        @ApiResponse(responseCode = "200", description = "OK"),
+        @ApiResponse(responseCode = "404", description = "Self-sale unit or auction not found"),
+        @ApiResponse(responseCode = "409", description = "Conflict (e.g. no bids or quantity overflow)")
+    })
+    @PostMapping("/self-sale-units/{id}/complete")
+    @PreAuthorize("hasAuthority(\"" + AuthoritiesConstants.AUCTIONS_APPROVE + "\")")
+    public ResponseEntity<?> completeSelfSaleAuction(@PathVariable("id") Long selfSaleUnitId) {
+        LOG.debug("REST request to complete self-sale Auction for unit {}", selfSaleUnitId);
+        try {
+            AuctionResultDTO result = auctionService.completeSelfSaleAuction(selfSaleUnitId);
+            return ResponseEntity.ok(result);
+        } catch (AuctionConflictException conflict) {
+            Map<String, Object> body = standardErrorBody(
+                HttpStatus.CONFLICT,
+                conflict.getMessage(),
+                conflict.getField(),
+                conflict.getMessage()
+            );
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(body);
+        } catch (EntityNotFoundException ex) {
+            return buildErrorResponse(HttpStatus.NOT_FOUND, ex.getMessage(), "selfSaleUnitId");
         }
     }
 

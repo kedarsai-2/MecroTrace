@@ -42,6 +42,9 @@ public class AuctionResultDTO implements Serializable {
     @JsonProperty("completedAt")
     private Instant completedAt;
 
+    @JsonProperty("selfSaleUnitId")
+    private Long selfSaleUnitId;
+
     @JsonProperty("entries")
     private List<AuctionResultEntryDTO> entries = new ArrayList<>();
 
@@ -123,6 +126,14 @@ public class AuctionResultDTO implements Serializable {
 
     public void setCompletedAt(Instant completedAt) {
         this.completedAt = completedAt;
+    }
+
+    public Long getSelfSaleUnitId() {
+        return selfSaleUnitId;
+    }
+
+    public void setSelfSaleUnitId(Long selfSaleUnitId) {
+        this.selfSaleUnitId = selfSaleUnitId;
     }
 
     public List<AuctionResultEntryDTO> getEntries() {

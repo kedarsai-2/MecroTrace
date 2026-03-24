@@ -2,14 +2,17 @@ package com.mercotrace.service;
 
 import com.mercotrace.domain.Auction;
 import com.mercotrace.domain.AuctionEntry;
+import com.mercotrace.domain.AuctionSelfSaleUnit;
 import com.mercotrace.domain.Commodity;
 import com.mercotrace.domain.Contact;
 import com.mercotrace.domain.Lot;
 import com.mercotrace.domain.SellerInVehicle;
 import com.mercotrace.domain.Vehicle;
 import com.mercotrace.domain.enumeration.AuctionPresetType;
+import com.mercotrace.domain.enumeration.AuctionSelfSaleUnitStatus;
 import com.mercotrace.repository.AuctionEntryRepository;
 import com.mercotrace.repository.AuctionRepository;
+import com.mercotrace.repository.AuctionSelfSaleUnitRepository;
 import com.mercotrace.repository.CommodityRepository;
 import com.mercotrace.repository.ContactRepository;
 import com.mercotrace.repository.LotRepository;
@@ -56,6 +59,7 @@ public class AuctionService {
     private final ContactService contactService;
     private final CommodityRepository commodityRepository;
     private final TraderContextService traderContextService;
+    private final AuctionSelfSaleUnitRepository auctionSelfSaleUnitRepository;
 
     public AuctionService(
         AuctionRepository auctionRepository,
@@ -67,7 +71,8 @@ public class AuctionService {
         ContactRepository contactRepository,
         ContactService contactService,
         CommodityRepository commodityRepository,
-        TraderContextService traderContextService
+        TraderContextService traderContextService,
+        AuctionSelfSaleUnitRepository auctionSelfSaleUnitRepository
     ) {
         this.auctionRepository = auctionRepository;
         this.auctionEntryRepository = auctionEntryRepository;
@@ -79,6 +84,7 @@ public class AuctionService {
         this.contactService = contactService;
         this.commodityRepository = commodityRepository;
         this.traderContextService = traderContextService;
+        this.auctionSelfSaleUnitRepository = auctionSelfSaleUnitRepository;
     }
 
     /** Contact-linked sellers: use contact name/mark. Free-text sellers (no contact): use SellerInVehicle fields. */
@@ -126,7 +132,7 @@ public class AuctionService {
         Map<Long, Commodity> commodityMap = commodityRepository.findAllById(commodityIds).stream()
             .collect(Collectors.toMap(Commodity::getId, c -> c));
 
-        List<Auction> auctions = auctionRepository.findAllByLotIdIn(lotIds);
+        List<Auction> auctions = auctionRepository.findAllByLotIdInAndSelfSaleUnitIdIsNull(lotIds);
         Set<Long> auctionIds = auctions.stream().map(Auction::getId).collect(Collectors.toSet());
         List<AuctionEntry> entries = auctionIds.isEmpty() ? List.of() : auctionEntryRepository.findAllByAuctionIdIn(auctionIds);
 
@@ -169,7 +175,9 @@ public class AuctionService {
                 vehicleIdToTotal,
                 sellerVehicleIdToTotal
             );
-            if (statusFilter == null || statusFilter.isBlank() || statusFilter.equalsIgnoreCase(dto.getStatus())) {
+            if (statusFilter == null || statusFilter.isBlank()) {
+                content.add(dto);
+            } else if (statusFilter.equalsIgnoreCase(dto.getStatus())) {
                 content.add(dto);
             }
         }
@@ -212,17 +220,18 @@ public class AuctionService {
 
         Optional<Auction> latestAuction = lotAuctions.stream()
             .max(Comparator.comparing(Auction::getAuctionDatetime, Comparator.nullsLast(Comparator.naturalOrder())));
-        int soldBags = 0;
-        if (latestAuction.isPresent()) {
-            List<AuctionEntry> ent = auctionToEntries.getOrDefault(latestAuction.get().getId(), List.of());
-            soldBags = ent.stream().mapToInt(e -> e.getQuantity() != null ? e.getQuantity() : 0).sum();
-        }
+        List<AuctionEntry> latestAuctionEntries = latestAuction
+            .map(a -> auctionToEntries.getOrDefault(a.getId(), List.of()))
+            .orElse(List.of());
+
+        int soldBags = latestAuctionEntries.stream().mapToInt(e -> e.getQuantity() != null ? e.getQuantity() : 0).sum();
         dto.setSoldBags(soldBags);
 
         int bagCount = lot.getBagCount() != null ? lot.getBagCount() : 0;
         int remaining = Math.max(0, bagCount - soldBags);
+
         String status;
-        if (latestAuction.isEmpty() || auctionToEntries.getOrDefault(latestAuction.get().getId(), List.of()).isEmpty()) {
+        if (latestAuction.isEmpty() || latestAuctionEntries.isEmpty()) {
             status = "AVAILABLE";
         } else if (latestAuction.get().getCompletedAt() != null) {
             status = remaining == 0 ? "SOLD" : "PARTIAL";
@@ -275,20 +284,230 @@ public class AuctionService {
             throw new EntityNotFoundException("Lot not found: " + lotId);
         }
 
-        Auction auction = auctionRepository
-            .findFirstByLotIdOrderByAuctionDatetimeDesc(lotId)
-            .orElseGet(() -> {
-                Auction a = new Auction();
-                a.setLotId(lotId);
-                a.setTraderId(traderId);
-                a.setAuctionDatetime(Instant.now());
-                a.setCreatedAt(Instant.now());
-                return auctionRepository.save(a);
-            });
+        Auction auction = findLatestNormalAuctionForLot(lotId).orElseGet(() -> createAuctionSession(lotId, traderId));
 
         List<AuctionEntry> entries = auctionEntryRepository.findAllByAuctionId(auction.getId());
 
+        if (auction.getCompletedAt() != null && !auctionSelfSaleUnitRepository.findBySourceAuctionId(auction.getId()).isEmpty()) {
+            return buildEffectiveLotSessionDTO(auction, lot, entries);
+        }
+
         return buildSessionDTO(auction, lot, entries);
+    }
+
+    @Transactional(readOnly = true)
+    public Page<AuctionSelfSaleUnitDTO> listSelfSaleUnits(Pageable pageable, String q) {
+        Long traderId = resolveTraderId();
+        Page<AuctionSelfSaleUnit> page = auctionSelfSaleUnitRepository.findByTraderIdAndStatusIn(
+            traderId,
+            List.of(AuctionSelfSaleUnitStatus.OPEN, AuctionSelfSaleUnitStatus.PARTIAL),
+            pageable
+        );
+        List<AuctionSelfSaleUnit> units = page.getContent();
+        if (units.isEmpty()) {
+            return Page.empty(pageable);
+        }
+
+        List<Long> lotIds = units.stream().map(AuctionSelfSaleUnit::getLotId).distinct().toList();
+        Map<Long, Lot> lotById = lotRepository.findAllById(lotIds).stream().collect(Collectors.toMap(Lot::getId, l -> l));
+
+        Set<Long> sellerVehicleIds = lotById.values().stream().map(Lot::getSellerVehicleId).filter(Objects::nonNull).collect(Collectors.toSet());
+        Set<Long> commodityIds = lotById.values().stream().map(Lot::getCommodityId).filter(Objects::nonNull).collect(Collectors.toSet());
+        Map<Long, SellerInVehicle> sivById = sellerInVehicleRepository.findAllById(sellerVehicleIds)
+            .stream()
+            .collect(Collectors.toMap(SellerInVehicle::getId, s -> s));
+        Set<Long> vehicleIds = sivById.values().stream().map(SellerInVehicle::getVehicleId).filter(Objects::nonNull).collect(Collectors.toSet());
+        Set<Long> contactIds = sivById.values().stream().map(SellerInVehicle::getContactId).filter(Objects::nonNull).collect(Collectors.toSet());
+        Map<Long, Vehicle> vehicleById = vehicleRepository.findAllById(vehicleIds).stream().collect(Collectors.toMap(Vehicle::getId, v -> v));
+        Map<Long, Contact> contactById = contactRepository.findAllById(contactIds).stream().collect(Collectors.toMap(Contact::getId, c -> c));
+        Map<Long, Commodity> commodityById = commodityRepository.findAllById(commodityIds).stream().collect(Collectors.toMap(Commodity::getId, c -> c));
+
+        List<AuctionSelfSaleUnitDTO> content = units
+            .stream()
+            .map(unit -> toAuctionSelfSaleUnitDTO(unit, lotById.get(unit.getLotId()), sivById, vehicleById, contactById, commodityById))
+            .filter(Objects::nonNull)
+            .filter(dto -> {
+                if (q == null || q.isBlank()) {
+                    return true;
+                }
+                String needle = q.trim().toLowerCase(Locale.ROOT);
+                return (
+                    (dto.getLotName() != null && dto.getLotName().toLowerCase(Locale.ROOT).contains(needle)) ||
+                    (dto.getSellerName() != null && dto.getSellerName().toLowerCase(Locale.ROOT).contains(needle)) ||
+                    (dto.getSellerMark() != null && dto.getSellerMark().toLowerCase(Locale.ROOT).contains(needle)) ||
+                    (dto.getVehicleNumber() != null && dto.getVehicleNumber().toLowerCase(Locale.ROOT).contains(needle)) ||
+                    (dto.getCommodityName() != null && dto.getCommodityName().toLowerCase(Locale.ROOT).contains(needle))
+                );
+            })
+            .toList();
+
+        return new PageImpl<>(content, pageable, page.getTotalElements());
+    }
+
+    /**
+     * Get or start a Sales Pad session for a quantity-based self-sale unit.
+     */
+    public AuctionSessionDTO getOrStartSelfSaleSession(Long selfSaleUnitId) {
+        Long traderId = resolveTraderId();
+        AuctionSelfSaleUnit unit = getRequiredSelfSaleUnit(selfSaleUnitId, traderId);
+        Lot lot = lotRepository.findById(unit.getLotId()).orElseThrow(() -> new EntityNotFoundException("Lot not found: " + unit.getLotId()));
+        if (!isLotOwnedByTrader(lot, traderId)) {
+            throw new EntityNotFoundException("Lot not found: " + unit.getLotId());
+        }
+
+        Auction auction = getOrCreateSelfSaleAuction(unit, traderId);
+
+        List<AuctionEntry> entries = auctionEntryRepository.findAllByAuctionId(auction.getId());
+        AuctionSessionDTO dto = buildSessionDTO(auction, lot, entries, unit.getRemainingQty(), unit.getSelfSaleQty());
+        dto.setSelfSaleContext(buildSelfSaleContext(unit, lot));
+        return dto;
+    }
+
+    public AuctionSessionDTO addBidToSelfSaleUnit(Long selfSaleUnitId, @Valid AuctionBidCreateRequest request) {
+        Long traderId = resolveTraderId();
+        AuctionSelfSaleUnit unit = getRequiredSelfSaleUnit(selfSaleUnitId, traderId);
+        Lot lot = lotRepository.findById(unit.getLotId()).orElseThrow(() -> new EntityNotFoundException("Lot not found: " + unit.getLotId()));
+        if (!isLotOwnedByTrader(lot, traderId)) {
+            throw new EntityNotFoundException("Lot not found: " + unit.getLotId());
+        }
+
+        Auction auction = getOrCreateSelfSaleAuction(unit, traderId);
+        List<AuctionEntry> existingEntries = auctionEntryRepository.findAllByAuctionId(auction.getId());
+        int currentSold = existingEntries.stream().mapToInt(e -> e.getQuantity() != null ? e.getQuantity() : 0).sum();
+        int requestedQty = request.getQuantity();
+        int unitCap = unit.getRemainingQty() != null ? unit.getRemainingQty() : 0;
+        int newTotal = currentSold + requestedQty;
+
+        if (newTotal > unitCap) {
+            throw new AuctionConflictException("Adding this bid exceeds self-sale quantity", "quantity", currentSold, unitCap, requestedQty, newTotal);
+        }
+
+        createOrMergeAuctionEntry(auction, existingEntries, request, traderId);
+        List<AuctionEntry> refreshed = auctionEntryRepository.findAllByAuctionId(auction.getId());
+        AuctionSessionDTO dto = buildSessionDTO(auction, lot, refreshed, unit.getRemainingQty(), unit.getSelfSaleQty());
+        dto.setSelfSaleContext(buildSelfSaleContext(unit, lot));
+        return dto;
+    }
+
+    public AuctionSessionDTO updateBidInSelfSaleUnit(Long selfSaleUnitId, Long bidId, AuctionBidUpdateRequest request) {
+        Long traderId = resolveTraderId();
+        AuctionSelfSaleUnit unit = getRequiredSelfSaleUnit(selfSaleUnitId, traderId);
+        Lot lot = lotRepository.findById(unit.getLotId()).orElseThrow(() -> new EntityNotFoundException("Lot not found: " + unit.getLotId()));
+        if (!isLotOwnedByTrader(lot, traderId)) {
+            throw new EntityNotFoundException("Lot not found: " + unit.getLotId());
+        }
+
+        Auction auction = getRequiredActiveSelfSaleAuction(unit);
+        AuctionEntry entry = auctionEntryRepository.findById(bidId).orElseThrow(() -> new EntityNotFoundException("Bid not found: " + bidId));
+        if (!Objects.equals(entry.getAuctionId(), auction.getId())) {
+            throw new EntityNotFoundException("Bid not found: " + bidId);
+        }
+
+        if (request.getExpectedLastModifiedMs() != null && entry.getLastModifiedDate() != null) {
+            if (entry.getLastModifiedDate().toEpochMilli() != request.getExpectedLastModifiedMs()) {
+                throw new StaleBidEditException("This bid was changed elsewhere. Refresh and try again.");
+            }
+        }
+        if (request.getRate() != null && request.getRate().compareTo(BigDecimal.ONE) < 0) {
+            throw new IllegalArgumentException("Rate must be at least 1");
+        }
+        if (request.getQuantity() != null && request.getQuantity() < 1) {
+            throw new IllegalArgumentException("Quantity must be at least 1");
+        }
+
+        List<AuctionEntry> existingEntries = auctionEntryRepository.findAllByAuctionId(auction.getId());
+        int currentSold = existingEntries.stream().mapToInt(e -> e.getQuantity() != null ? e.getQuantity() : 0).sum();
+        int entryQty = entry.getQuantity() != null ? entry.getQuantity() : 0;
+        int newQty = request.getQuantity() != null ? request.getQuantity() : entryQty;
+        int otherSold = currentSold - entryQty;
+        int newTotal = otherSold + newQty;
+        int unitCap = unit.getRemainingQty() != null ? unit.getRemainingQty() : 0;
+        if (newTotal > unitCap) {
+            throw new AuctionConflictException("Updating this bid exceeds self-sale quantity", "quantity", otherSold, unitCap, newQty, newTotal);
+        }
+
+        if (request.getRate() != null) {
+            entry.setBidRate(request.getRate());
+        }
+        if (request.getQuantity() != null) {
+            entry.setQuantity(newQty);
+        }
+        if (request.getTokenAdvance() != null) {
+            entry.setTokenAdvance(request.getTokenAdvance());
+        }
+        if (request.getExtraRate() != null) {
+            entry.setExtraRate(request.getExtraRate());
+        }
+        if (request.getPresetApplied() != null) {
+            entry.setPresetMargin(request.getPresetApplied());
+        }
+        if (request.getPresetType() != null) {
+            entry.setPresetType(request.getPresetType());
+        }
+
+        BigDecimal bidRate = entry.getBidRate();
+        BigDecimal extra = entry.getExtraRate() != null ? entry.getExtraRate() : BigDecimal.ZERO;
+        entry.setSellerRate(bidRate);
+        entry.setBuyerRate(bidRate.add(extra));
+        entry.setAmount(entry.getBuyerRate().multiply(BigDecimal.valueOf(entry.getQuantity() != null ? entry.getQuantity() : 0)));
+        entry.setLastModifiedDate(Instant.now());
+
+        auctionEntryRepository.save(entry);
+        List<AuctionEntry> refreshed = auctionEntryRepository.findAllByAuctionId(auction.getId());
+        AuctionSessionDTO dto = buildSessionDTO(auction, lot, refreshed, unit.getRemainingQty(), unit.getSelfSaleQty());
+        dto.setSelfSaleContext(buildSelfSaleContext(unit, lot));
+        return dto;
+    }
+
+    public AuctionSessionDTO deleteBidFromSelfSaleUnit(Long selfSaleUnitId, Long bidId) {
+        Long traderId = resolveTraderId();
+        AuctionSelfSaleUnit unit = getRequiredSelfSaleUnit(selfSaleUnitId, traderId);
+        Lot lot = lotRepository.findById(unit.getLotId()).orElseThrow(() -> new EntityNotFoundException("Lot not found: " + unit.getLotId()));
+        Auction auction = getRequiredActiveSelfSaleAuction(unit);
+        AuctionEntry entry = auctionEntryRepository.findById(bidId).orElseThrow(() -> new EntityNotFoundException("Bid not found: " + bidId));
+        if (!Objects.equals(entry.getAuctionId(), auction.getId())) {
+            throw new EntityNotFoundException("Bid not found: " + bidId);
+        }
+
+        auctionEntryRepository.delete(entry);
+        List<AuctionEntry> refreshed = auctionEntryRepository.findAllByAuctionId(auction.getId());
+        AuctionSessionDTO dto = buildSessionDTO(auction, lot, refreshed, unit.getRemainingQty(), unit.getSelfSaleQty());
+        dto.setSelfSaleContext(buildSelfSaleContext(unit, lot));
+        return dto;
+    }
+
+    public AuctionResultDTO completeSelfSaleAuction(Long selfSaleUnitId) {
+        Long traderId = resolveTraderId();
+        AuctionSelfSaleUnit unit = getRequiredSelfSaleUnit(selfSaleUnitId, traderId);
+        Lot lot = lotRepository.findById(unit.getLotId()).orElseThrow(() -> new EntityNotFoundException("Lot not found: " + unit.getLotId()));
+        if (!isLotOwnedByTrader(lot, traderId)) {
+            throw new EntityNotFoundException("Lot not found: " + unit.getLotId());
+        }
+
+        Auction auction = getRequiredActiveSelfSaleAuction(unit);
+        List<AuctionEntry> entries = auctionEntryRepository.findAllByAuctionId(auction.getId());
+        if (entries.isEmpty()) {
+            throw new AuctionConflictException("Cannot complete auction without bids", "entries", 0, 0, 0, 0);
+        }
+
+        int sold = entries.stream().mapToInt(e -> e.getQuantity() != null ? e.getQuantity() : 0).sum();
+        int available = unit.getRemainingQty() != null ? unit.getRemainingQty() : 0;
+        if (sold > available) {
+            throw new AuctionConflictException("Completing this auction exceeds self-sale quantity", "quantity", 0, available, sold, sold);
+        }
+
+        Instant now = Instant.now();
+        auction.setCompletedAt(now);
+        auctionRepository.save(auction);
+
+        int remainingQty = available - sold;
+        unit.setRemainingQty(remainingQty);
+        unit.setStatus(remainingQty == 0 ? AuctionSelfSaleUnitStatus.CLOSED : AuctionSelfSaleUnitStatus.PARTIAL);
+        unit.setClosedAt(remainingQty == 0 ? now : null);
+        unit.setLastReauctionAuctionId(auction.getId());
+        auctionSelfSaleUnitRepository.save(unit);
+
+        return buildResultDTO(auction, lot, entries, unit.getId());
     }
 
     /**
@@ -300,16 +519,14 @@ public class AuctionService {
         if (!isLotOwnedByTrader(lot, traderId)) {
             throw new EntityNotFoundException("Lot not found: " + lotId);
         }
-        Auction auction = auctionRepository
-            .findFirstByLotIdOrderByAuctionDatetimeDesc(lotId)
-            .orElseGet(() -> {
-                Auction a = new Auction();
-                a.setLotId(lotId);
-                a.setTraderId(traderId);
-                a.setAuctionDatetime(Instant.now());
-                a.setCreatedAt(Instant.now());
-                return auctionRepository.save(a);
-            });
+        Auction auction = findLatestNormalAuctionForLot(lotId).orElseGet(() -> {
+            Auction a = new Auction();
+            a.setLotId(lotId);
+            a.setTraderId(traderId);
+            a.setAuctionDatetime(Instant.now());
+            a.setCreatedAt(Instant.now());
+            return auctionRepository.save(a);
+        });
 
         List<AuctionEntry> existingEntries = auctionEntryRepository.findAllByAuctionId(auction.getId());
 
@@ -327,64 +544,7 @@ public class AuctionService {
             lotRepository.save(lot);
         }
 
-        // Duplicate mark logic – merge when same mark and same rate and not self-sale
-        AuctionEntry merged = null;
-        if (!request.isSelfSale()) {
-            merged =
-                existingEntries
-                    .stream()
-                    .filter(e -> Boolean.FALSE.equals(e.getIsSelfSale()))
-                    .filter(e -> e.getBuyerMark() != null && e.getBuyerMark().equals(request.getBuyerMark()))
-                    .filter(e -> e.getBidRate() != null && e.getBidRate().compareTo(request.getRate()) == 0)
-                    .findFirst()
-                    .orElse(null);
-        }
-
-        if (merged != null) {
-            int newQty = merged.getQuantity() + requestedQty;
-            merged.setQuantity(newQty);
-            merged.setAmount(merged.getBidRate().multiply(BigDecimal.valueOf(newQty)));
-            merged.setLastModifiedDate(Instant.now());
-            auctionEntryRepository.save(merged);
-        } else {
-            AuctionEntry entry = new AuctionEntry();
-            entry.setAuctionId(auction.getId());
-            entry.setBuyerId(request.getBuyerId());
-            entry.setBuyerName(request.getBuyerName());
-            entry.setBuyerMark(request.getBuyerMark());
-
-            // Assign next bid number in a simple monotonic fashion per auction
-            int nextBidNumber = existingEntries.stream().map(AuctionEntry::getBidNumber).max(Integer::compareTo).orElse(0) + 1;
-            entry.setBidNumber(nextBidNumber);
-
-            BigDecimal rate = request.getRate();
-            BigDecimal preset = request.getPresetApplied() != null ? request.getPresetApplied() : BigDecimal.ZERO;
-            AuctionPresetType type = request.getPresetType() != null ? request.getPresetType() : AuctionPresetType.PROFIT;
-            BigDecimal extra = request.getExtraRate() != null ? request.getExtraRate() : BigDecimal.ZERO;
-
-            entry.setBidRate(rate);
-            entry.setPresetMargin(preset);
-            entry.setPresetType(type);
-
-            // seller_rate stores the base auction bid only; preset_margin is stored separately
-            // (Billing, PrintHub, Settlement compute effective seller rate = bid_rate + preset_margin when needed).
-            entry.setSellerRate(rate);
-            entry.setBuyerRate(rate.add(extra));
-
-            entry.setQuantity(request.getQuantity());
-            entry.setAmount(entry.getBuyerRate().multiply(BigDecimal.valueOf(request.getQuantity())));
-            entry.setIsSelfSale(request.isSelfSale());
-            entry.setIsScribble(request.isScribble());
-            entry.setTokenAdvance(request.getTokenAdvance() != null ? request.getTokenAdvance() : BigDecimal.ZERO);
-            entry.setExtraRate(extra);
-            entry.setCreatedAt(Instant.now());
-
-            auctionEntryRepository.save(entry);
-        }
-
-        if (request.getBuyerId() != null) {
-            contactService.ensureTraderUsesPortalContact(traderId, request.getBuyerId());
-        }
+        createOrMergeAuctionEntry(auction, existingEntries, request, traderId);
 
         List<AuctionEntry> refreshed = auctionEntryRepository.findAllByAuctionId(auction.getId());
         return buildSessionDTO(auction, lot, refreshed);
@@ -498,8 +658,7 @@ public class AuctionService {
             throw new EntityNotFoundException("Lot not found: " + lotId);
         }
 
-        Auction auction = auctionRepository
-            .findFirstByLotIdOrderByAuctionDatetimeDesc(lotId)
+        Auction auction = findLatestNormalAuctionForLot(lotId)
             .orElseThrow(() -> new EntityNotFoundException("No auction exists for lot: " + lotId));
 
         List<AuctionEntry> entries = auctionEntryRepository.findAllByAuctionId(auction.getId());
@@ -514,9 +673,13 @@ public class AuctionService {
         }
 
         auction.setCompletedAt(Instant.now());
+        if (auction.getTraderId() == null) {
+            auction.setTraderId(traderId);
+        }
         auctionRepository.save(auction);
+        createSelfSaleUnitsFromCompletedAuction(auction, entries, traderId);
 
-        return buildResultDTO(auction, lot, entries);
+        return buildResultDTO(auction, lot, entries, null);
     }
 
     @Transactional(readOnly = true)
@@ -527,7 +690,7 @@ public class AuctionService {
             return Page.empty(pageable);
         }
         java.util.List<Long> lotIds = traderLots.getContent().stream().map(Lot::getId).toList();
-        Page<Auction> page = auctionRepository.findByCompletedAtIsNotNullAndLotIdIn(lotIds, pageable);
+        Page<Auction> page = auctionRepository.findByCompletedAtIsNotNullAndLotIdInAndSelfSaleUnitIdIsNull(lotIds, pageable);
         return buildResultsPage(page, pageable);
     }
 
@@ -550,7 +713,7 @@ public class AuctionService {
         if (filteredLotIds.isEmpty()) {
             return Page.empty(pageable);
         }
-        Page<Auction> page = auctionRepository.findByCompletedAtIsNotNullAndLotIdIn(filteredLotIds, pageable);
+        Page<Auction> page = auctionRepository.findByCompletedAtIsNotNullAndLotIdInAndSelfSaleUnitIdIsNull(filteredLotIds, pageable);
         return buildResultsPage(page, pageable);
     }
 
@@ -568,7 +731,7 @@ public class AuctionService {
             .map(a -> {
                 Lot lot = lots.stream().filter(l -> l.getId().equals(a.getLotId())).findFirst().orElse(null);
                 List<AuctionEntry> aEntries = entries.stream().filter(e -> e.getAuctionId().equals(a.getId())).toList();
-                return buildResultDTO(a, lot, aEntries);
+                return buildEffectiveLotResultDTO(a, lot, aEntries);
             })
             .collect(Collectors.toList());
 
@@ -578,7 +741,7 @@ public class AuctionService {
     @Transactional(readOnly = true)
     public Optional<AuctionResultDTO> getResultByLot(Long lotId) {
         Long traderId = resolveTraderId();
-        Optional<Auction> auctionOpt = auctionRepository.findFirstByLotIdOrderByAuctionDatetimeDesc(lotId);
+        Optional<Auction> auctionOpt = findLatestNormalAuctionForLot(lotId);
         if (auctionOpt.isEmpty()) {
             return Optional.empty();
         }
@@ -588,7 +751,7 @@ public class AuctionService {
             return Optional.empty();
         }
         List<AuctionEntry> entries = auctionEntryRepository.findAllByAuctionId(auction.getId());
-        return Optional.of(buildResultDTO(auction, lot, entries));
+        return Optional.of(buildEffectiveLotResultDTO(auction, lot, entries));
     }
 
     @Transactional(readOnly = true)
@@ -611,14 +774,34 @@ public class AuctionService {
     }
 
     private AuctionSessionDTO buildSessionDTO(Auction auction, Lot lot, List<AuctionEntry> entries) {
+        return buildSessionDTOFromDtos(auction, lot, auctionEntryMapper.toDto(entries), lot.getBagCount(), lot.getBagCount());
+    }
+
+    private AuctionSessionDTO buildSessionDTO(
+        Auction auction,
+        Lot lot,
+        List<AuctionEntry> entries,
+        Integer bagCountOverride,
+        Integer originalBagCountOverride
+    ) {
+        return buildSessionDTOFromDtos(auction, lot, auctionEntryMapper.toDto(entries), bagCountOverride, originalBagCountOverride);
+    }
+
+    private AuctionSessionDTO buildSessionDTOFromDtos(
+        Auction auction,
+        Lot lot,
+        List<AuctionEntryDTO> entryDtos,
+        Integer bagCountOverride,
+        Integer originalBagCountOverride
+    ) {
         AuctionSessionDTO dto = new AuctionSessionDTO();
         dto.setAuctionId(auction.getId());
 
         LotSummaryDTO lotSummary = new LotSummaryDTO();
         lotSummary.setLotId(lot.getId());
         lotSummary.setLotName(lot.getLotName());
-        lotSummary.setBagCount(lot.getBagCount());
-        lotSummary.setOriginalBagCount(lot.getBagCount());
+        lotSummary.setBagCount(bagCountOverride != null ? bagCountOverride : lot.getBagCount());
+        lotSummary.setOriginalBagCount(originalBagCountOverride != null ? originalBagCountOverride : lot.getBagCount());
         lotSummary.setSellerVehicleId(lot.getSellerVehicleId());
         lotSummary.setWasModified(false);
 
@@ -649,19 +832,19 @@ public class AuctionService {
             lotSummary.setCommodityName(commodity != null ? commodity.getCommodityName() : null);
         }
 
-        int totalSold = entries.stream().mapToInt(e -> e.getQuantity() != null ? e.getQuantity() : 0).sum();
-        int bagCount = lot.getBagCount() != null ? lot.getBagCount() : 0;
+        int totalSold = entryDtos.stream().mapToInt(e -> e.getQuantity() != null ? e.getQuantity() : 0).sum();
+        int bagCount = bagCountOverride != null ? bagCountOverride : (lot.getBagCount() != null ? lot.getBagCount() : 0);
         int remaining = Math.max(0, bagCount - totalSold);
-        int highestRate = entries
+        int highestRate = entryDtos
             .stream()
-            .map(AuctionEntry::getBidRate)
+            .map(AuctionEntryDTO::getBidRate)
             .filter(r -> r != null)
             .map(r -> r.intValue())
             .max(Integer::compareTo)
             .orElse(0);
 
         String status;
-        if (entries.isEmpty()) {
+        if (entryDtos.isEmpty()) {
             status = "AVAILABLE";
         } else if (remaining == 0) {
             status = "SOLD";
@@ -670,7 +853,7 @@ public class AuctionService {
         }
 
         dto.setLot(lotSummary);
-        dto.setEntries(auctionEntryMapper.toDto(entries));
+        dto.setEntries(entryDtos);
         dto.setTotalSoldBags(totalSold);
         dto.setRemainingBags(remaining);
         dto.setHighestBidRate(highestRate);
@@ -679,7 +862,129 @@ public class AuctionService {
         return dto;
     }
 
+    private AuctionSessionDTO buildEffectiveLotSessionDTO(Auction auction, Lot lot, List<AuctionEntry> baseEntries) {
+        List<AuctionSelfSaleUnit> units = auctionSelfSaleUnitRepository.findBySourceAuctionId(auction.getId());
+        if (units.isEmpty()) {
+            return buildSessionDTO(auction, lot, baseEntries);
+        }
+
+        Map<Long, AuctionSelfSaleUnit> unitBySourceEntryId = units
+            .stream()
+            .filter(u -> u.getSourceAuctionEntryId() != null)
+            .collect(Collectors.toMap(AuctionSelfSaleUnit::getSourceAuctionEntryId, u -> u, (a, b) -> a));
+
+        List<AuctionEntryDTO> displayEntries = new ArrayList<>();
+        for (AuctionEntry entry : baseEntries.stream().sorted(Comparator.comparingInt(AuctionEntry::getBidNumber)).toList()) {
+            if (!Boolean.TRUE.equals(entry.getIsSelfSale())) {
+                displayEntries.add(auctionEntryMapper.toDto(entry));
+                continue;
+            }
+
+            AuctionSelfSaleUnit unit = entry.getId() != null ? unitBySourceEntryId.get(entry.getId()) : null;
+            if (unit == null) {
+                displayEntries.add(auctionEntryMapper.toDto(entry));
+                continue;
+            }
+
+            List<Auction> completedReAuctions = auctionRepository
+                .findAllBySelfSaleUnitIdOrderByAuctionDatetimeAsc(unit.getId())
+                .stream()
+                .filter(a -> a.getCompletedAt() != null)
+                .toList();
+
+            if (completedReAuctions.isEmpty()) {
+                displayEntries.add(auctionEntryMapper.toDto(entry));
+                continue;
+            }
+
+            List<Long> reAuctionIds = completedReAuctions.stream().map(Auction::getId).toList();
+            Map<Long, List<AuctionEntry>> reAuctionEntries = auctionEntryRepository.findAllByAuctionIdIn(reAuctionIds)
+                .stream()
+                .collect(Collectors.groupingBy(AuctionEntry::getAuctionId));
+
+            for (Auction reAuction : completedReAuctions) {
+                displayEntries.addAll(
+                    reAuctionEntries
+                        .getOrDefault(reAuction.getId(), List.of())
+                        .stream()
+                        .sorted(Comparator.comparingInt(AuctionEntry::getBidNumber))
+                        .map(auctionEntryMapper::toDto)
+                        .toList()
+                );
+            }
+
+            if (unit.getRemainingQty() != null && unit.getRemainingQty() > 0) {
+                AuctionEntryDTO remainingSelfSale = new AuctionEntryDTO();
+                remainingSelfSale.setId(entry.getId());
+                remainingSelfSale.setAuctionId(auction.getId());
+                remainingSelfSale.setBuyerId(entry.getBuyerId());
+                remainingSelfSale.setBidNumber(entry.getBidNumber());
+                remainingSelfSale.setBidRate(unit.getRate());
+                remainingSelfSale.setPresetMargin(entry.getPresetMargin());
+                remainingSelfSale.setPresetType(entry.getPresetType());
+                remainingSelfSale.setSellerRate(unit.getRate());
+                remainingSelfSale.setBuyerRate(unit.getRate());
+                remainingSelfSale.setQuantity(unit.getRemainingQty());
+                remainingSelfSale.setAmount(unit.getRate().multiply(BigDecimal.valueOf(unit.getRemainingQty())));
+                remainingSelfSale.setIsSelfSale(Boolean.TRUE);
+                remainingSelfSale.setIsScribble(Boolean.FALSE);
+                remainingSelfSale.setTokenAdvance(BigDecimal.ZERO);
+                remainingSelfSale.setExtraRate(BigDecimal.ZERO);
+                remainingSelfSale.setBuyerName(entry.getBuyerName());
+                remainingSelfSale.setBuyerMark(entry.getBuyerMark());
+                remainingSelfSale.setCreatedAt(unit.getCreatedAt());
+                displayEntries.add(remainingSelfSale);
+            }
+        }
+
+        return buildSessionDTOFromDtos(auction, lot, displayEntries, lot.getBagCount(), lot.getBagCount());
+    }
+
+    private Auction createAuctionSession(Long lotId, Long traderId) {
+        Auction auction = new Auction();
+        auction.setLotId(lotId);
+        auction.setTraderId(traderId);
+        auction.setAuctionDatetime(Instant.now());
+        auction.setCreatedAt(Instant.now());
+        return auctionRepository.save(auction);
+    }
+
+    private Optional<Auction> findLatestNormalAuctionForLot(Long lotId) {
+        return auctionRepository.findFirstByLotIdAndSelfSaleUnitIdIsNullOrderByAuctionDatetimeDesc(lotId);
+    }
+
+    private AuctionSelfSaleContextDTO buildSelfSaleContext(AuctionSelfSaleUnit unit, Lot lot) {
+        AuctionSelfSaleContextDTO context = new AuctionSelfSaleContextDTO();
+        context.setSelfSaleUnitId(unit.getId());
+        context.setRate(unit.getRate());
+        context.setQuantity(unit.getSelfSaleQty());
+        context.setRemainingQty(unit.getRemainingQty());
+        context.setAmount(unit.getAmount());
+        context.setCreatedAt(unit.getCreatedAt());
+
+        auctionRepository
+            .findById(unit.getSourceAuctionId())
+            .ifPresent(previousAuction -> {
+                context.setPreviousCompletedAuctionId(previousAuction.getId());
+                context.setPreviousCompletedAt(previousAuction.getCompletedAt());
+                List<AuctionEntry> previousEntries = auctionEntryRepository.findAllByAuctionId(previousAuction.getId());
+                context.setPreviousEntries(
+                    previousEntries
+                        .stream()
+                        .sorted(Comparator.comparingInt(AuctionEntry::getBidNumber))
+                        .map(this::toResultEntryDTO)
+                        .collect(Collectors.toList())
+                );
+            });
+
+        return context;
+    }
+
     private AuctionResultDTO buildResultDTO(Auction auction, Lot lot, List<AuctionEntry> entries) {
+        return buildResultDTO(auction, lot, entries, null);
+    }
+
+    private AuctionResultDTO buildResultDTO(Auction auction, Lot lot, List<AuctionEntry> entries, Long selfSaleUnitId) {
         AuctionResultDTO dto = new AuctionResultDTO();
         dto.setAuctionId(auction.getId());
         dto.setLotId(auction.getLotId());
@@ -694,28 +999,274 @@ public class AuctionService {
         dto.setAuctionDatetime(auction.getAuctionDatetime());
         dto.setConductedBy(auction.getConductedBy());
         dto.setCompletedAt(auction.getCompletedAt());
+        dto.setSelfSaleUnitId(selfSaleUnitId);
 
         List<AuctionResultEntryDTO> resultEntries = entries
             .stream()
             .sorted(Comparator.comparingInt(AuctionEntry::getBidNumber))
-            .map(e -> {
-                AuctionResultEntryDTO re = new AuctionResultEntryDTO();
-                re.setBidNumber(e.getBidNumber());
-                re.setBuyerId(e.getBuyerId());
-                re.setBuyerMark(e.getBuyerMark());
-                re.setBuyerName(e.getBuyerName());
-                re.setRate(e.getBidRate());
-                re.setQuantity(e.getQuantity());
-                re.setAmount(e.getAmount());
-                re.setIsSelfSale(e.getIsSelfSale());
-                re.setIsScribble(e.getIsScribble());
-                re.setPresetApplied(e.getPresetMargin());
-                re.setPresetType(e.getPresetType());
-                return re;
-            })
+            .map(this::toResultEntryDTO)
             .collect(Collectors.toList());
 
         dto.setEntries(resultEntries);
+        return dto;
+    }
+
+    private AuctionSelfSaleUnit getRequiredSelfSaleUnit(Long unitId, Long traderId) {
+        AuctionSelfSaleUnit unit = auctionSelfSaleUnitRepository
+            .findByIdAndTraderId(unitId, traderId)
+            .orElseThrow(() -> new EntityNotFoundException("Self-sale unit not found: " + unitId));
+        if (unit.getStatus() == AuctionSelfSaleUnitStatus.CLOSED || (unit.getRemainingQty() != null && unit.getRemainingQty() <= 0)) {
+            throw new EntityNotFoundException("Self-sale unit not found: " + unitId);
+        }
+        return unit;
+    }
+
+    private Auction getRequiredActiveSelfSaleAuction(AuctionSelfSaleUnit unit) {
+        if (unit.getLastReauctionAuctionId() == null) {
+            throw new EntityNotFoundException("No active self-sale auction exists for unit: " + unit.getId());
+        }
+        Auction auction = auctionRepository
+            .findById(unit.getLastReauctionAuctionId())
+            .orElseThrow(() -> new EntityNotFoundException("Auction not found for self-sale unit: " + unit.getId()));
+        if (auction.getSelfSaleUnitId() == null) {
+            auction.setSelfSaleUnitId(unit.getId());
+            auctionRepository.save(auction);
+        }
+        if (auction.getCompletedAt() != null) {
+            throw new EntityNotFoundException("No active self-sale auction exists for unit: " + unit.getId());
+        }
+        return auction;
+    }
+
+    private Auction getOrCreateSelfSaleAuction(AuctionSelfSaleUnit unit, Long traderId) {
+        if (unit.getLastReauctionAuctionId() != null) {
+            Optional<Auction> existing = auctionRepository.findById(unit.getLastReauctionAuctionId());
+            if (existing.isPresent() && existing.get().getCompletedAt() == null) {
+                if (existing.get().getSelfSaleUnitId() == null) {
+                    existing.get().setSelfSaleUnitId(unit.getId());
+                    auctionRepository.save(existing.get());
+                }
+                return existing.get();
+            }
+        }
+        Auction auction = createAuctionSession(unit.getLotId(), traderId);
+        auction.setSelfSaleUnitId(unit.getId());
+        auction = auctionRepository.save(auction);
+        unit.setLastReauctionAuctionId(auction.getId());
+        auctionSelfSaleUnitRepository.save(unit);
+        return auction;
+    }
+
+    private AuctionResultDTO buildEffectiveLotResultDTO(Auction auction, Lot lot, List<AuctionEntry> baseEntries) {
+        List<AuctionSelfSaleUnit> units = auctionSelfSaleUnitRepository.findBySourceAuctionId(auction.getId());
+        if (units.isEmpty()) {
+            return buildResultDTO(auction, lot, baseEntries);
+        }
+
+        Map<Long, AuctionSelfSaleUnit> unitBySourceEntryId = units
+            .stream()
+            .filter(u -> u.getSourceAuctionEntryId() != null)
+            .collect(Collectors.toMap(AuctionSelfSaleUnit::getSourceAuctionEntryId, u -> u, (a, b) -> a));
+
+        AuctionResultDTO dto = buildResultDTO(auction, lot, List.of(), null);
+        List<AuctionResultEntryDTO> resultEntries = new ArrayList<>();
+        Instant effectiveCompletedAt = auction.getCompletedAt();
+
+        for (AuctionEntry entry : baseEntries.stream().sorted(Comparator.comparingInt(AuctionEntry::getBidNumber)).toList()) {
+            if (!Boolean.TRUE.equals(entry.getIsSelfSale())) {
+                resultEntries.add(toResultEntryDTO(entry));
+                continue;
+            }
+
+            AuctionSelfSaleUnit unit = entry.getId() != null ? unitBySourceEntryId.get(entry.getId()) : null;
+            if (unit == null) {
+                resultEntries.add(toResultEntryDTO(entry));
+                continue;
+            }
+
+            List<Auction> reAuctions = auctionRepository.findAllBySelfSaleUnitIdOrderByAuctionDatetimeAsc(unit.getId());
+            List<Auction> completedReAuctions = reAuctions.stream().filter(a -> a.getCompletedAt() != null).toList();
+            if (completedReAuctions.isEmpty()) {
+                resultEntries.add(toResultEntryDTO(entry));
+                continue;
+            }
+
+            List<Long> reAuctionIds = completedReAuctions.stream().map(Auction::getId).toList();
+            Map<Long, List<AuctionEntry>> reAuctionEntries = auctionEntryRepository.findAllByAuctionIdIn(reAuctionIds)
+                .stream()
+                .collect(Collectors.groupingBy(AuctionEntry::getAuctionId));
+
+            for (Auction reAuction : completedReAuctions) {
+                if (effectiveCompletedAt == null || (reAuction.getCompletedAt() != null && reAuction.getCompletedAt().isAfter(effectiveCompletedAt))) {
+                    effectiveCompletedAt = reAuction.getCompletedAt();
+                }
+                resultEntries.addAll(
+                    reAuctionEntries
+                        .getOrDefault(reAuction.getId(), List.of())
+                        .stream()
+                        .sorted(Comparator.comparingInt(AuctionEntry::getBidNumber))
+                        .map(this::toResultEntryDTO)
+                        .toList()
+                );
+            }
+
+            if (unit.getRemainingQty() != null && unit.getRemainingQty() > 0) {
+                AuctionResultEntryDTO remainingSelfSale = new AuctionResultEntryDTO();
+                remainingSelfSale.setBidNumber(entry.getBidNumber());
+                remainingSelfSale.setBuyerId(entry.getBuyerId());
+                remainingSelfSale.setBuyerMark(entry.getBuyerMark());
+                remainingSelfSale.setBuyerName(entry.getBuyerName());
+                remainingSelfSale.setRate(unit.getRate());
+                remainingSelfSale.setQuantity(unit.getRemainingQty());
+                remainingSelfSale.setAmount(unit.getRate().multiply(BigDecimal.valueOf(unit.getRemainingQty())));
+                remainingSelfSale.setIsSelfSale(Boolean.TRUE);
+                remainingSelfSale.setIsScribble(Boolean.FALSE);
+                remainingSelfSale.setPresetApplied(entry.getPresetMargin());
+                remainingSelfSale.setPresetType(entry.getPresetType());
+                resultEntries.add(remainingSelfSale);
+            }
+        }
+
+        dto.setCompletedAt(effectiveCompletedAt);
+        dto.setEntries(resultEntries);
+        return dto;
+    }
+
+    private void createOrMergeAuctionEntry(
+        Auction auction,
+        List<AuctionEntry> existingEntries,
+        AuctionBidCreateRequest request,
+        Long traderId
+    ) {
+        AuctionEntry merged = null;
+        if (!request.isSelfSale()) {
+            merged =
+                existingEntries
+                    .stream()
+                    .filter(e -> Boolean.FALSE.equals(e.getIsSelfSale()))
+                    .filter(e -> e.getBuyerMark() != null && e.getBuyerMark().equals(request.getBuyerMark()))
+                    .filter(e -> e.getBidRate() != null && e.getBidRate().compareTo(request.getRate()) == 0)
+                    .findFirst()
+                    .orElse(null);
+        }
+
+        if (merged != null) {
+            int newQty = merged.getQuantity() + request.getQuantity();
+            merged.setQuantity(newQty);
+            merged.setAmount(merged.getBidRate().multiply(BigDecimal.valueOf(newQty)));
+            merged.setLastModifiedDate(Instant.now());
+            auctionEntryRepository.save(merged);
+        } else {
+            AuctionEntry entry = new AuctionEntry();
+            entry.setAuctionId(auction.getId());
+            entry.setBuyerId(request.getBuyerId());
+            entry.setBuyerName(request.getBuyerName());
+            entry.setBuyerMark(request.getBuyerMark());
+            int nextBidNumber = existingEntries.stream().map(AuctionEntry::getBidNumber).max(Integer::compareTo).orElse(0) + 1;
+            entry.setBidNumber(nextBidNumber);
+
+            BigDecimal rate = request.getRate();
+            BigDecimal preset = request.getPresetApplied() != null ? request.getPresetApplied() : BigDecimal.ZERO;
+            AuctionPresetType type = request.getPresetType() != null ? request.getPresetType() : AuctionPresetType.PROFIT;
+            BigDecimal extra = request.getExtraRate() != null ? request.getExtraRate() : BigDecimal.ZERO;
+
+            entry.setBidRate(rate);
+            entry.setPresetMargin(preset);
+            entry.setPresetType(type);
+            entry.setSellerRate(rate);
+            entry.setBuyerRate(rate.add(extra));
+            entry.setQuantity(request.getQuantity());
+            entry.setAmount(entry.getBuyerRate().multiply(BigDecimal.valueOf(request.getQuantity())));
+            entry.setIsSelfSale(request.isSelfSale());
+            entry.setIsScribble(request.isScribble());
+            entry.setTokenAdvance(request.getTokenAdvance() != null ? request.getTokenAdvance() : BigDecimal.ZERO);
+            entry.setExtraRate(extra);
+            entry.setCreatedAt(Instant.now());
+
+            auctionEntryRepository.save(entry);
+        }
+
+        if (request.getBuyerId() != null) {
+            contactService.ensureTraderUsesPortalContact(traderId, request.getBuyerId());
+        }
+    }
+
+    private void createSelfSaleUnitsFromCompletedAuction(Auction auction, List<AuctionEntry> entries, Long traderId) {
+        for (AuctionEntry entry : entries) {
+            if (!Boolean.TRUE.equals(entry.getIsSelfSale())) {
+                continue;
+            }
+            if (entry.getId() == null || auctionSelfSaleUnitRepository.existsBySourceAuctionEntryId(entry.getId())) {
+                continue;
+            }
+
+            AuctionSelfSaleUnit unit = new AuctionSelfSaleUnit();
+            unit.setTraderId(traderId);
+            unit.setLotId(auction.getLotId());
+            unit.setSourceAuctionId(auction.getId());
+            unit.setSourceAuctionEntryId(entry.getId());
+            unit.setSelfSaleQty(entry.getQuantity());
+            unit.setRemainingQty(entry.getQuantity());
+            unit.setRate(entry.getBidRate());
+            unit.setAmount(entry.getAmount());
+            unit.setStatus(AuctionSelfSaleUnitStatus.OPEN);
+            unit.setCreatedAt(auction.getCompletedAt() != null ? auction.getCompletedAt() : Instant.now());
+            auctionSelfSaleUnitRepository.save(unit);
+        }
+    }
+
+    private AuctionSelfSaleUnitDTO toAuctionSelfSaleUnitDTO(
+        AuctionSelfSaleUnit unit,
+        Lot lot,
+        Map<Long, SellerInVehicle> sivById,
+        Map<Long, Vehicle> vehicleById,
+        Map<Long, Contact> contactById,
+        Map<Long, Commodity> commodityById
+    ) {
+        if (lot == null) {
+            return null;
+        }
+        AuctionSelfSaleUnitDTO dto = new AuctionSelfSaleUnitDTO();
+        dto.setSelfSaleUnitId(unit.getId());
+        dto.setLotId(lot.getId());
+        dto.setLotName(lot.getLotName());
+        dto.setBagCount(unit.getRemainingQty());
+        dto.setOriginalBagCount(unit.getSelfSaleQty());
+        dto.setSelfSaleQty(unit.getSelfSaleQty());
+        dto.setRemainingQty(unit.getRemainingQty());
+        dto.setRate(unit.getRate());
+        dto.setAmount(unit.getAmount());
+        dto.setStatus(unit.getStatus());
+        dto.setCreatedAt(unit.getCreatedAt());
+        dto.setSellerVehicleId(lot.getSellerVehicleId());
+        SellerInVehicle siv = lot.getSellerVehicleId() != null ? sivById.get(lot.getSellerVehicleId()) : null;
+        if (siv != null) {
+            Contact contact = siv.getContactId() != null ? contactById.get(siv.getContactId()) : null;
+            Vehicle vehicle = siv.getVehicleId() != null ? vehicleById.get(siv.getVehicleId()) : null;
+            dto.setSellerName(resolveAuctionSellerName(contact, siv));
+            dto.setSellerMark(resolveAuctionSellerMark(contact, siv));
+            dto.setVehicleNumber(vehicle != null ? vehicle.getVehicleNumber() : null);
+        }
+        if (lot.getCommodityId() != null) {
+            Commodity commodity = commodityById.get(lot.getCommodityId());
+            dto.setCommodityName(commodity != null ? commodity.getCommodityName() : null);
+        }
+        return dto;
+    }
+
+    private AuctionResultEntryDTO toResultEntryDTO(AuctionEntry entry) {
+        AuctionResultEntryDTO dto = new AuctionResultEntryDTO();
+        dto.setBidNumber(entry.getBidNumber());
+        dto.setBuyerId(entry.getBuyerId());
+        dto.setBuyerMark(entry.getBuyerMark());
+        dto.setBuyerName(entry.getBuyerName());
+        dto.setRate(entry.getBidRate());
+        dto.setQuantity(entry.getQuantity());
+        dto.setAmount(entry.getAmount());
+        dto.setIsSelfSale(entry.getIsSelfSale());
+        dto.setIsScribble(entry.getIsScribble());
+        dto.setPresetApplied(entry.getPresetMargin());
+        dto.setPresetType(entry.getPresetType());
         return dto;
     }
 
