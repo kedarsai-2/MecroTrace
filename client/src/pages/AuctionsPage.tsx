@@ -2402,7 +2402,7 @@ const AuctionsPage = () => {
                       <th className={cn("font-semibold text-muted-foreground uppercase tracking-wider", isDesktop ? "px-3 py-2.5 text-xs" : "px-2 py-1.5 text-[10px]")}>Mark / Buyer</th>
                       <th className={cn("font-semibold text-muted-foreground uppercase tracking-wider", isDesktop ? "px-3 py-2.5 text-xs" : "px-2 py-1.5 text-[10px]")}>Rate</th>
                       {showPresetMargin && (
-                        <th className={cn("font-semibold text-muted-foreground uppercase tracking-wider", isDesktop ? "px-3 py-2.5 text-xs" : "px-2 py-1.5 text-[10px]")}>Extra</th>
+                        <th className={cn("font-semibold text-muted-foreground uppercase tracking-wider", isDesktop ? "px-3 py-2.5 text-xs" : "px-2 py-1.5 text-[10px]")}>Preset</th>
                       )}
                       <th className={cn("font-semibold text-muted-foreground uppercase tracking-wider", isDesktop ? "px-3 py-2.5 text-xs" : "px-2 py-1.5 text-[10px]")}>Qty</th>
                       <th className={cn("font-semibold text-muted-foreground uppercase tracking-wider text-right", isDesktop ? "px-3 py-2.5 text-xs" : "px-2 py-1.5 text-[10px]")}>Action</th>
@@ -2444,7 +2444,12 @@ const AuctionsPage = () => {
                             </div>
                           </td>
                           <td className={cn("font-semibold text-foreground align-top", isDesktop ? "px-3 py-2 text-sm" : "px-2 py-1.5 text-xs")}>
-                            <div>₹{showPresetMargin ? entry.sellerRate : entry.rate}</div>
+                            <div>₹{entry.rate}</div>
+                            {showPresetMargin && (
+                              <div className="text-[10px] font-medium text-muted-foreground">
+                                Total ₹{entry.sellerRate}
+                              </div>
+                            )}
                           </td>
                           {showPresetMargin && (
                             <td
