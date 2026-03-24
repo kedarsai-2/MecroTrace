@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.hasSize;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
@@ -25,6 +26,7 @@ import com.mercotrace.service.dto.ArrivalDTOs.ArrivalLotDTO;
 import com.mercotrace.service.dto.ArrivalDTOs.ArrivalRequestDTO;
 import com.mercotrace.service.dto.ArrivalDTOs.ArrivalSellerDTO;
 import com.mercotrace.service.dto.ArrivalDTOs.ArrivalSummaryDTO;
+import java.util.Map;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
@@ -41,7 +43,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 @IntegrationTest
 @AutoConfigureMockMvc
-@WithMockUser(authorities = { AuthoritiesConstants.ARRIVALS_VIEW, AuthoritiesConstants.ARRIVALS_CREATE })
+@WithMockUser(authorities = { AuthoritiesConstants.ARRIVALS_VIEW, AuthoritiesConstants.ARRIVALS_CREATE, AuthoritiesConstants.ARRIVALS_EDIT })
 class ArrivalResourceIT {
 
     private static final String ENTITY_API_URL = "/api/arrivals";
@@ -178,6 +180,85 @@ class ArrivalResourceIT {
             .andExpect(jsonPath("$[0].vehicleNumber").isNotEmpty())
             .andExpect(jsonPath("$[0].sellerCount").isNumber())
             .andExpect(jsonPath("$[0].lotCount").isNumber());
+    }
+
+    @Test
+    @Transactional
+    void getArrivalByIdReturnsSellerSerialAndPatchPreservesIt() throws Exception {
+        ArrivalRequestDTO request = buildBasicRequest(false);
+        ArrivalLotDTO secondLot = new ArrivalLotDTO();
+        secondLot.setLotName("LOT-2");
+        secondLot.setBagCount(12);
+        secondLot.setCommodityName(commodity.getCommodityName());
+        request.getSellers().get(0).setLots(List.of(request.getSellers().get(0).getLots().get(0), secondLot));
+
+        String responseBody = restArrivalMockMvc
+            .perform(post(ENTITY_API_URL).contentType(MediaType.APPLICATION_JSON).content(om.writeValueAsBytes(request)))
+            .andExpect(status().isCreated())
+            .andReturn()
+            .getResponse()
+            .getContentAsString();
+
+        ArrivalSummaryDTO created = om.readValue(responseBody, ArrivalSummaryDTO.class);
+        insertedVehicle = vehicleRepository.findById(created.getVehicleId()).orElse(null);
+
+        String detailBody = restArrivalMockMvc
+            .perform(get(ENTITY_API_URL + "/" + created.getVehicleId()))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.sellers", hasSize(1)))
+            .andExpect(jsonPath("$.sellers[0].sellerSerialNumber").value(1))
+            .andExpect(jsonPath("$.sellers[0].lots", hasSize(2)))
+            .andExpect(jsonPath("$.sellers[0].lots[0].lotSerialNumber").value(1))
+            .andExpect(jsonPath("$.sellers[0].lots[1].lotSerialNumber").value(2))
+            .andReturn()
+            .getResponse()
+            .getContentAsString();
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> detail = om.readValue(detailBody, Map.class);
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> sellers = (List<Map<String, Object>>) detail.get("sellers");
+        Map<String, Object> seller = sellers.get(0);
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> lots = (List<Map<String, Object>>) seller.get("lots");
+        Map<String, Object> lot = lots.get(0);
+
+        Map<String, Object> patchBody = Map.of(
+            "multiSeller", false,
+            "sellers", List.of(
+                Map.of(
+                    "contactId", contact.getId(),
+                    "sellerSerialNumber", seller.get("sellerSerialNumber"),
+                    "sellerName", seller.get("sellerName"),
+                    "sellerPhone", seller.get("sellerPhone"),
+                    "lots", List.of(
+                        Map.of(
+                            "lotName", lot.get("lotName"),
+                            "lotSerialNumber", lot.get("lotSerialNumber"),
+                            "bagCount", lot.get("bagCount"),
+                            "commodityName", lot.get("commodityName")
+                        ),
+                        Map.of(
+                            "lotName", lots.get(1).get("lotName"),
+                            "lotSerialNumber", lots.get(1).get("lotSerialNumber"),
+                            "bagCount", lots.get(1).get("bagCount"),
+                            "commodityName", lots.get(1).get("commodityName")
+                        )
+                    )
+                )
+            )
+        );
+
+        restArrivalMockMvc
+            .perform(patch(ENTITY_API_URL + "/" + created.getVehicleId()).contentType(MediaType.APPLICATION_JSON).content(om.writeValueAsBytes(patchBody)))
+            .andExpect(status().isOk());
+
+        restArrivalMockMvc
+            .perform(get(ENTITY_API_URL + "/" + created.getVehicleId()))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.sellers[0].sellerSerialNumber").value(1))
+            .andExpect(jsonPath("$.sellers[0].lots[0].lotSerialNumber").value(1))
+            .andExpect(jsonPath("$.sellers[0].lots[1].lotSerialNumber").value(2));
     }
 
     private ArrivalRequestDTO buildBasicRequest(boolean multiSeller) {

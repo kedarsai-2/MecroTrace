@@ -20,6 +20,9 @@ public final class ArrivalDTOs {
         @NotBlank
         private String lotName;
 
+        /** Preserved on edit/reopen; generated server-side when absent. */
+        private Integer lotSerialNumber;
+
         @Min(1)
         private int bagCount;
 
@@ -37,6 +40,14 @@ public final class ArrivalDTOs {
 
         public void setLotName(String lotName) {
             this.lotName = lotName;
+        }
+
+        public Integer getLotSerialNumber() {
+            return lotSerialNumber;
+        }
+
+        public void setLotSerialNumber(Integer lotSerialNumber) {
+            this.lotSerialNumber = lotSerialNumber;
         }
 
         public int getBagCount() {
@@ -77,6 +88,9 @@ public final class ArrivalDTOs {
         /** When null, seller is free-text (name/phone from DTO only). */
         private Long contactId;
 
+        /** Preserved on edit/reopen; ignored during create allocation when absent. */
+        private Integer sellerSerialNumber;
+
         private String sellerName;
 
         private String sellerPhone;
@@ -96,6 +110,14 @@ public final class ArrivalDTOs {
 
         public String getSellerName() {
             return sellerName;
+        }
+
+        public Integer getSellerSerialNumber() {
+            return sellerSerialNumber;
+        }
+
+        public void setSellerSerialNumber(Integer sellerSerialNumber) {
+            this.sellerSerialNumber = sellerSerialNumber;
         }
 
         public void setSellerName(String sellerName) {
@@ -583,6 +605,7 @@ public final class ArrivalDTOs {
     public static class ArrivalLotFullDTO implements Serializable {
         private Long id;
         private String lotName;
+        private Integer lotSerialNumber;
         private String commodityName;
         private int bagCount;
         private String brokerTag;
@@ -592,6 +615,8 @@ public final class ArrivalDTOs {
         public void setId(Long id) { this.id = id; }
         public String getLotName() { return lotName; }
         public void setLotName(String lotName) { this.lotName = lotName; }
+        public Integer getLotSerialNumber() { return lotSerialNumber; }
+        public void setLotSerialNumber(Integer lotSerialNumber) { this.lotSerialNumber = lotSerialNumber; }
         public String getCommodityName() { return commodityName; }
         public void setCommodityName(String commodityName) { this.commodityName = commodityName; }
         public int getBagCount() { return bagCount; }
@@ -605,6 +630,7 @@ public final class ArrivalDTOs {
     /** Seller with full lots for arrival expand (includes contactId/sellerPhone for edit form prefill). */
     public static class ArrivalSellerFullDTO implements Serializable {
         private Long contactId;
+        private Integer sellerSerialNumber;
         private String sellerName;
         private String sellerPhone;
         private String sellerMark;
@@ -612,6 +638,8 @@ public final class ArrivalDTOs {
 
         public Long getContactId() { return contactId; }
         public void setContactId(Long contactId) { this.contactId = contactId; }
+        public Integer getSellerSerialNumber() { return sellerSerialNumber; }
+        public void setSellerSerialNumber(Integer sellerSerialNumber) { this.sellerSerialNumber = sellerSerialNumber; }
         public String getSellerName() { return sellerName; }
         public void setSellerName(String sellerName) { this.sellerName = sellerName; }
         public String getSellerPhone() { return sellerPhone; }

@@ -18,11 +18,19 @@ public interface AuctionRepository extends JpaRepository<Auction, Long> {
 
     Optional<Auction> findFirstByLotIdOrderByAuctionDatetimeDesc(Long lotId);
 
+    Optional<Auction> findFirstByLotIdAndSelfSaleUnitIdIsNullOrderByAuctionDatetimeDesc(Long lotId);
+
+    Optional<Auction> findFirstByLotIdAndCompletedAtIsNotNullOrderByAuctionDatetimeDesc(Long lotId);
+
     Page<Auction> findAllByTraderIdAndAuctionDatetimeBetween(Long traderId, Instant from, Instant to, Pageable pageable);
 
     Page<Auction> findAllByAuctionDatetimeBetween(Instant from, Instant to, Pageable pageable);
 
     List<Auction> findAllByLotIdIn(Iterable<Long> lotIds);
+
+    List<Auction> findAllByLotIdInAndSelfSaleUnitIdIsNull(Iterable<Long> lotIds);
+
+    List<Auction> findAllBySelfSaleUnitIdOrderByAuctionDatetimeAsc(Long selfSaleUnitId);
 
     void deleteByLotIdIn(Collection<Long> lotIds);
 
@@ -31,9 +39,13 @@ public interface AuctionRepository extends JpaRepository<Auction, Long> {
      */
     Page<Auction> findByCompletedAtIsNotNull(Pageable pageable);
 
+    Page<Auction> findByCompletedAtIsNotNullAndSelfSaleUnitIdIsNull(Pageable pageable);
+
     /**
      * Completed auctions for the given lot IDs (used by Settlement sellers list).
      */
     Page<Auction> findByCompletedAtIsNotNullAndLotIdIn(java.util.Collection<Long> lotIds, Pageable pageable);
+
+    Page<Auction> findByCompletedAtIsNotNullAndLotIdInAndSelfSaleUnitIdIsNull(java.util.Collection<Long> lotIds, Pageable pageable);
 }
 

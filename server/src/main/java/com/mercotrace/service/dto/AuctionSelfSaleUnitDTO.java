@@ -1,13 +1,19 @@
 package com.mercotrace.service.dto;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.mercotrace.domain.enumeration.AuctionSelfSaleUnitStatus;
 import java.io.Serializable;
+import java.math.BigDecimal;
+import java.time.Instant;
 
 /**
- * Lightweight Lot summary with auction-aware status for Sales Pad lot selector.
+ * Quantity-based self-sale unit list/session summary for Sales Pad re-auction.
  */
 @SuppressWarnings("common-java:DuplicatedBlocks")
-public class LotSummaryDTO implements Serializable {
+public class AuctionSelfSaleUnitDTO implements Serializable {
+
+    @JsonProperty("self_sale_unit_id")
+    private Long selfSaleUnitId;
 
     @JsonProperty("lot_id")
     private Long lotId;
@@ -36,22 +42,31 @@ public class LotSummaryDTO implements Serializable {
     @JsonProperty("vehicle_number")
     private String vehicleNumber;
 
-    @JsonProperty("was_modified")
-    private boolean wasModified;
+    @JsonProperty("self_sale_qty")
+    private Integer selfSaleQty;
+
+    @JsonProperty("remaining_qty")
+    private Integer remainingQty;
+
+    @JsonProperty("rate")
+    private BigDecimal rate;
+
+    @JsonProperty("amount")
+    private BigDecimal amount;
 
     @JsonProperty("status")
-    private String status;
+    private AuctionSelfSaleUnitStatus status;
 
-    @JsonProperty("sold_bags")
-    private Integer soldBags;
+    @JsonProperty("created_at")
+    private Instant createdAt;
 
-    /** Total bags for the whole vehicle (all sellers on same vehicle). For lot identifier: Vehicle QTY. */
-    @JsonProperty("vehicle_total_qty")
-    private Integer vehicleTotalQty;
+    public Long getSelfSaleUnitId() {
+        return selfSaleUnitId;
+    }
 
-    /** Total bags for this seller (all lots of that seller). For lot identifier: Seller QTY. */
-    @JsonProperty("seller_total_qty")
-    private Integer sellerTotalQty;
+    public void setSelfSaleUnitId(Long selfSaleUnitId) {
+        this.selfSaleUnitId = selfSaleUnitId;
+    }
 
     public Long getLotId() {
         return lotId;
@@ -125,45 +140,51 @@ public class LotSummaryDTO implements Serializable {
         this.vehicleNumber = vehicleNumber;
     }
 
-    public boolean isWasModified() {
-        return wasModified;
+    public Integer getSelfSaleQty() {
+        return selfSaleQty;
     }
 
-    public void setWasModified(boolean wasModified) {
-        this.wasModified = wasModified;
+    public void setSelfSaleQty(Integer selfSaleQty) {
+        this.selfSaleQty = selfSaleQty;
     }
 
-    public String getStatus() {
+    public Integer getRemainingQty() {
+        return remainingQty;
+    }
+
+    public void setRemainingQty(Integer remainingQty) {
+        this.remainingQty = remainingQty;
+    }
+
+    public BigDecimal getRate() {
+        return rate;
+    }
+
+    public void setRate(BigDecimal rate) {
+        this.rate = rate;
+    }
+
+    public BigDecimal getAmount() {
+        return amount;
+    }
+
+    public void setAmount(BigDecimal amount) {
+        this.amount = amount;
+    }
+
+    public AuctionSelfSaleUnitStatus getStatus() {
         return status;
     }
 
-    public void setStatus(String status) {
+    public void setStatus(AuctionSelfSaleUnitStatus status) {
         this.status = status;
     }
 
-    public Integer getSoldBags() {
-        return soldBags;
+    public Instant getCreatedAt() {
+        return createdAt;
     }
 
-    public void setSoldBags(Integer soldBags) {
-        this.soldBags = soldBags;
+    public void setCreatedAt(Instant createdAt) {
+        this.createdAt = createdAt;
     }
-
-    public Integer getVehicleTotalQty() {
-        return vehicleTotalQty;
-    }
-
-    public void setVehicleTotalQty(Integer vehicleTotalQty) {
-        this.vehicleTotalQty = vehicleTotalQty;
-    }
-
-    public Integer getSellerTotalQty() {
-        return sellerTotalQty;
-    }
-
-    public void setSellerTotalQty(Integer sellerTotalQty) {
-        this.sellerTotalQty = sellerTotalQty;
-    }
-
 }
-

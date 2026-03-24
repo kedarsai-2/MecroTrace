@@ -55,6 +55,7 @@ export interface AuctionSessionDTO {
   remaining_bags: number;
   highest_bid_rate: number;
   status: string;
+  self_sale_context?: AuctionSelfSaleContextDTO | null;
 }
 
 export interface AuctionBidCreateRequest {
@@ -109,7 +110,39 @@ export interface AuctionResultDTO {
   auctionDatetime?: string;
   conductedBy?: string;
   completedAt?: string;
+  selfSaleUnitId?: number | null;
   entries: AuctionResultEntryDTO[];
+}
+
+export interface AuctionSelfSaleContextDTO {
+  self_sale_unit_id: number;
+  rate: number;
+  quantity: number;
+  remaining_qty: number;
+  amount: number;
+  created_at?: string;
+  previous_completed_auction_id?: number;
+  previous_completed_at?: string;
+  previous_entries: AuctionResultEntryDTO[];
+}
+
+export interface AuctionSelfSaleUnitDTO {
+  self_sale_unit_id: number;
+  lot_id: number;
+  lot_name: string;
+  bag_count: number;
+  original_bag_count: number;
+  commodity_name: string;
+  seller_name: string;
+  seller_mark: string;
+  seller_vehicle_id: number;
+  vehicle_number: string;
+  self_sale_qty: number;
+  remaining_qty: number;
+  rate: number;
+  amount: number;
+  status: 'OPEN' | 'PARTIAL' | 'CLOSED';
+  created_at?: string;
 }
 
 export interface ListLotsParams {
@@ -176,6 +209,27 @@ export const auctionApi = {
     return res.json();
   },
 
+  async getOrStartSelfSaleSession(lotId: string | number): Promise<AuctionSessionDTO> {
+    const id = typeof lotId === 'string' ? lotId : String(lotId);
+    const res = await apiFetch(`${BASE}/self-sale-units/${encodeURIComponent(id)}/session`, { method: 'GET' });
+    if (!res.ok) {
+      if (res.status === 404) throw new Error('Self-sale unit not found');
+      await parseJsonOrThrow(res, 'Failed to get self-sale session');
+    }
+    return res.json();
+  },
+
+  async listSelfSaleUnits(params: ListLotsParams = {}): Promise<AuctionSelfSaleUnitDTO[]> {
+    const searchParams = new URLSearchParams();
+    if (params.page != null) searchParams.set('page', String(params.page));
+    if (params.size != null) searchParams.set('size', String(params.size));
+    if (params.sort) searchParams.set('sort', params.sort);
+    if (params.q) searchParams.set('q', params.q);
+    const res = await apiFetch(`${BASE}/self-sale-units?${searchParams.toString()}`, { method: 'GET' });
+    if (!res.ok) await parseJsonOrThrow(res, 'Failed to load self-sale units');
+    return res.json();
+  },
+
   async addBid(lotId: string | number, body: AuctionBidCreateRequest): Promise<AuctionSessionDTO> {
     const id = typeof lotId === 'string' ? lotId : String(lotId);
     const res = await apiFetch(`${BASE}/lots/${encodeURIComponent(id)}/session/bids`, {
@@ -227,6 +281,67 @@ export const auctionApi = {
     return res.json();
   },
 
+  async addSelfSaleBid(selfSaleUnitId: string | number, body: AuctionBidCreateRequest): Promise<AuctionSessionDTO> {
+    const id = typeof selfSaleUnitId === 'string' ? selfSaleUnitId : String(selfSaleUnitId);
+    const res = await apiFetch(`${BASE}/self-sale-units/${encodeURIComponent(id)}/session/bids`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+    if (res.status === 409) {
+      const err = new Error('Adding this bid exceeds self-sale quantity.') as Error & { isConflict?: boolean };
+      err.isConflict = true;
+      throw err;
+    }
+    if (!res.ok) {
+      if (res.status === 404) throw new Error('Self-sale unit or session not found');
+      await parseJsonOrThrow(res, 'Failed to add self-sale bid');
+    }
+    return res.json();
+  },
+
+  async updateSelfSaleBid(selfSaleUnitId: string | number, bidId: number, body: AuctionBidUpdateRequest): Promise<AuctionSessionDTO> {
+    const id = typeof selfSaleUnitId === 'string' ? selfSaleUnitId : String(selfSaleUnitId);
+    const res = await apiFetch(`${BASE}/self-sale-units/${encodeURIComponent(id)}/session/bids/${bidId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    });
+    if (res.status === 409) {
+      let message = 'Bid update conflict';
+      let field: string | undefined;
+      try {
+        const contentType = res.headers.get('content-type') || '';
+        if (contentType.includes('application/json') || contentType.includes('application/problem+json')) {
+          const errBody = await res.json();
+          if (errBody?.message) message = errBody.message;
+          else if (errBody?.detail) message = errBody.detail;
+          if (Array.isArray(errBody?.errors) && errBody.errors[0]?.field) field = errBody.errors[0].field;
+          else if (errBody?.field) field = errBody.field;
+        }
+      } catch {
+        // ignore
+      }
+      const err = new Error(message) as Error & { isConflict?: boolean; isStaleBid?: boolean };
+      if (field === 'stale_bid') err.isStaleBid = true;
+      else err.isConflict = true;
+      throw err;
+    }
+    if (!res.ok) {
+      if (res.status === 404) throw new Error('Self-sale bid or unit not found');
+      await parseJsonOrThrow(res, 'Failed to update self-sale bid');
+    }
+    return res.json();
+  },
+
+  async deleteSelfSaleBid(selfSaleUnitId: string | number, bidId: number): Promise<AuctionSessionDTO> {
+    const id = typeof selfSaleUnitId === 'string' ? selfSaleUnitId : String(selfSaleUnitId);
+    const res = await apiFetch(`${BASE}/self-sale-units/${encodeURIComponent(id)}/session/bids/${bidId}`, { method: 'DELETE' });
+    if (!res.ok) {
+      if (res.status === 404) throw new Error('Self-sale bid or unit not found');
+      await parseJsonOrThrow(res, 'Failed to delete self-sale bid');
+    }
+    return res.json();
+  },
+
   async deleteBid(lotId: string | number, bidId: number): Promise<AuctionSessionDTO> {
     const id = typeof lotId === 'string' ? lotId : String(lotId);
     const res = await apiFetch(`${BASE}/lots/${encodeURIComponent(id)}/session/bids/${bidId}`, { method: 'DELETE' });
@@ -244,6 +359,17 @@ export const auctionApi = {
     if (!res.ok) {
       if (res.status === 404) throw new Error('Lot not found');
       await parseJsonOrThrow(res, 'Failed to complete auction');
+    }
+    return res.json();
+  },
+
+  async completeSelfSaleAuction(selfSaleUnitId: string | number): Promise<AuctionResultDTO> {
+    const id = typeof selfSaleUnitId === 'string' ? selfSaleUnitId : String(selfSaleUnitId);
+    const res = await apiFetch(`${BASE}/self-sale-units/${encodeURIComponent(id)}/complete`, { method: 'POST' });
+    if (res.status === 409) throw new Error('Cannot complete: quantity conflict or no bids');
+    if (!res.ok) {
+      if (res.status === 404) throw new Error('Self-sale unit not found');
+      await parseJsonOrThrow(res, 'Failed to complete self-sale auction');
     }
     return res.json();
   },

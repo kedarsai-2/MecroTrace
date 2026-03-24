@@ -1,0 +1,105 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!--
+        Quantity-based self-sale units created from completed Auction Sales Pad self-sale entries.
+        Separate from the manual /self-sale module so re-auction can operate on partial quantities.
+    -->
+    <changeSet id="20260324130000-1" author="mercotrace">
+        <createTable tableName="auction_self_sale_unit">
+            <column name="id" type="bigint">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="trader_id" type="bigint">
+                <constraints nullable="false"/>
+            </column>
+            <column name="lot_id" type="bigint">
+                <constraints nullable="false"/>
+            </column>
+            <column name="source_auction_id" type="bigint">
+                <constraints nullable="false"/>
+            </column>
+            <column name="source_auction_entry_id" type="bigint">
+                <constraints nullable="false" unique="true" uniqueConstraintName="ux_auction_self_sale_unit_source_entry"/>
+            </column>
+            <column name="last_reauction_auction_id" type="bigint"/>
+            <column name="self_sale_qty" type="integer">
+                <constraints nullable="false"/>
+            </column>
+            <column name="remaining_qty" type="integer">
+                <constraints nullable="false"/>
+            </column>
+            <column name="rate" type="numeric(19,2)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="amount" type="numeric(19,2)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="status" type="varchar(20)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="created_at" type="${datetimeType}">
+                <constraints nullable="false"/>
+            </column>
+            <column name="closed_at" type="${datetimeType}"/>
+            <column name="created_by" type="varchar(50)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="created_date" type="${datetimeType}"/>
+            <column name="last_modified_by" type="varchar(50)"/>
+            <column name="last_modified_date" type="${datetimeType}"/>
+        </createTable>
+
+        <addForeignKeyConstraint
+            baseTableName="auction_self_sale_unit"
+            baseColumnNames="lot_id"
+            referencedTableName="lot"
+            referencedColumnNames="id"
+            constraintName="fk_assu_lot"
+        />
+        <addForeignKeyConstraint
+            baseTableName="auction_self_sale_unit"
+            baseColumnNames="source_auction_id"
+            referencedTableName="auction"
+            referencedColumnNames="id"
+            constraintName="fk_assu_source_auction"
+        />
+        <addForeignKeyConstraint
+            baseTableName="auction_self_sale_unit"
+            baseColumnNames="source_auction_entry_id"
+            referencedTableName="auction_entry"
+            referencedColumnNames="id"
+            constraintName="fk_assu_source_entry"
+        />
+        <addForeignKeyConstraint
+            baseTableName="auction_self_sale_unit"
+            baseColumnNames="last_reauction_auction_id"
+            referencedTableName="auction"
+            referencedColumnNames="id"
+            constraintName="fk_assu_last_reauction_auction"
+        />
+
+        <createIndex tableName="auction_self_sale_unit" indexName="idx_assu_trader_status">
+            <column name="trader_id"/>
+            <column name="status"/>
+        </createIndex>
+        <createIndex tableName="auction_self_sale_unit" indexName="idx_assu_lot">
+            <column name="lot_id"/>
+        </createIndex>
+        <createIndex tableName="auction_self_sale_unit" indexName="idx_assu_source_auction">
+            <column name="source_auction_id"/>
+        </createIndex>
+        <createIndex tableName="auction_self_sale_unit" indexName="idx_assu_created_at">
+            <column name="created_at"/>
+        </createIndex>
+
+        <sql>
+            ALTER TABLE auction_self_sale_unit
+            ADD CONSTRAINT chk_assu_qty_nonnegative
+            CHECK (self_sale_qty &gt; 0 AND remaining_qty &gt;= 0 AND remaining_qty &lt;= self_sale_qty);
+        </sql>
+    </changeSet>
+</databaseChangeLog>

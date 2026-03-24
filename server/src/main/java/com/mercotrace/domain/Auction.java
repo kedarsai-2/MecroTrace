@@ -3,8 +3,6 @@ package com.mercotrace.domain;
 import jakarta.persistence.*;
 import java.io.Serializable;
 import java.time.Instant;
-import org.hibernate.annotations.Cache;
-import org.hibernate.annotations.CacheConcurrencyStrategy;
 
 /**
  * Auction session header for a single lot.
@@ -13,7 +11,6 @@ import org.hibernate.annotations.CacheConcurrencyStrategy;
  */
 @Entity
 @Table(name = "auction")
-@Cache(usage = CacheConcurrencyStrategy.READ_WRITE)
 @SuppressWarnings("common-java:DuplicatedBlocks")
 public class Auction extends AbstractAuditingEntity<Long> implements Serializable {
 
@@ -30,6 +27,9 @@ public class Auction extends AbstractAuditingEntity<Long> implements Serializabl
 
     @Column(name = "lot_id", nullable = false)
     private Long lotId;
+
+    @Column(name = "self_sale_unit_id")
+    private Long selfSaleUnitId;
 
     @Column(name = "auction_datetime", nullable = false)
     private Instant auctionDatetime;
@@ -74,6 +74,14 @@ public class Auction extends AbstractAuditingEntity<Long> implements Serializabl
 
     public void setAuctionDatetime(Instant auctionDatetime) {
         this.auctionDatetime = auctionDatetime;
+    }
+
+    public Long getSelfSaleUnitId() {
+        return selfSaleUnitId;
+    }
+
+    public void setSelfSaleUnitId(Long selfSaleUnitId) {
+        this.selfSaleUnitId = selfSaleUnitId;
     }
 
     public String getConductedBy() {
@@ -122,6 +130,7 @@ public class Auction extends AbstractAuditingEntity<Long> implements Serializabl
             "id=" + getId() +
             ", traderId=" + getTraderId() +
             ", lotId=" + getLotId() +
+            ", selfSaleUnitId=" + getSelfSaleUnitId() +
             ", auctionDatetime='" + getAuctionDatetime() + "'" +
             ", conductedBy='" + getConductedBy() + "'" +
             ", completedAt='" + getCompletedAt() + "'" +
