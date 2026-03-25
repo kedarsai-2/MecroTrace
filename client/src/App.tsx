@@ -53,8 +53,6 @@ import ProfilePage from "./pages/ProfilePage";
 import ContactsPage from "./pages/ContactsPage";
 import ArrivalsPage from "./pages/ArrivalsPage";
 import ScribblePadPage from "./pages/ScribblePadPage";
-import WeighingPage from "./pages/WeighingPage";
-import WritersPadPage from "./pages/WritersPadPage";
 import LogisticsPage from "./pages/LogisticsPage";
 import SettlementPage from "./pages/SettlementPage";
 import BillingPage from "./pages/BillingPage";
@@ -148,8 +146,6 @@ const router = createBrowserRouter(
         <Route path="/arrivals" element={<ArrivalsPage />} />
         <Route path="/scribble-pad" element={<ScribblePadPage />} />
         <Route path="/logistics" element={<LogisticsPage />} />
-        <Route path="/weighing" element={<WeighingPage />} />
-        <Route path="/writers-pad" element={<WritersPadPage />} />
         <Route path="/settlement" element={<SettlementPage />} />
         <Route path="/billing" element={<BillingPage />} />
         <Route path="/accounting" element={<AccountingPage />} />

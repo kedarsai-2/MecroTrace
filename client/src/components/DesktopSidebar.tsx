@@ -31,8 +31,6 @@ const navSections = [
       { icon: Settings, title: 'Commodity Settings', path: '/commodity-settings' },
       { icon: Truck, title: 'Arrivals', path: '/arrivals' },
       { icon: Gavel, title: 'Auctions / Sales', path: '/auctions' },
-      { icon: Scale, title: 'Weighing', path: '/weighing' },
-      { icon: FileText, title: "Writer's Pad", path: '/writers-pad' },
       { icon: Printer, title: 'Print Hub', path: '/logistics' },
     ],
   },
