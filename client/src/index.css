@@ -160,10 +160,13 @@
     overflow-x: hidden;
   }
 
-  /* Trader app: centered max-width on tablet, full-width on desktop (sidebar layout) */
+  /* Trader app: centered max-width on tablet, full-width on desktop (sidebar layout).
+     Allow horizontal overflow so scaled/zoomed page content is never clipped at the right edge. */
   #root.is-trader-app {
     max-width: 56rem;
     margin: 0 auto;
+    /* Horizontal scroll when zoom/font scaling widens content; base #root used overflow-x: hidden */
+    overflow-x: auto;
   }
 
   @media (min-width: 57rem) and (max-width: 1023px) {
@@ -357,6 +360,63 @@
   }
   .watermark-strong {
     color: var(--watermark-color-strong);
+  }
+
+  /**
+   * Arrivals “Sellers & lots” internal scrollers: `overflow-y-auto` hides scrollbars until
+   * content overflows; on webkit/macOS they stay overlay-only. Stable gutter + styled track
+   * makes the scroll affordance visible even with one lot (horizontal row uses `.lot-fields-x-scroll`).
+   */
+  .lots-scroll-panel {
+    scrollbar-gutter: stable;
+    scrollbar-color: hsl(220 15% 58% / 0.95) hsl(220 20% 90% / 0.5);
+  }
+  .dark .lots-scroll-panel {
+    scrollbar-color: hsl(220 12% 48% / 0.95) hsl(220 25% 16% / 0.55);
+  }
+  .lots-scroll-panel::-webkit-scrollbar {
+    width: 8px;
+  }
+  .lots-scroll-panel::-webkit-scrollbar-thumb {
+    background-color: hsl(220 15% 68% / 0.9);
+    border-radius: 9999px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
+  .dark .lots-scroll-panel::-webkit-scrollbar-thumb {
+    background-color: hsl(220 12% 48% / 0.95);
+  }
+  .lots-scroll-panel::-webkit-scrollbar-track {
+    background: hsl(220 20% 90% / 0.55);
+    border-radius: 9999px;
+  }
+  .dark .lots-scroll-panel::-webkit-scrollbar-track {
+    background: hsl(220 25% 16% / 0.55);
+  }
+
+  .lot-fields-x-scroll {
+    scrollbar-gutter: stable;
+    scrollbar-color: hsl(220 15% 58% / 0.95) hsl(220 20% 90% / 0.45);
+  }
+  .dark .lot-fields-x-scroll {
+    scrollbar-color: hsl(220 12% 48% / 0.95) hsl(220 25% 16% / 0.45);
+  }
+  .lot-fields-x-scroll::-webkit-scrollbar {
+    height: 7px;
+  }
+  .lot-fields-x-scroll::-webkit-scrollbar-thumb {
+    background-color: hsl(220 15% 68% / 0.9);
+    border-radius: 9999px;
+  }
+  .dark .lot-fields-x-scroll::-webkit-scrollbar-thumb {
+    background-color: hsl(220 12% 48% / 0.95);
+  }
+  .lot-fields-x-scroll::-webkit-scrollbar-track {
+    background: hsl(220 20% 90% / 0.45);
+    border-radius: 9999px;
+  }
+  .dark .lot-fields-x-scroll::-webkit-scrollbar-track {
+    background: hsl(220 25% 16% / 0.45);
   }
 }
 

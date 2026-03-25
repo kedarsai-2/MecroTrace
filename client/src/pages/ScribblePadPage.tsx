@@ -8,6 +8,7 @@ import BottomNav from '@/components/BottomNav';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import useUnsavedChangesGuard from '@/hooks/useUnsavedChangesGuard';
+import { ConfirmDeleteDialog } from '@/components/ConfirmDeleteDialog';
 
 interface Stroke {
   xs: number[];
@@ -55,6 +56,7 @@ const ScribblePadPage = () => {
   const [candidates, setCandidates] = useState<string[]>([]);
   const [drawingPreview, setDrawingPreview] = useState<string | null>(null);
   const [entries, setEntries] = useState<ScribbleEntry[]>([]);
+  const [pendingRemoveEntry, setPendingRemoveEntry] = useState<{ id: string; label: string } | null>(null);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const isDrawing = useRef(false);
@@ -378,7 +380,7 @@ const ScribblePadPage = () => {
                     <p className="text-sm font-bold text-foreground">[{entry.initials}]</p>
                     <p className="text-xs text-muted-foreground">{entry.quantity} bags · {new Date(entry.createdAt).toLocaleTimeString()}</p>
                   </div>
-                  <button onClick={() => removeEntry(entry.id)} className="p-1.5 rounded-md bg-destructive/10 text-destructive hover:bg-destructive/20 transition-colors">
+                  <button onClick={() => setPendingRemoveEntry({ id: entry.id, label: `[${entry.initials}] × ${entry.quantity} bags` })} className="p-1.5 rounded-md bg-destructive/10 text-destructive hover:bg-destructive/20 transition-colors">
                     <Trash2 className="w-3.5 h-3.5" />
                   </button>
                 </motion.div>
@@ -389,6 +391,15 @@ const ScribblePadPage = () => {
       </div>
 
       <BottomNav />
+
+      <ConfirmDeleteDialog
+        open={!!pendingRemoveEntry}
+        onOpenChange={(v) => { if (!v) setPendingRemoveEntry(null); }}
+        title="Remove entry?"
+        description={pendingRemoveEntry ? `Remove "${pendingRemoveEntry.label}" from the scribble pad?` : ''}
+        confirmLabel="Remove"
+        onConfirm={() => pendingRemoveEntry && removeEntry(pendingRemoveEntry.id)}
+      />
     </div>
   );
 };

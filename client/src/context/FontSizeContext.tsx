@@ -2,7 +2,8 @@ import React, { createContext, useContext, useState, useCallback } from 'react';
 
 type FontSizeLevel = 0 | 1 | 2;
 const LABELS: Record<FontSizeLevel, string> = { 0: 'Default', 1: 'Large', 2: 'Extra Large' };
-const SCALE: Record<FontSizeLevel, number> = { 0: 1, 1: 1.15, 2: 1.3 };
+/** Readable steps without oversized UI or layout blowout when applied app-wide */
+const SCALE: Record<FontSizeLevel, number> = { 0: 1, 1: 1.08, 2: 1.16 };
 
 type FontSizeContextType = {
   level: FontSizeLevel;

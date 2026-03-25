@@ -16,8 +16,10 @@ type UseUnsavedChangesGuardOptions = {
   when: boolean;
   title?: string;
   description?: string;
-  continueLabel?: string; // yes
-  stayLabel?: string; // no
+  continueLabel?: string;
+  stayLabel?: string;
+  /** Async callback invoked before proceeding. Return false to abort navigation. */
+  onBeforeContinue?: () => Promise<boolean>;
 };
 
 const DEFAULT_TITLE = "Progress will be lost";
@@ -31,20 +33,20 @@ export default function useUnsavedChangesGuard(options: UseUnsavedChangesGuardOp
     description = DEFAULT_DESCRIPTION,
     continueLabel = "Yes",
     stayLabel = "No",
+    onBeforeContinue,
   } = options;
 
   const blocker = useBlocker(when);
 
   const [localResolver, setLocalResolver] = React.useState<((value: boolean) => void) | null>(null);
+  const [saving, setSaving] = React.useState(false);
 
-  // Keep the dialog open if we're blocked for a route navigation.
   const isRouteBlocked = blocker.state === "blocked";
   const isOpen = isRouteBlocked || localResolver != null;
 
   const beforeUnloadCallback = React.useCallback(
     (event: BeforeUnloadEvent) => {
       if (!when) return;
-      // Native browser confirmation prompt (cannot be styled).
       event.preventDefault();
       event.returnValue = "";
     },
@@ -72,15 +74,28 @@ export default function useUnsavedChangesGuard(options: UseUnsavedChangesGuardOp
     else resolveLocal(false);
   }, [isRouteBlocked, blocker, resolveLocal]);
 
-  const handleContinue = React.useCallback(() => {
+  const handleContinue = React.useCallback(async () => {
+    if (onBeforeContinue) {
+      setSaving(true);
+      try {
+        const ok = await onBeforeContinue();
+        if (!ok) {
+          setSaving(false);
+          return;
+        }
+      } catch {
+        setSaving(false);
+        return;
+      }
+      setSaving(false);
+    }
     if (isRouteBlocked) blocker.proceed();
     else resolveLocal(true);
-  }, [isRouteBlocked, blocker, resolveLocal]);
+  }, [isRouteBlocked, blocker, resolveLocal, onBeforeContinue]);
 
   const handleOpenChange = React.useCallback(
     (nextOpen: boolean) => {
       if (nextOpen) return;
-      // Treat dismissals (Escape / overlay dismissal) as "stay".
       handleStay();
     },
     [handleStay],
@@ -95,14 +110,15 @@ export default function useUnsavedChangesGuard(options: UseUnsavedChangesGuardOp
             <AlertDialogDescription>{description}</AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel onClick={handleStay}>{stayLabel}</AlertDialogCancel>
-            <AlertDialogAction onClick={handleContinue}>{continueLabel}</AlertDialogAction>
+            <AlertDialogCancel onClick={handleStay} disabled={saving}>{stayLabel}</AlertDialogCancel>
+            <AlertDialogAction onClick={handleContinue} disabled={saving}>
+              {saving ? 'Saving…' : continueLabel}
+            </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
     );
-  }, [isOpen, handleOpenChange, title, description, stayLabel, continueLabel, handleStay, handleContinue]);
+  }, [isOpen, handleOpenChange, title, description, stayLabel, continueLabel, handleStay, handleContinue, saving]);
 
   return { confirmIfDirty, UnsavedChangesDialog };
 }
-

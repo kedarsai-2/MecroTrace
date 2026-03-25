@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <changeSet id="20260325120000-1" author="mercotrace">
+        <addColumn tableName="vehicle">
+            <column name="multi_seller" type="boolean" defaultValueBoolean="true">
+                <constraints nullable="false"/>
+            </column>
+        </addColumn>
+        <!-- Legacy single-seller flow stores vehicle_number as SINGLE-SELLER -->
+        <sql dbms="postgresql">
+            UPDATE vehicle SET multi_seller = false
+            WHERE UPPER(TRIM(COALESCE(vehicle_number, ''))) = 'SINGLE-SELLER';
+        </sql>
+    </changeSet>
+
+</databaseChangeLog>

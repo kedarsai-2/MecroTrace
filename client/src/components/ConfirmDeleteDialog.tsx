@@ -1,4 +1,5 @@
-import { Trash2 } from 'lucide-react';
+import { useState } from 'react';
+import { Trash2, Loader2 } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 
@@ -9,7 +10,7 @@ interface ConfirmDeleteDialogProps {
   description?: string;
   confirmLabel?: string;
   cancelLabel?: string;
-  onConfirm: () => void;
+  onConfirm: () => void | Promise<void>;
 }
 
 export function ConfirmDeleteDialog({
@@ -21,8 +22,20 @@ export function ConfirmDeleteDialog({
   cancelLabel = 'Cancel',
   onConfirm,
 }: ConfirmDeleteDialogProps) {
+  const [loading, setLoading] = useState(false);
+
+  const handleConfirm = async () => {
+    setLoading(true);
+    try {
+      await onConfirm();
+    } finally {
+      setLoading(false);
+      onOpenChange(false);
+    }
+  };
+
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={(v) => { if (!loading) onOpenChange(v); }}>
       <DialogContent className="max-w-sm">
         <DialogHeader>
           <div className="flex items-center gap-3">
@@ -36,15 +49,11 @@ export function ConfirmDeleteDialog({
           {description}
         </p>
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={loading}>
             {cancelLabel}
           </Button>
-          <Button
-            variant="destructive"
-            onClick={() => {
-              onConfirm();
-            }}
-          >
+          <Button variant="destructive" onClick={handleConfirm} disabled={loading}>
+            {loading && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
             {confirmLabel}
           </Button>
         </DialogFooter>

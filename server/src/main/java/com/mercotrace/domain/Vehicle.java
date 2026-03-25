@@ -26,7 +26,8 @@ public class Vehicle extends AbstractAuditingEntity<Long> implements Serializabl
     @Column(name = "trader_id")
     private Long traderId;
 
-    @Column(name = "vehicle_number", length = 50, nullable = false)
+    // Allow null/blank vehicle numbers for draft-style submissions and for multi-seller mode.
+    @Column(name = "vehicle_number", length = 50, nullable = true)
     private String vehicleNumber;
 
     @Column(name = "arrival_datetime", nullable = false)
@@ -52,6 +53,13 @@ public class Vehicle extends AbstractAuditingEntity<Long> implements Serializabl
 
     @Column(name = "narration", length = 500)
     private String narration;
+
+    @Column(name = "partially_completed", nullable = false)
+    private Boolean partiallyCompleted = false;
+
+    /** When true, UI/API treat arrival as multi-seller (vehicle plate, multiple sellers). Persisted so drafts resume correctly. */
+    @Column(name = "multi_seller", nullable = false)
+    private Boolean multiSeller = true;
 
     // jhipster-needle-entity-add-field - JHipster will add fields here
 
@@ -142,6 +150,22 @@ public class Vehicle extends AbstractAuditingEntity<Long> implements Serializabl
 
     public void setNarration(String narration) {
         this.narration = narration;
+    }
+
+    public Boolean getPartiallyCompleted() {
+        return partiallyCompleted;
+    }
+
+    public void setPartiallyCompleted(Boolean partiallyCompleted) {
+        this.partiallyCompleted = partiallyCompleted;
+    }
+
+    public Boolean getMultiSeller() {
+        return multiSeller;
+    }
+
+    public void setMultiSeller(Boolean multiSeller) {
+        this.multiSeller = multiSeller;
     }
 
     // jhipster-needle-entity-add-getters-setters - JHipster will add getters and setters here

@@ -18,6 +18,7 @@ import type { Contact } from '@/types/models';
 import { toast } from 'sonner';
 import ForbiddenPage from '@/components/ForbiddenPage';
 import { usePermissions } from '@/lib/permissions';
+import { ConfirmDeleteDialog } from '@/components/ConfirmDeleteDialog';
 
 function apiToRecord(dto: CDNResponseDTO): CDNRecord {
   return {
@@ -97,6 +98,7 @@ const CDNPage = () => {
   const [receivePin, setReceivePin] = useState('');
 
   const [loading, setLoading] = useState(true);
+  const [pendingRemoveCdnItem, setPendingRemoveCdnItem] = useState<string | null>(null);
 
   useEffect(() => {
     contactApi.list().then(setContacts);
@@ -408,7 +410,7 @@ const CDNPage = () => {
                       <Input placeholder="Variant" value={item.variant} onChange={e => setItems(prev => prev.map(i => i.id === item.id ? { ...i, variant: e.target.value } : i))}
                         className="h-9 text-xs" />
                     </div>
-                    <button onClick={() => removeItem(item.id)} className="col-span-1 text-destructive flex items-center justify-center">
+                    <button onClick={() => setPendingRemoveCdnItem(item.id)} className="col-span-1 text-destructive flex items-center justify-center">
                       <Trash2 className="w-3.5 h-3.5" />
                     </button>
                   </div>
@@ -547,6 +549,15 @@ const CDNPage = () => {
       </Dialog>
 
       <BottomNav />
+
+      <ConfirmDeleteDialog
+        open={!!pendingRemoveCdnItem}
+        onOpenChange={(v) => { if (!v) setPendingRemoveCdnItem(null); }}
+        title="Remove item?"
+        description="Remove this lot/item from the CDN form?"
+        confirmLabel="Remove"
+        onConfirm={() => pendingRemoveCdnItem && removeItem(pendingRemoveCdnItem)}
+      />
     </div>
   );
 };

@@ -100,6 +100,11 @@ const CommoditySettings = () => {
   const [newCommodityName, setNewCommodityName] = useState('');
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const [restorePendingName, setRestorePendingName] = useState<string | null>(null);
+  type InlineRemove =
+    | { kind: 'deduction'; cIndex: number; ruleIndex: number }
+    | { kind: 'hamali'; cIndex: number; slabIndex: number }
+    | { kind: 'charge'; cIndex: number; chargeIndex: number };
+  const [pendingInlineRemove, setPendingInlineRemove] = useState<InlineRemove | null>(null);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
   const baselineSnapshotRef = useRef<string | null>(null);
 
@@ -899,7 +904,7 @@ const CommoditySettings = () => {
                                 const rules = [...item.deductionRules]; rules[ri] = { ...rules[ri], deduction_value: e.target.value };
                                 updateItem(index, { deductionRules: rules });
                               }} className="h-11 rounded-xl bg-white dark:bg-white/10 border-2 border-amber-200 dark:border-amber-700/50 text-sm flex-1 focus:border-amber-500" min={0} step={0.1} />
-                              <button onClick={() => removeDeductionRule(index, ri)} className="text-red-500 hover:text-red-600 shrink-0"><Trash2 className="w-4 h-4" /></button>
+                              <button onClick={() => setPendingInlineRemove({ kind: 'deduction', cIndex: index, ruleIndex: ri })} className="text-red-500 hover:text-red-600 shrink-0"><Trash2 className="w-4 h-4" /></button>
                             </div>
                           ))}
                           {item.deductionRules.length === 0 && <p className="text-xs text-amber-600/60 text-center py-3 italic">No deduction rules yet. Tap + to add one.</p>}
@@ -973,7 +978,7 @@ const CommoditySettings = () => {
                                   const slabs = [...item.hamaliSlabs]; slabs[si] = { ...slabs[si], per_kg_rate: e.target.value };
                                   updateItem(index, { hamaliSlabs: slabs });
                                 }} className="h-11 rounded-xl bg-white dark:bg-white/10 border-2 border-pink-200 dark:border-pink-700/50 text-sm flex-1 focus:border-pink-500" min={0} step={0.1} />
-                                <button onClick={() => removeHamaliSlab(index, si)} className="text-red-500 hover:text-red-600 shrink-0"><Trash2 className="w-4 h-4" /></button>
+                                <button onClick={() => setPendingInlineRemove({ kind: 'hamali', cIndex: index, slabIndex: si })} className="text-red-500 hover:text-red-600 shrink-0"><Trash2 className="w-4 h-4" /></button>
                               </div>
                             ))}
                             {item.hamaliSlabs.length === 0 && <p className="text-xs text-pink-600/60 text-center py-3 italic">No unloading slabs yet. Tap + to add one.</p>}
@@ -1062,7 +1067,7 @@ const CommoditySettings = () => {
                                 />
                               </div>
                               <button
-                                onClick={() => removeCharge(index, ci)}
+                                onClick={() => setPendingInlineRemove({ kind: 'charge', cIndex: index, chargeIndex: ci })}
                                 className="mt-5 text-red-500 hover:text-red-600 shrink-0"
                                 title="Remove charge"
                               >
@@ -1204,6 +1209,24 @@ const CommoditySettings = () => {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <ConfirmDeleteDialog
+        open={!!pendingInlineRemove}
+        onOpenChange={(v) => { if (!v) setPendingInlineRemove(null); }}
+        title={
+          pendingInlineRemove?.kind === 'deduction' ? 'Remove deduction rule?'
+          : pendingInlineRemove?.kind === 'hamali' ? 'Remove hamali slab?'
+          : 'Remove charge?'
+        }
+        description="Remove this row from the commodity settings?"
+        confirmLabel="Remove"
+        onConfirm={() => {
+          if (!pendingInlineRemove) return;
+          if (pendingInlineRemove.kind === 'deduction') removeDeductionRule(pendingInlineRemove.cIndex, pendingInlineRemove.ruleIndex);
+          else if (pendingInlineRemove.kind === 'hamali') removeHamaliSlab(pendingInlineRemove.cIndex, pendingInlineRemove.slabIndex);
+          else removeCharge(pendingInlineRemove.cIndex, pendingInlineRemove.chargeIndex);
+        }}
+      />
 
       <BottomNav />
     </div>

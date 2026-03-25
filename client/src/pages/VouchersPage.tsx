@@ -12,6 +12,7 @@ import ForbiddenPage from '@/components/ForbiddenPage';
 import { usePermissions } from '@/lib/permissions';
 import BottomNav from '@/components/BottomNav';
 import { useDesktopMode } from '@/hooks/use-desktop';
+import { ConfirmDeleteDialog } from '@/components/ConfirmDeleteDialog';
 
 const AMOUNT_MAX = 1_000_000;
 const NARRATION_MIN_LEN = 2;
@@ -54,6 +55,7 @@ const VouchersPage = () => {
   const [loadingVouchers, setLoadingVouchers] = useState(true);
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [loadingLedgers, setLoadingLedgers] = useState(false);
+  const [pendingRemoveLine, setPendingRemoveLine] = useState<number | null>(null);
 
   // Load Chart of Accounts only when Create Voucher sheet is opened (for ledger dropdown)
   useEffect(() => {
@@ -534,7 +536,7 @@ const VouchersPage = () => {
                       </select>
                       <input type="number" value={line.debit} onChange={e => { const nl = [...lines]; nl[i].debit = e.target.value; if (e.target.value) nl[i].credit = ''; setLines(nl); }} placeholder="Dr" className="w-20 px-2 py-2.5 rounded-xl bg-muted text-foreground text-xs border border-border outline-none text-right" />
                       <input type="number" value={line.credit} onChange={e => { const nl = [...lines]; nl[i].credit = e.target.value; if (e.target.value) nl[i].debit = ''; setLines(nl); }} placeholder="Cr" className="w-20 px-2 py-2.5 rounded-xl bg-muted text-foreground text-xs border border-border outline-none text-right" />
-                      {lines.length > 2 && <button onClick={() => removeLine(i)} className="text-destructive"><X className="w-4 h-4" /></button>}
+                      {lines.length > 2 && <button onClick={() => setPendingRemoveLine(i)} className="text-destructive"><X className="w-4 h-4" /></button>}
                     </div>
                   ))}
                 </div>
@@ -558,6 +560,15 @@ const VouchersPage = () => {
       </AnimatePresence>
 
       {!isDesktop && <BottomNav />}
+
+      <ConfirmDeleteDialog
+        open={pendingRemoveLine !== null}
+        onOpenChange={(v) => { if (!v) setPendingRemoveLine(null); }}
+        title="Remove line?"
+        description="Remove this journal line from the voucher form?"
+        confirmLabel="Remove"
+        onConfirm={() => { if (pendingRemoveLine !== null) removeLine(pendingRemoveLine); }}
+      />
     </div>
   );
 };
