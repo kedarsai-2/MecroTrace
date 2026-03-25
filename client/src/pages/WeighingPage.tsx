@@ -446,8 +446,8 @@ const WeighingPage = () => {
                 // backend optional
               }
               const totalW = completedSession.bagWeights.reduce((s, b) => s + b.weight, 0);
-              directPrint(generateWeighingSlipPrintHTML(completedSession, totalW));
-              toast.success('Weighing slip sent to printer!');
+              const ok = await directPrint(generateWeighingSlipPrintHTML(completedSession, totalW), { mode: "system" });
+              ok ? toast.success('Weighing slip sent to printer!') : toast.error('Printer not connected.');
             }}
               className="flex-1 h-12 rounded-xl bg-gradient-to-r from-slate-600 to-slate-800 text-white font-bold shadow-lg">
               <Printer className="w-5 h-5 mr-2" /> Print Slip

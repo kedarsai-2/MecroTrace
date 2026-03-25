@@ -1,5 +1,25 @@
+import { Capacitor, registerPlugin } from "@capacitor/core";
+
 // ── Print Templates for Print Hub ──────────────────────────
 // REQ-LOG-002: All print formats per SRS (same format as client_origin)
+
+type MercoPrinterPlugin = {
+  printHtml(options: {
+    html: string;
+    thermalText?: string;
+    mode?: "auto" | "system" | "thermal";
+    deviceMac?: string;
+    jobName?: string;
+  }): Promise<{ ok?: boolean }>;
+  listPrinters(): Promise<{ printers: { mac: string; name: string }[] }>;
+  requestBluetoothPermissions(): Promise<{ granted: boolean }>;
+};
+
+const mercoPrinter = registerPlugin<MercoPrinterPlugin>("MercoPrinter");
+
+type PrintMode = "auto" | "system" | "thermal";
+
+const BOUND_PRINTER_MAC_KEY = "merco.boundBluetoothPrinterMac";
 
 export interface BidInfo {
   bidNumber: number;
@@ -22,6 +42,9 @@ export interface BidInfo {
   godown?: string;
   weight?: number;
 }
+
+type ThermalPayload = { html: string; thermalText: string };
+type PrintPayload = string | ThermalPayload;
 
 // ── Helpers ───────────────────────────────────────────────
 function lotDisplay(bid: BidInfo): string {
@@ -66,28 +89,148 @@ function firmHeader(): string {
   </div>`;
 }
 
+// Thermal ESC/POS helpers
+const THERMAL_CHARS_PER_LINE = 48; // matches EscPosPrinter(..., 48)
+function clampThermalText(s: string, maxLen: number): string {
+  const str = String(s ?? "");
+  if (str.length <= maxLen) return str;
+  return str.slice(0, Math.max(0, maxLen - 1)) + ".";
+}
+function padThermalLeft(s: string, width: number): string {
+  const str = String(s ?? "");
+  if (str.length >= width) return str;
+  return " ".repeat(width - str.length) + str;
+}
+function padThermalRight(s: string, width: number): string {
+  const str = String(s ?? "");
+  if (str.length >= width) return str;
+  return str + " ".repeat(width - str.length);
+}
+function centerThermal(s: string, width: number = THERMAL_CHARS_PER_LINE): string {
+  const str = String(s ?? "").trim();
+  if (str.length >= width) return str.slice(0, width);
+  const total = width - str.length;
+  const left = Math.floor(total / 2);
+  const right = total - left;
+  return " ".repeat(left) + str + " ".repeat(right);
+}
+function escposBold(s: string): string {
+  return `<b>${s}</b>`;
+}
+function escapeThermalPrice(s: string): string {
+  // Keep the rupee symbol to match desktop output text.
+  return String(s);
+}
+
 // ── Direct Print Engine ──────────────────────────────────
-export function directPrint(html: string): boolean {
-  const printFrame = document.createElement('iframe');
-  printFrame.style.cssText = 'position:fixed;top:-10000px;left:-10000px;width:0;height:0';
-  document.body.appendChild(printFrame);
-  const frameDoc = printFrame.contentDocument || printFrame.contentWindow?.document;
-  if (!frameDoc) {
-    document.body.removeChild(printFrame);
+export async function directPrint(
+  payload: PrintPayload,
+  options?: { mode?: PrintMode; deviceMac?: string }
+): Promise<boolean> {
+  const html = typeof payload === "string" ? payload : payload.html;
+  const thermalText = typeof payload === "string" ? undefined : payload.thermalText;
+  const isAndroidNative = Capacitor.isNativePlatform() && Capacitor.getPlatform() === "android";
+
+  const mode: PrintMode = options?.mode ?? "system";
+  const deviceMac = options?.deviceMac ?? getBoundPrinterMac();
+
+  // 1) Android native attempt
+  if (isAndroidNative) {
+    try {
+      await Promise.race([
+        mercoPrinter.printHtml({
+          html,
+          thermalText,
+          mode,
+          deviceMac,
+          jobName: "MercoPrint",
+        }),
+        new Promise<never>((_resolve, reject) => {
+          window.setTimeout(() => reject(new Error("Native print timeout")), 12000);
+        }),
+      ]);
+      return true;
+    } catch {
+      // If native plugin is not available/registered on this build/device,
+      // fall back to iframe printing.
+    }
+  }
+
+  // 2) Desktop / web (and Android fallback): open an offscreen iframe and trigger print()
+  return directPrintViaIframe(html);
+}
+
+function getBoundPrinterMac(): string | undefined {
+  if (!Capacitor.isNativePlatform() || Capacitor.getPlatform() !== "android") return undefined;
+  try {
+    const v = window.localStorage.getItem(BOUND_PRINTER_MAC_KEY);
+    return v ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function directPrintViaIframe(html: string): Promise<boolean> {
+  try {
+    const printFrame = document.createElement("iframe");
+    // Use a real size (not 0x0) to help Android WebView render/print reliably.
+    printFrame.style.cssText =
+      "position:fixed;top:-10000px;left:-10000px;width:800px;height:600px;opacity:0;pointer-events:none;border:0;";
+    document.body.appendChild(printFrame);
+
+    const cleanup = () => {
+      try {
+        document.body.removeChild(printFrame);
+      } catch {
+        // ignore
+      }
+    };
+
+    // Prefer `srcdoc` so the iframe actually loads content before printing.
+    // (Some WebViews fail if we rely only on `contentDocument` immediately.)
+    printFrame.srcdoc = html;
+
+    const timeoutMs = 8000;
+    const startedAt = Date.now();
+
+    return await new Promise<boolean>((resolve) => {
+      let settled = false;
+
+      const finish = (ok: boolean) => {
+        if (settled) return;
+        settled = true;
+        // Give WebView a moment to hand off the print job to Android.
+        if (ok) {
+          window.setTimeout(() => cleanup(), 1500);
+        } else {
+          cleanup();
+        }
+        resolve(ok);
+      };
+
+      printFrame.onload = () => {
+        setTimeout(() => {
+          try {
+            printFrame.contentWindow?.focus();
+            printFrame.contentWindow?.print();
+            finish(true);
+          } catch {
+            finish(false);
+          }
+        }, 250);
+      };
+
+      const timer = window.setTimeout(() => {
+        if (Date.now() - startedAt >= timeoutMs) {
+          // If load never happened, printing likely can't be triggered.
+          finish(false);
+        }
+        window.clearTimeout(timer);
+      }, timeoutMs);
+    });
+  } catch {
     return false;
   }
-  frameDoc.open();
-  frameDoc.write(html);
-  frameDoc.close();
-  setTimeout(() => {
-    try {
-      printFrame.contentWindow?.print();
-    } catch {
-      // ignore
-    }
-    setTimeout(() => document.body.removeChild(printFrame), 1000);
-  }, 300);
-  return true;
 }
 
 // ── 1. Sales Sticker (Thermal Adhesive, Landscape) ──────
@@ -125,6 +268,169 @@ export function generateSalesSticker(bid: BidInfo): string {
       </div>
     </div>
   </body></html>`;
+}
+
+// ── Thermal (ESC/POS) Templates ───────────────────────────
+export function generateSalesStickerThermal(bid: BidInfo): string {
+  const commodity = (bid.commodityName && bid.commodityName.trim()) ? bid.commodityName.trim() : "—";
+  const lot = lotDisplay(bid);
+  const dateStr = todayStr();
+  const col = 24; // 48/2
+  const row = (a: string, b: string) => padThermalRight(clampThermalText(a, col), col) + padThermalRight(clampThermalText(b, col), col);
+
+  return [
+    "[C]" + escposBold("MERCOTRACE"),
+    "[C]" + escposBold(String(bid.sellerName ?? "")),
+    "[C]" + clampThermalText(String(bid.origin ?? "—"), THERMAL_CHARS_PER_LINE),
+    "[C]" + escposBold(clampThermalText(lot, THERMAL_CHARS_PER_LINE)),
+    "[C]" + escposBold(`[${String(bid.buyerMark ?? "").trim()}]`),
+    "",
+    "[L]" + row(`Sl No ${bid.sellerSerial}`, `${bid.quantity} bags`),
+    "[L]" + row(`Godown ${bid.godown || "—"}`, `V No ${bid.vehicleNumber}`),
+    "[L]" + row(`Commodity ${commodity}`, `Date ${dateStr}`),
+    "",
+  ].join("\n");
+}
+
+export function generateBuyerChitiThermal(
+  buyerName: string,
+  buyerMark: string,
+  bids: BidInfo[],
+  stage: "post-auction" | "post-weighing" = "post-auction"
+): string {
+  const totalQty = bids.reduce((s, b) => s + b.quantity, 0);
+  const totalAmt = bids.reduce((s, b) => s + b.quantity * b.rate, 0);
+
+  // Column widths sum to 48 (approximation for thermal alignment)
+  const wLot = 15;
+  const wGdwn = 8;
+  const wQty = 4;
+  const wMark = 8;
+  const wRate = 8;
+  const wWt = stage === "post-weighing" ? 5 : 0;
+
+  const pad = (s: string, w: number) => padThermalRight(clampThermalText(s, w), w);
+  const lineLR = (left: string, right: string) => {
+    const l = String(left ?? "");
+    const r = String(right ?? "");
+    const rClamped = clampThermalText(r, THERMAL_CHARS_PER_LINE);
+    const lClamped = clampThermalText(l, THERMAL_CHARS_PER_LINE);
+    if (rClamped.length >= THERMAL_CHARS_PER_LINE) return rClamped.slice(0, THERMAL_CHARS_PER_LINE);
+    const available = THERMAL_CHARS_PER_LINE - rClamped.length;
+    const lPart = lClamped.length > available ? lClamped.slice(0, Math.max(0, available)) : lClamped;
+    const spaces = Math.max(1, available - lPart.length);
+    return lPart + " ".repeat(spaces) + rClamped;
+  };
+
+  const header = [
+    "[C]Mercotrace",
+    "[C]" + clampThermalText(buyerName, THERMAL_CHARS_PER_LINE),
+    "[C]" + escposBold(`[${String(buyerMark ?? "").trim()}]`),
+    "",
+    "[L]" + pad("Lot", wLot) + pad("Gdwn", wGdwn) + pad("Qty", wQty) + pad("Mark", wMark) + pad("Rate", wRate) + (stage === "post-weighing" ? pad("Wt", wWt) : ""),
+  ].join("\n");
+
+  const rows = bids
+    .map((b) => {
+      const lot = lotDisplay(b);
+      const rateTxt = escapeThermalPrice(`₹${b.rate}`);
+      const wtTxt = stage === "post-weighing" ? `${b.weight ?? "—"} kg` : "";
+
+      const line1 =
+        pad(lot, wLot) +
+        pad(b.godown || "—", wGdwn) +
+        pad(String(b.quantity), wQty) +
+        pad(`[${b.buyerMark}]`, wMark) +
+        pad(rateTxt, wRate) +
+        (stage === "post-weighing" ? pad(wtTxt, wWt) : "");
+
+      return "[L]" + line1;
+    })
+    .join("\n");
+
+  const totals = [
+    "",
+    "[L]" + lineLR("Total Qty", `${totalQty} bags`),
+    "[L]" + lineLR("Total Amount", `₹${totalAmt.toLocaleString("en-IN")}`),
+    "",
+    "[C]Powered by Mercotrace",
+    "",
+    "[L]--------------------------------",
+    "",
+  ].join("\n");
+
+  return header + "\n" + rows + totals;
+}
+
+export function generateSellerChitiThermal(
+  sellerName: string,
+  sellerSerial: number,
+  bids: BidInfo[],
+  stage: "post-auction" | "post-weighing" = "post-auction"
+): string {
+  const totalQty = bids.reduce((s, b) => s + b.quantity, 0);
+  const totalAmt = bids.reduce((s, b) => s + b.quantity * b.rate, 0);
+
+  const primaryMark = bids[0]?.buyerMark ?? "";
+
+  // Column widths sum to 48 (approximation for thermal alignment)
+  const wLot = 18;
+  const wMark = 10;
+  const wQty = 4;
+  const wRate = 10;
+  const wWt = stage === "post-weighing" ? 6 : 0;
+
+  const pad = (s: string, w: number) => padThermalRight(clampThermalText(s, w), w);
+  const lineLR = (left: string, right: string) => {
+    const l = String(left ?? "");
+    const r = String(right ?? "");
+    const rClamped = clampThermalText(r, THERMAL_CHARS_PER_LINE);
+    const lClamped = clampThermalText(l, THERMAL_CHARS_PER_LINE);
+    if (rClamped.length >= THERMAL_CHARS_PER_LINE) return rClamped.slice(0, THERMAL_CHARS_PER_LINE);
+    const available = THERMAL_CHARS_PER_LINE - rClamped.length;
+    const lPart = lClamped.length > available ? lClamped.slice(0, Math.max(0, available)) : lClamped;
+    const spaces = Math.max(1, available - lPart.length);
+    return lPart + " ".repeat(spaces) + rClamped;
+  };
+
+  const header = [
+    "[C]Mercotrace",
+    "",
+    "[C]" + clampThermalText(sellerName, THERMAL_CHARS_PER_LINE),
+    "[C]" + (primaryMark ? escposBold(`[${String(primaryMark ?? "").trim()}]`) : ""),
+    "[C]" + clampThermalText(`S.No: ${sellerSerial}`, THERMAL_CHARS_PER_LINE),
+    "",
+    "[L]" + pad("Lot", wLot) + pad("Mark", wMark) + pad("Qty", wQty) + pad("Rate", wRate) + (stage === "post-weighing" ? pad("Wt", wWt) : ""),
+  ].join("\n");
+
+  const rows = bids
+    .map((b) => {
+      const rateTxt = escapeThermalPrice(`₹${b.rate}`);
+      const wtTxt = stage === "post-weighing" ? `${b.weight ?? "—"} kg` : "";
+
+      const line =
+        pad(lotDisplay(b), wLot) +
+        pad(`[${b.buyerMark}]`, wMark) +
+        pad(String(b.quantity), wQty) +
+        pad(rateTxt, wRate) +
+        (stage === "post-weighing" ? pad(wtTxt, wWt) : "");
+
+      return "[L]" + line;
+    })
+    .join("\n");
+
+  const totals = [
+    "",
+    "[L]" + lineLR("Total Qty", `${totalQty} bags`),
+    "[L]" + lineLR("Total Amount", `₹${totalAmt.toLocaleString("en-IN")}`),
+    "",
+    "[C]Powered by Mercotrace",
+    "",
+    "[L]--------------------------------",
+    "",
+  ].join("\n");
+
+  return header + "\n" + rows + totals;
 }
 
 function escapeStickerHtml(s: string): string {

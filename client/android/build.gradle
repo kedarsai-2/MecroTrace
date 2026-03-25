@@ -21,6 +21,8 @@ allprojects {
     repositories {
         google()
         mavenCentral()
+        // Needed for `com.github.DantSu:ESCPOS-ThermalPrinter-Android`
+        maven { url 'https://jitpack.io' }
     }
 }
 

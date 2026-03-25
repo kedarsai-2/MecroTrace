@@ -28,6 +28,8 @@ repositories {
     flatDir{
         dirs '../capacitor-cordova-android-plugins/src/main/libs', 'libs'
     }
+    // Needed for `com.github.DantSu:ESCPOS-ThermalPrinter-Android`
+    maven { url 'https://jitpack.io' }
 }
 
 dependencies {
@@ -36,6 +38,8 @@ dependencies {
     implementation "androidx.coordinatorlayout:coordinatorlayout:$androidxCoordinatorLayoutVersion"
     implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
     implementation project(':capacitor-android')
+    // ESC/POS thermal printing library for Bluetooth printers
+    implementation 'com.github.DantSu:ESCPOS-ThermalPrinter-Android:3.4.0'
     testImplementation "junit:junit:$junitVersion"
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
     androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"

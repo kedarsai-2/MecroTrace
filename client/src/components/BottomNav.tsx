@@ -1,8 +1,9 @@
 import { useNavigate, useLocation } from 'react-router-dom';
-import { Truck, Gavel, Receipt, Printer, User } from 'lucide-react';
+import { Truck, Gavel, Receipt, Printer, User, Home } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { usePermissions, getModuleKeyForRoute } from '@/lib/permissions';
 const tabs = [
+  { icon: Home, label: 'Home', path: '/home' },
   { icon: Truck, label: 'Arrivals', path: '/arrivals' },
   { icon: Gavel, label: 'Auctions / Sales', path: '/auctions' },
   { icon: Receipt, label: 'Billings', path: '/billing' },

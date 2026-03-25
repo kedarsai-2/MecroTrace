@@ -1,6 +1,6 @@
 import { motion } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
-import { Shield, Cog, ChevronRight, Sparkles, Sliders } from 'lucide-react';
+import { Shield, Cog, ChevronRight, Sparkles, Sliders, Bluetooth } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import BottomNav from '@/components/BottomNav';
 import { usePermissions } from '@/lib/permissions';
@@ -26,6 +26,16 @@ const settingsCards = [
     glow: 'shadow-amber-500/20',
     accent: 'from-amber-400/15 to-orange-500/10',
     iconBg: 'from-amber-500/20 to-orange-600/15',
+  },
+  {
+    icon: Bluetooth,
+    title: 'Bluetooth Printer Settings',
+    desc: 'Bind ESC/POS thermal printer by MAC address',
+    path: '/settings/bluetooth-printers',
+    gradient: 'from-emerald-500 to-teal-600',
+    glow: 'shadow-emerald-500/20',
+    accent: 'from-emerald-400/15 to-teal-500/10',
+    iconBg: 'from-emerald-500/20 to-teal-600/15',
   },
 ];
 

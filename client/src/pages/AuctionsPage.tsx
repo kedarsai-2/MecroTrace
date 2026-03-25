@@ -1233,17 +1233,19 @@ const AuctionsPage = () => {
     const printKey = String(completedAuction.auction_id);
     if (autoPrintedAuctionRef.current === printKey) return;
     autoPrintedAuctionRef.current = printKey;
-    directPrint(generateAuctionCompletionPrintHTML({
-      auctionId: completedAuction.auction_id,
-      lotId: completedAuction.lotId,
-      lotName: completedAuction.lotName,
-      sellerName: completedAuction.sellerName,
-      vehicleNumber: completedAuction.vehicleNumber,
-      commodityName: completedAuction.commodityName,
-      completedAt: completedAuction.completedAt,
-      entries: completedAuction.entries,
-    }));
-    toast.success('Auction completion print opened');
+    void (async () => {
+      const ok = await directPrint(generateAuctionCompletionPrintHTML({
+        auctionId: completedAuction.auction_id,
+        lotId: completedAuction.lotId,
+        lotName: completedAuction.lotName,
+        sellerName: completedAuction.sellerName,
+        vehicleNumber: completedAuction.vehicleNumber,
+        commodityName: completedAuction.commodityName,
+        completedAt: completedAuction.completedAt,
+        entries: completedAuction.entries,
+      }), { mode: "system" });
+      ok ? toast.success('Auction completion print opened') : toast.error('Printer not connected.');
+    })();
   }, [showPrint, completedAuction]);
 
   const removeEntry = useCallback(async (id: string) => {
@@ -1654,8 +1656,8 @@ const AuctionsPage = () => {
 
           <div className="flex gap-3 mt-4">
             <Button
-              onClick={() => {
-                directPrint(generateAuctionCompletionPrintHTML({
+              onClick={async () => {
+                const ok = await directPrint(generateAuctionCompletionPrintHTML({
                   auctionId: completedAuction.auction_id,
                   lotId: completedAuction.lotId,
                   lotName: completedAuction.lotName,
@@ -1664,8 +1666,8 @@ const AuctionsPage = () => {
                   commodityName: completedAuction.commodityName,
                   completedAt: completedAuction.completedAt,
                   entries: completedAuction.entries,
-                }));
-                toast.success('Auction details sent to printer!');
+                }), { mode: "system" });
+                ok ? toast.success('Auction details sent to printer!') : toast.error('Printer not connected.');
               }}
               className="flex-1 h-12 rounded-xl bg-gradient-to-r from-blue-500 to-violet-500 text-white font-bold shadow-lg"
             >
@@ -2652,10 +2654,8 @@ const AuctionsPage = () => {
                               </button>
                               <button
                                 onClick={() => setPendingDeleteBid({ id: entry.id, label: `${entry.buyerName} (${entry.buyerMark})` })}
-                                className="p-1 rounded-md bg-destructive/10 text-destructive hover:bg-destructive/20"
                                 type="button"
                                 disabled={!!editingBidId}
-                                onClick={() => removeEntry(entry.id)}
                                 className="p-1 rounded-md bg-destructive/10 text-destructive hover:bg-destructive/20 disabled:opacity-40"
                                 title="Delete bid"
                               >
@@ -3069,100 +3069,80 @@ const AuctionsPage = () => {
                     key={k}
                     type="button"
                     onClick={() => handleNumpadKey(k)}
-                    className="h-8 rounded-lg bg-muted/50 hover:bg-muted text-xs font-bold text-foreground transition-colors"
+                    className="h-11 rounded-xl bg-muted/60 hover:bg-muted text-sm font-bold text-foreground transition-colors"
                   >
                     {k}
                   </button>
                 ))}
               </div>
-              <div className="grid grid-cols-2 gap-1">
+              <div className="grid grid-cols-3 gap-1">
                 <button
                   type="button"
                   onMouseDown={(e) => e.preventDefault()}
                   onClick={appendMarkParenFromNumpad}
                   disabled={!!editingBidId}
-                  className="h-8 rounded-lg bg-violet-500/15 text-violet-800 dark:text-violet-200 border border-violet-500/35 text-[11px] font-bold"
+                  className="h-10 rounded-lg bg-violet-500/15 text-violet-800 dark:text-violet-200 border border-violet-500/35 text-[11px] font-bold"
                   title="Add ( or ) to mark"
                   aria-label="Add opening or closing parenthesis to mark"
                 >
                   ( )
                 </button>
-                <div className="h-8 rounded-lg bg-muted/20 border border-dashed border-border/60" aria-hidden="true" />
-              </div>
-              <div className="grid grid-cols-2 gap-1">
-                <button
-                  type="button"
-                  onClick={() => handleNumpadKey('+')}
-                  className="h-8 rounded-lg bg-muted/60 hover:bg-muted text-xs font-semibold text-foreground"
-                >
-                  +
-                </button>
-                <button
-                  type="button"
-                  onClick={handleOpenSystemKeyboard}
-                  className="h-8 rounded-lg bg-blue-500/15 text-blue-700 dark:text-blue-300 border border-blue-500/30 text-[10px] font-semibold"
-                >
-                  Keyboard
-                </button>
-              </div>
-              <div className="grid grid-cols-2 gap-1">
                 <button
                   type="button"
                   onClick={handleNumpadBackspace}
-                  className="h-8 rounded-lg bg-muted/60 hover:bg-muted text-xs font-semibold text-foreground"
+                  className="h-10 rounded-lg bg-muted/60 hover:bg-muted text-xs font-semibold text-foreground"
                 >
-                  {'<-'}
+                  Back
                 </button>
                 <button
                   type="button"
                   onClick={handleNumpadClear}
-                  className="h-8 rounded-lg bg-muted/60 hover:bg-muted text-xs font-semibold text-foreground"
+                  className="h-10 rounded-lg bg-muted/60 hover:bg-muted text-xs font-semibold text-foreground"
                 >
                   Clear
                 </button>
               </div>
-              <div className="grid grid-cols-2 gap-1">
-                {editingBidId && editBidDraft ? (
-                  <>
+
+              {editingBidId && editBidDraft ? (
+                <div className="grid grid-cols-2 gap-1">
+                  <button
+                    type="button"
+                    onClick={() => { if (editingEntry) void saveEditBid(editingEntry); }}
+                    disabled={!editingEntry || !rate || !qty || parseInt(qty) <= 0 || parseInt(rate) <= 0}
+                    className="h-10 rounded-xl bg-gradient-to-r from-violet-500 to-fuchsia-500 text-white text-[11px] font-bold disabled:opacity-50"
+                  >
+                    Update Bid
+                  </button>
+                  <button
+                    type="button"
+                    onClick={cancelEditBid}
+                    className="h-10 rounded-xl bg-muted/60 text-foreground border border-border/50 text-[11px] font-bold"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-1">
+                  {!isSelfSaleReauction && (
                     <button
                       type="button"
-                      onClick={() => { if (editingEntry) void saveEditBid(editingEntry); }}
-                      disabled={!editingEntry || !rate || !qty || parseInt(qty) <= 0 || parseInt(rate) <= 0}
-                      className="h-8 rounded-lg bg-gradient-to-r from-violet-500 to-fuchsia-500 text-white text-[10px] font-bold disabled:opacity-50"
+                      onClick={handleSelfSale}
+                      disabled={remaining <= 0}
+                      className="w-full h-9 rounded-xl bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/30 text-[11px] font-bold disabled:opacity-50"
                     >
-                      Update Bid
+                      Self Sale
                     </button>
-                    <button
-                      type="button"
-                      onClick={cancelEditBid}
-                      className="h-8 rounded-lg bg-muted/60 text-foreground border border-border/50 text-[10px] font-bold"
-                    >
-                      Cancel
-                    </button>
-                  </>
-                ) : (
-                  <>
-                    {!isSelfSaleReauction && (
-                      <button
-                        type="button"
-                        onClick={handleSelfSale}
-                        disabled={remaining <= 0}
-                        className="h-8 rounded-lg bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/30 text-[10px] font-bold disabled:opacity-50"
-                      >
-                        Self Sale
-                      </button>
-                    )}
-                    <button
-                      type="button"
-                      onClick={handleUnifiedAdd}
-                      disabled={(!scribbleMark.trim() && !selectedBuyer) || !rate || !qty || parseInt(qty) <= 0 || parseInt(rate) <= 0}
-                      className="h-8 rounded-lg bg-gradient-to-r from-violet-500 to-fuchsia-500 text-white text-[10px] font-bold disabled:opacity-50"
-                    >
-                      + Add Bid
-                    </button>
-                  </>
-                )}
-              </div>
+                  )}
+                  <button
+                    type="button"
+                    onClick={handleUnifiedAdd}
+                    disabled={(!scribbleMark.trim() && !selectedBuyer) || !rate || !qty || parseInt(qty) <= 0 || parseInt(rate) <= 0}
+                    className="w-full h-11 rounded-xl bg-gradient-to-r from-violet-500 to-fuchsia-500 text-white text-[12px] font-bold disabled:opacity-50"
+                  >
+                    + Add Bid
+                  </button>
+                </div>
+              )}
               <button
                 type="button"
                 disabled={completeLoading || entries.length === 0}

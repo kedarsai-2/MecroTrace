@@ -605,8 +605,8 @@ const SettlementPage = () => {
               } catch {
                 // backend optional
               }
-              directPrint(generateSalesPattiPrintHTML(pattiData));
-              toast.success('Sales Patti sent to printer!');
+              const ok = await directPrint(generateSalesPattiPrintHTML(pattiData), { mode: "system" });
+              ok ? toast.success('Sales Patti sent to printer!') : toast.error('Printer not connected.');
             }}
               className="flex-1 h-12 rounded-xl bg-gradient-to-r from-rose-500 to-pink-500 text-white font-bold shadow-lg">
               <Printer className="w-5 h-5 mr-2" /> Print Patti

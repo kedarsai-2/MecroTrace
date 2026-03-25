@@ -208,7 +208,7 @@ const PrintsReportsPage = () => {
       // optional
     }
     const fullHtml = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>body{margin:0;padding:0;}</style></head><body>${templateHTML}</body></html>`;
-    const ok = directPrint(fullHtml);
+    const ok = await directPrint(fullHtml, { mode: "system" });
     if (ok) {
       toast.success('Sent to printer!');
       setShowPreview(false);

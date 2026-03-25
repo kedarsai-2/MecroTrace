@@ -1,5 +1,6 @@
 import type { Trader, User } from '@/types/models';
 import { apiFetch, captureAuthTokenFromResponse } from './http';
+import { setTraderToken } from './tokenStore';
 
 /** Default message when we cannot show a specific validation message. */
 const REGISTRATION_FAILED = 'Registration failed. Please try again.';
@@ -126,6 +127,12 @@ export const authApi = {
 
     const dataRes = await res.json();
 
+    // If backend returns token in body, persist it (Android only).
+    const tokenFromBody = (dataRes as any)?.token;
+    if (typeof tokenFromBody === 'string' && tokenFromBody.trim()) {
+      setTraderToken(tokenFromBody.trim());
+    }
+
     // Best-effort: capture JWT from headers for native shells where cookies are unreliable.
     captureAuthTokenFromResponse(res, 'trader');
 
@@ -204,8 +211,19 @@ export const authApi = {
 
     const data = await res.json();
 
+    // New: persist token from response body (backend also sets httpOnly cookie).
+    const tokenFromBody = (data as any)?.token;
+    if (typeof tokenFromBody === 'string' && tokenFromBody.trim()) {
+      setTraderToken(tokenFromBody.trim());
+    } else {
+      // Backward compatible: try extracting token from exposed Authorization header.
+      captureAuthTokenFromResponse(res, 'trader');
+    }
+
     // Capture trader JWT for use in Authorization header (web + Capacitor).
-    captureAuthTokenFromResponse(res, 'trader');
+    // Kept for compatibility with builds where token is not included in body.
+    // (No-op when token is already stored above.)
+    // captureAuthTokenFromResponse(res, 'trader');
 
     const user: User = {
       user_id: data.user.user_id,
@@ -366,8 +384,15 @@ export const authApi = {
 
     const data = await res.json();
 
-    // OTP login issues a JWT via same auth pipeline; capture it for native shells.
-    captureAuthTokenFromResponse(res, 'trader');
+    // OTP login issues a JWT via auth pipeline.
+    // New: backend also returns the JWT in `data.token` (frontend stores it on Android).
+    const tokenFromBody = (data as any)?.token;
+    if (typeof tokenFromBody === 'string' && tokenFromBody.trim()) {
+      setTraderToken(tokenFromBody.trim());
+    } else {
+      // Backward compatible fallback.
+      captureAuthTokenFromResponse(res, 'trader');
+    }
 
     const user: User = {
       user_id: data.user.user_id,

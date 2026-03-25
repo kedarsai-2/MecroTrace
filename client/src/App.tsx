@@ -29,6 +29,7 @@ import PortraitLock from "@/components/PortraitLock";
 import TraderLayout from "@/components/TraderLayout";
 import RouteAutofocus from "@/components/RouteAutofocus";
 import ClickToFocusNewFields from "@/components/ClickToFocusNewFields";
+import KeyboardAvoidance from "@/components/KeyboardAvoidance";
 import LoginScreen from "./pages/LoginScreen";
 import ContactPortalLoginPage from "./pages/ContactPortalLoginPage";
 import ContactPortalSignupPage from "./pages/ContactPortalSignupPage";
@@ -66,6 +67,7 @@ import StockPurchasePage from "./pages/StockPurchasePage";
 import CDNPage from "./pages/CDNPage";
 import PrintsPage from "./pages/PrintsPage";
 import SettingsPage from "./pages/SettingsPage";
+import BluetoothPrinterSettingsPage from "./pages/settings/BluetoothPrinterSettingsPage";
 import RoleManagementPage from "./pages/admin/settings/RoleManagementPage";
 import UserManagementPage from "./pages/admin/settings/UserManagementPage";
 import RoleAllocationPage from "./pages/admin/settings/RoleAllocationPage";
@@ -113,6 +115,7 @@ function AppShell() {
       <RootClassManager />
       <RouteAutofocus />
       <ClickToFocusNewFields />
+      <KeyboardAvoidance />
       <Suspense fallback={<LazyFallback />}>
         <Outlet />
       </Suspense>
@@ -161,6 +164,7 @@ const router = createBrowserRouter(
         <Route path="/prints" element={<PrintsPage />} />
         <Route path="/reports" element={<Navigate to="/home" replace />} />
         <Route path="/settings" element={<SettingsPage />} />
+        <Route path="/settings/bluetooth-printers" element={<BluetoothPrinterSettingsPage />} />
         <Route path="/settings/rbac" element={<RbacSettingsPage />} />
         <Route path="/settings/preset-settings" element={<PresetSettingsPage />} />
         <Route path="/settings/roles" element={<RoleManagementPage />} />

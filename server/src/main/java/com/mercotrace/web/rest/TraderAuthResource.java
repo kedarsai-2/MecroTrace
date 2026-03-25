@@ -234,6 +234,8 @@ public class TraderAuthResource {
                 authenticatedAccount = upgradeTraderOwnerAuthoritiesIfNeeded(authenticatedAccount);
                 TraderDTO resolvedTrader = resolveTraderForUser(authenticatedAccount).orElse(traderDTO);
                 TraderAuthDTO authDto = buildAuthDto(authenticatedAccount, resolvedTrader);
+                // Persistable token for the same reason as /auth/login above.
+                authDto.setToken(jwtResponse.getBody().getIdToken());
                 return ResponseEntity.status(HttpStatus.CREATED).headers(jwtResponse.getHeaders()).body(authDto);
             }
         } catch (Exception ex) {
@@ -299,6 +301,9 @@ public class TraderAuthResource {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Trader account is inactive. Contact support.");
         }
         TraderAuthDTO dto = buildAuthDto(account, trader);
+        // Persistable token: frontend stores it on Android and reuses it for /auth/me
+        // to survive app restarts (cookies are httpOnly and may be cleared).
+        dto.setToken(jwtResponse.getBody().getIdToken());
 
         return ResponseEntity.status(jwtResponse.getStatusCode()).headers(jwtResponse.getHeaders()).body(dto);
     }
@@ -431,6 +436,8 @@ public class TraderAuthResource {
         }
 
         TraderAuthDTO dto = buildAuthDto(account, trader);
+        // Persistable token for the same reason as /auth/login above.
+        dto.setToken(jwt);
 
         return ResponseEntity.ok().headers(httpHeaders).body(dto);
     }
