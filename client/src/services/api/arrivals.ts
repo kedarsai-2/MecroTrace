@@ -37,6 +37,7 @@ export interface ArrivalCreatePayload {
   gatepass_number?: string;
   origin?: string;
   sellers: ArrivalSellerPayload[];
+  partially_completed?: boolean;
 }
 
 /**
@@ -63,6 +64,8 @@ export interface ArrivalSummary {
   bidsCount?: number;
   /** Number of lots with a weighing session */
   weighedCount?: number;
+  /** Whether this is a partially completed (draft) record */
+  partiallyCompleted?: boolean;
 }
 
 /** Lot in arrival detail (id for lot lookup, e.g. WeighingPage bid enrichment). */
@@ -109,6 +112,9 @@ export interface ArrivalFullDetail {
   freightTotal?: number;
   noRental?: boolean;
   advancePaid?: number;
+  partiallyCompleted?: boolean;
+  /** Persisted multi-seller vs single-seller mode (restored on edit). */
+  multiSeller?: boolean;
   sellers: ArrivalSellerFullDetail[];
 }
 
@@ -148,6 +154,7 @@ export interface ArrivalUpdatePayload {
   no_rental?: boolean;
   advance_paid?: number;
   multi_seller?: boolean;
+  partially_completed?: boolean;
   sellers?: ArrivalSellerPayload[];
 }
 
@@ -179,11 +186,12 @@ async function handleArrivalResponse<T>(res: Response, defaultMessage: string): 
 }
 
 export const arrivalsApi = {
-  async list(page = 0, size = 10, status?: string): Promise<ArrivalSummary[]> {
+  async list(page = 0, size = 10, status?: string, partiallyCompleted?: boolean): Promise<ArrivalSummary[]> {
     const searchParams = new URLSearchParams();
     searchParams.set('page', String(page));
     searchParams.set('size', String(size));
     if (status && status !== 'ALL') searchParams.set('status', status);
+    if (partiallyCompleted !== undefined) searchParams.set('partiallyCompleted', String(partiallyCompleted));
 
     const res = await apiFetch(`/arrivals?${searchParams.toString()}`, { method: 'GET' });
     const data = await handleArrivalResponse<ArrivalSummary[]>(res, 'Failed to load arrivals');
@@ -221,6 +229,7 @@ export const arrivalsApi = {
       godown: payload.godown,
       gatepassNumber: payload.gatepass_number,
       origin: payload.origin,
+      partiallyCompleted: payload.partially_completed ?? false,
       sellers: payload.sellers.map(s => ({
         contactId: s.contact_id !== undefined && s.contact_id !== null ? s.contact_id : null,
         sellerSerialNumber: s.seller_serial_number,
@@ -238,7 +247,9 @@ export const arrivalsApi = {
       })),
     };
 
-    const res = await apiFetch('/arrivals', {
+    const path = payload.partially_completed ? '/arrivals/partial' : '/arrivals';
+
+    const res = await apiFetch(path, {
       method: 'POST',
       body: JSON.stringify(body),
     });
@@ -269,6 +280,7 @@ export const arrivalsApi = {
     if (payload.no_rental !== undefined) body.noRental = payload.no_rental;
     if (payload.advance_paid !== undefined) body.advancePaid = payload.advance_paid;
     if (payload.multi_seller !== undefined) body.multiSeller = payload.multi_seller;
+    if (payload.partially_completed !== undefined) body.partiallyCompleted = payload.partially_completed;
     if (payload.sellers !== undefined && payload.sellers.length > 0) {
       body.sellers = payload.sellers.map(s => ({
         contactId: s.contact_id !== undefined && s.contact_id !== null ? s.contact_id : null,

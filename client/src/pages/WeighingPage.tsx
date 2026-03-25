@@ -21,6 +21,7 @@ import type { ArrivalDetail } from '@/services/api/arrivals';
 import ForbiddenPage from '@/components/ForbiddenPage';
 import { usePermissions } from '@/lib/permissions';
 import useUnsavedChangesGuard from '@/hooks/useUnsavedChangesGuard';
+import { ConfirmDeleteDialog } from '@/components/ConfirmDeleteDialog';
 
 /** REQ-WGH-004: Government deduction from API full-config */
 function getGovtDeductionFromConfigs(weight: number, fullConfigs: FullCommodityConfigDto[]): number {
@@ -85,6 +86,8 @@ const WeighingPage = () => {
   // REQ-WGH-008: Post-weighing slip
   const [showSlip, setShowSlip] = useState(false);
   const [completedSession, setCompletedSession] = useState<WeighingSessionData | null>(null);
+
+  const [pendingRemoveBag, setPendingRemoveBag] = useState<number | null>(null);
 
   // REQ-WGH-005: Mutual exclusivity
   useEffect(() => {
@@ -695,7 +698,7 @@ const WeighingPage = () => {
                     className="bg-muted/20 rounded-lg px-1 py-1.5 text-center relative group">
                     <p className="text-[8px] text-muted-foreground">{bag.bagNumber}</p>
                     <p className="text-xs font-bold text-foreground">{bag.weight.toFixed(1)}</p>
-                    <button onClick={() => removeBag(bag.bagNumber)}
+                    <button onClick={() => setPendingRemoveBag(bag.bagNumber)}
                       className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-destructive text-white text-[8px] hidden group-hover:flex items-center justify-center">
                       ×
                     </button>
@@ -709,7 +712,7 @@ const WeighingPage = () => {
                     <span className="text-muted-foreground">Bag {bag.bagNumber}</span>
                     <span className="font-bold text-foreground">{bag.weight.toFixed(1)} kg</span>
                     <span className="text-[9px] text-muted-foreground">{new Date(bag.timestamp).toLocaleTimeString()}</span>
-                    <button onClick={() => removeBag(bag.bagNumber)} className="text-destructive hover:text-destructive/80">
+                    <button onClick={() => setPendingRemoveBag(bag.bagNumber)} className="text-destructive hover:text-destructive/80">
                       <Trash2 className="w-3 h-3" />
                     </button>
                   </div>
@@ -902,6 +905,15 @@ const WeighingPage = () => {
         )}
       </div>
       {!isDesktop && <BottomNav />}
+
+      <ConfirmDeleteDialog
+        open={pendingRemoveBag !== null}
+        onOpenChange={(v) => { if (!v) setPendingRemoveBag(null); }}
+        title="Remove bag?"
+        description={pendingRemoveBag !== null ? `Remove Bag ${pendingRemoveBag} from this weighing session?` : ''}
+        confirmLabel="Remove"
+        onConfirm={() => { if (pendingRemoveBag !== null) removeBag(pendingRemoveBag); }}
+      />
     </div>
   );
 };

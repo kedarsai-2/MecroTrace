@@ -1,3 +1,4 @@
+import type { CSSProperties } from 'react';
 import { Outlet, useLocation, useNavigate, Navigate } from 'react-router-dom';
 import { Moon, Sun, Bell, User, AlertCircle } from 'lucide-react';
 import DesktopSidebar from '@/components/DesktopSidebar';
@@ -5,6 +6,7 @@ import FontSizeControls from '@/components/FontSizeControls';
 import { useDesktopMode } from '@/hooks/use-desktop';
 import { useTheme } from '@/context/ThemeContext';
 import { useAuth } from '@/context/AuthContext';
+import { useFontSize } from '@/context/FontSizeContext';
 
 /** Paths allowed when trader is not yet approved (pending registration). */
 const ALLOWED_PATHS_WHEN_PENDING = ['/home', '/profile'];
@@ -60,6 +62,13 @@ const TraderLayout = () => {
   const navigate = useNavigate();
   const { isDark, toggleTheme } = useTheme();
   const { user, trader } = useAuth();
+  const { scale } = useFontSize();
+
+  // Scale only page body (not sidebar / sticky header). `transform: scale` shrinks the
+  // layout box so scroll height is wrong and content gets cropped; `zoom` updates layout
+  // size in Chromium so the full page stays scrollable and visible.
+  const scaledBodyStyle: CSSProperties | undefined =
+    scale === 1 ? undefined : { zoom: scale };
 
   const isApproved = trader?.approval_status === 'APPROVED';
   const pathAllowedWhenPending = ALLOWED_PATHS_WHEN_PENDING.some(
@@ -73,8 +82,10 @@ const TraderLayout = () => {
 
   if (!isDesktop) {
     return (
-      <div id="route-autofocus-root" className="min-h-[100dvh]">
-        <Outlet />
+      <div className="min-h-[100dvh] w-full min-w-0">
+        <div id="route-autofocus-root" className="min-h-[100dvh] w-full min-w-0" style={scaledBodyStyle}>
+          <Outlet />
+        </div>
       </div>
     );
   }
@@ -88,7 +99,7 @@ const TraderLayout = () => {
   return (
     <div className="flex min-h-screen w-full bg-background">
       <DesktopSidebar />
-      <div className="flex-1 min-h-screen lg:ml-[260px] transition-all duration-250">
+      <div className="flex-1 min-h-screen lg:ml-[260px] transition-all duration-250 min-w-0">
         {/* Subtle background blobs */}
         <div className="fixed pointer-events-none inset-0 lg:left-[260px]">
           <div className="absolute top-0 right-0 w-96 h-96 bg-gradient-to-bl from-primary/8 via-accent/5 to-transparent rounded-full blur-3xl" />
@@ -136,7 +147,11 @@ const TraderLayout = () => {
           </div>
         </header>
 
-        <main id="route-autofocus-root" className="relative z-10">
+        <main
+          id="route-autofocus-root"
+          className="relative z-10 w-full min-w-0 pb-[max(0.5rem,env(safe-area-inset-bottom))]"
+          style={scaledBodyStyle}
+        >
           {!isApproved && (
             <div
               className="mx-4 mt-4 flex items-center gap-3 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-amber-800 dark:text-amber-200"

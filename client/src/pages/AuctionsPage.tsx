@@ -32,6 +32,7 @@ import type { Contact } from '@/types/models';
 import { toast } from 'sonner';
 import ForbiddenPage from '@/components/ForbiddenPage';
 import { usePermissions } from '@/lib/permissions';
+import { ConfirmDeleteDialog } from '@/components/ConfirmDeleteDialog';
 import { directPrint } from '@/utils/printTemplates';
 import { generateAuctionCompletionPrintHTML } from '@/utils/printDocumentTemplates';
 import { useAuth } from '@/context/AuthContext';
@@ -317,6 +318,7 @@ const AuctionsPage = () => {
   const [showPrint, setShowPrint] = useState(false);
   const [completedAuction, setCompletedAuction] = useState<AuctionResultDTO | null>(null);
   const [addBidRetryAllowIncrease, setAddBidRetryAllowIncrease] = useState(false);
+  const [pendingDeleteBid, setPendingDeleteBid] = useState<{ id: string; label: string } | null>(null);
 
   /** ENH-34: inline edit bid row */
   const [editingBidId, setEditingBidId] = useState<string | null>(null);
@@ -2649,6 +2651,8 @@ const AuctionsPage = () => {
                                 <Banknote className={cn(isDesktop ? "w-3.5 h-3.5" : "w-3 h-3")} />
                               </button>
                               <button
+                                onClick={() => setPendingDeleteBid({ id: entry.id, label: `${entry.buyerName} (${entry.buyerMark})` })}
+                                className="p-1 rounded-md bg-destructive/10 text-destructive hover:bg-destructive/20"
                                 type="button"
                                 disabled={!!editingBidId}
                                 onClick={() => removeEntry(entry.id)}
@@ -3266,6 +3270,14 @@ const AuctionsPage = () => {
       </AnimatePresence>
 
       {isDesktop && <BottomNav />}
+
+      <ConfirmDeleteDialog
+        open={!!pendingDeleteBid}
+        onOpenChange={(v) => { if (!v) setPendingDeleteBid(null); }}
+        title="Delete bid?"
+        description={pendingDeleteBid ? `Remove bid for "${pendingDeleteBid.label}"? This cannot be undone.` : ''}
+        onConfirm={() => pendingDeleteBid && removeEntry(pendingDeleteBid.id)}
+      />
     </div>
   );
 };

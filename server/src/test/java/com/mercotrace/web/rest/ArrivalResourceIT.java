@@ -146,6 +146,56 @@ class ArrivalResourceIT {
 
     @Test
     @Transactional
+    void createPartialMultiSellerArrivalWithoutVehicleNumberSucceeds() throws Exception {
+        ArrivalRequestDTO request = buildBasicRequest(true);
+        request.setVehicleNumber(null);
+        request.setPartiallyCompleted(true);
+
+        String responseBody = restArrivalMockMvc
+            .perform(post(ENTITY_API_URL + "/partial").contentType(MediaType.APPLICATION_JSON).content(om.writeValueAsBytes(request)))
+            .andExpect(status().isCreated())
+            .andReturn()
+            .getResponse()
+            .getContentAsString();
+
+        ArrivalSummaryDTO summary = om.readValue(responseBody, ArrivalSummaryDTO.class);
+        assertThat(summary.getVehicleId()).isNotNull();
+        assertThat(summary.isPartiallyCompleted()).isTrue();
+        insertedVehicle = vehicleRepository.findById(summary.getVehicleId()).orElse(null);
+        assertThat(insertedVehicle).isNotNull();
+    }
+
+    @Test
+    @Transactional
+    void createPartialArrivalWithoutSellersSucceeds() throws Exception {
+        ArrivalRequestDTO request = new ArrivalRequestDTO();
+        request.setMultiSeller(true);
+        request.setPartiallyCompleted(true);
+        request.setLoadedWeight(0d);
+        request.setEmptyWeight(0d);
+        request.setDeductedWeight(0d);
+        request.setFreightMethod(FreightMethod.BY_WEIGHT);
+        request.setFreightRate(0d);
+        request.setNoRental(true);
+        request.setAdvancePaid(0d);
+        request.setSellers(List.of());
+
+        String responseBody = restArrivalMockMvc
+            .perform(post(ENTITY_API_URL + "/partial").contentType(MediaType.APPLICATION_JSON).content(om.writeValueAsBytes(request)))
+            .andExpect(status().isCreated())
+            .andReturn()
+            .getResponse()
+            .getContentAsString();
+
+        ArrivalSummaryDTO summary = om.readValue(responseBody, ArrivalSummaryDTO.class);
+        assertThat(summary.getSellerCount()).isZero();
+        assertThat(summary.isPartiallyCompleted()).isTrue();
+        insertedVehicle = vehicleRepository.findById(summary.getVehicleId()).orElse(null);
+        assertThat(insertedVehicle).isNotNull();
+    }
+
+    @Test
+    @Transactional
     void createArrivalWithSellerWithoutLotsIsBadRequest() throws Exception {
         ArrivalRequestDTO request = buildBasicRequest(false);
         request.getSellers().get(0).setLots(List.of());

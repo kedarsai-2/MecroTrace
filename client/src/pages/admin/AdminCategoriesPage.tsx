@@ -9,6 +9,7 @@ import { categoryApi } from '@/services/api';
 import type { BusinessCategory } from '@/types/models';
 import { useAdminPermissions } from '@/admin/lib/adminPermissions';
 import AdminForbiddenPage from '@/admin/components/AdminForbiddenPage';
+import { ConfirmDeleteDialog } from '@/components/ConfirmDeleteDialog';
 
 const cardGradients = ['from-blue-500 via-blue-400 to-cyan-400','from-violet-500 via-purple-500 to-fuchsia-500','from-amber-400 via-orange-500 to-rose-500','from-emerald-400 via-green-500 to-teal-500','from-pink-400 via-rose-500 to-red-500','from-indigo-500 via-blue-500 to-cyan-500'];
 
@@ -18,6 +19,7 @@ const AdminCategoriesPage = () => {
   const [showAdd, setShowAdd] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
   const [form, setForm] = useState({ category_name: '' });
+  const [pendingDeleteCategory, setPendingDeleteCategory] = useState<{ id: string; name: string } | null>(null);
   const { canAccessModule, can } = useAdminPermissions();
 
   const categoryNameInputRef = useRef<HTMLInputElement | null>(null);
@@ -169,7 +171,7 @@ const AdminCategoriesPage = () => {
                           <Edit2 className="w-3.5 h-3.5" />
                         </button>
                         <button
-                          onClick={() => handleDelete(cat.category_id)}
+                          onClick={() => setPendingDeleteCategory({ id: cat.category_id, name: cat.category_name })}
                           disabled={!canDelete}
                           className="p-1.5 rounded-lg hover:bg-destructive/10 text-muted-foreground hover:text-destructive disabled:opacity-40"
                         >
@@ -232,6 +234,14 @@ const AdminCategoriesPage = () => {
           </motion.div>
         )}
       </AnimatePresence>
+
+      <ConfirmDeleteDialog
+        open={!!pendingDeleteCategory}
+        onOpenChange={(v) => { if (!v) setPendingDeleteCategory(null); }}
+        title="Delete category?"
+        description={pendingDeleteCategory ? `Delete "${pendingDeleteCategory.name}"? This cannot be undone.` : ''}
+        onConfirm={() => pendingDeleteCategory && handleDelete(pendingDeleteCategory.id)}
+      />
     </div>
   );
 };

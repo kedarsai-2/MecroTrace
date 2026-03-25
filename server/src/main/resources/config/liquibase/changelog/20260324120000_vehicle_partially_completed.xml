@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <changeSet id="20260324120000-1" author="mercotrace">
+        <addColumn tableName="vehicle">
+            <column name="partially_completed" type="boolean" defaultValueBoolean="false">
+                <constraints nullable="false"/>
+            </column>
+        </addColumn>
+        <createIndex tableName="vehicle" indexName="idx_vehicle_partially_completed">
+            <column name="partially_completed"/>
+        </createIndex>
+    </changeSet>
+
+    <!-- Allow vehicle_number to be nullable for partial saves -->
+    <changeSet id="20260324120000-2" author="mercotrace">
+        <dropNotNullConstraint tableName="vehicle" columnName="vehicle_number" columnDataType="varchar(50)"/>
+    </changeSet>
+
+    <!-- Allow vehicle_weight columns to be nullable for partial saves -->
+    <changeSet id="20260324120000-3" author="mercotrace">
+        <dropNotNullConstraint tableName="vehicle_weight" columnName="loaded_weight" columnDataType="double precision"/>
+        <dropNotNullConstraint tableName="vehicle_weight" columnName="empty_weight" columnDataType="double precision"/>
+        <dropNotNullConstraint tableName="vehicle_weight" columnName="net_weight" columnDataType="double precision"/>
+    </changeSet>
+
+    <!-- Allow freight_calculation columns to be nullable for partial saves -->
+    <changeSet id="20260324120000-4" author="mercotrace">
+        <dropNotNullConstraint tableName="freight_calculation" columnName="method" columnDataType="varchar(30)"/>
+        <dropNotNullConstraint tableName="freight_calculation" columnName="rate" columnDataType="double precision"/>
+        <dropNotNullConstraint tableName="freight_calculation" columnName="total_amount" columnDataType="double precision"/>
+    </changeSet>
+
+</databaseChangeLog>

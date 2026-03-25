@@ -17,6 +17,7 @@ import type { StockPurchaseDTO } from '@/services/api';
 import { toast } from 'sonner';
 import ForbiddenPage from '@/components/ForbiddenPage';
 import { usePermissions } from '@/lib/permissions';
+import { ConfirmDeleteDialog } from '@/components/ConfirmDeleteDialog';
 
 interface PurchaseLineItem {
   id: string;
@@ -61,6 +62,7 @@ const StockPurchasePage = () => {
   const [saving, setSaving] = useState(false);
   /** Hide autocomplete after dismiss until user focuses / edits search again */
   const [vendorResultsDismissed, setVendorResultsDismissed] = useState(false);
+  const [pendingRemove, setPendingRemove] = useState<{ kind: 'item' | 'charge'; id: string } | null>(null);
 
   const pageSize = 10;
 
@@ -525,7 +527,7 @@ const StockPurchasePage = () => {
                       <span className="w-6 h-6 rounded-full bg-teal-100 dark:bg-teal-900/30 text-teal-700 dark:text-teal-300 flex items-center justify-center text-[10px] font-bold">{idx + 1}</span>
                       <span className="text-xs text-muted-foreground font-medium flex-1">Item {idx + 1}</span>
                       {items.length > 1 && (
-                        <button onClick={() => removeItem(item.id)} className="text-destructive p-1 hover:bg-destructive/10 rounded"><Trash2 className="w-3.5 h-3.5" /></button>
+                        <button onClick={() => setPendingRemove({ kind: 'item', id: item.id })} className="text-destructive p-1 hover:bg-destructive/10 rounded"><Trash2 className="w-3.5 h-3.5" /></button>
                       )}
                     </div>
                     <div className="grid grid-cols-12 gap-2 items-center">
@@ -572,7 +574,7 @@ const StockPurchasePage = () => {
                 <div key={ch.id} className="flex gap-2 mb-2 items-center">
                   <Input placeholder="e.g. Freight, Labour" value={ch.name} onChange={e => setCharges(prev => prev.map(c => c.id === ch.id ? { ...c, name: e.target.value } : c))} className="flex-1 h-9 text-xs" />
                   <Input type="number" placeholder="₹ Amount" value={ch.amount || ''} onChange={e => setCharges(prev => prev.map(c => c.id === ch.id ? { ...c, amount: parseFloat(e.target.value) || 0 } : c))} className="w-28 h-9 text-xs" />
-                  <button onClick={() => removeCharge(ch.id)} className="text-destructive p-1 hover:bg-destructive/10 rounded"><Trash2 className="w-3.5 h-3.5" /></button>
+                  <button onClick={() => setPendingRemove({ kind: 'charge', id: ch.id })} className="text-destructive p-1 hover:bg-destructive/10 rounded"><Trash2 className="w-3.5 h-3.5" /></button>
                 </div>
               ))}
             </div>
@@ -597,6 +599,19 @@ const StockPurchasePage = () => {
       </Dialog>
 
       <BottomNav />
+
+      <ConfirmDeleteDialog
+        open={!!pendingRemove}
+        onOpenChange={(v) => { if (!v) setPendingRemove(null); }}
+        title={pendingRemove?.kind === 'item' ? 'Remove item?' : 'Remove charge?'}
+        description={pendingRemove?.kind === 'item' ? 'Remove this item from the purchase form?' : 'Remove this charge from the purchase form?'}
+        confirmLabel="Remove"
+        onConfirm={() => {
+          if (!pendingRemove) return;
+          if (pendingRemove.kind === 'item') removeItem(pendingRemove.id);
+          else removeCharge(pendingRemove.id);
+        }}
+      />
     </div>
   );
 };

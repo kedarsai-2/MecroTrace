@@ -6,9 +6,7 @@ import { MercotraceIcon } from '@/components/MercotraceLogo';
 import { useAuth } from '@/context/AuthContext';
 import { useDesktopMode } from '@/hooks/use-desktop';
 import { useTheme } from '@/context/ThemeContext';
-import { useFontSize } from '@/context/FontSizeContext';
 import FontSizeControls from '@/components/FontSizeControls';
-import { cn } from '@/lib/utils';
 import { usePermissions, getModuleKeyForRoute } from '@/lib/permissions';
 
 // Illustrated module images
@@ -60,13 +58,7 @@ const WELCOME_MESSAGES = [
   "Trade smarter, not harder 🎯",
 ];
 
-/* Font-size scale classes */
-const TITLE_SIZE = ['text-base', 'text-lg', 'text-xl'] as const;
-const DESC_SIZE = ['text-[12px]', 'text-[13px]', 'text-sm'] as const;
-const ICON_SIZE = ['w-16 h-16', 'w-20 h-20', 'w-24 h-24'] as const;
-const IMG_SIZE = ['w-14 h-14 sm:w-[4.5rem] sm:h-[4.5rem]', 'w-16 h-16 sm:w-20 sm:h-20', 'w-20 h-20 sm:w-24 sm:h-24'] as const;
-
-const ModuleCard = memo(({ mod, onClick, level }: { mod: typeof modules[0]; onClick: () => void; level: number }) => (
+const ModuleCard = memo(({ mod, onClick }: { mod: typeof modules[0]; onClick: () => void }) => (
   <button
     onClick={onClick}
     className="glass-card flex flex-col items-center gap-2.5 p-4 sm:p-5 text-center group hover:shadow-xl hover:scale-[1.03] transition-all duration-300 active:scale-[0.97] relative overflow-hidden rounded-2xl animate-fade-in"
@@ -74,20 +66,20 @@ const ModuleCard = memo(({ mod, onClick, level }: { mod: typeof modules[0]; onCl
     <div className={`absolute -top-4 -right-4 w-16 h-16 rounded-full bg-gradient-to-br ${mod.accent} opacity-[0.15] blur-xl group-hover:opacity-[0.3] group-hover:w-20 group-hover:h-20 transition-all duration-500 pointer-events-none`} />
     <div className={`absolute -bottom-3 -left-3 w-12 h-12 rounded-full bg-gradient-to-tr ${mod.accent} opacity-[0.08] blur-lg group-hover:opacity-[0.2] group-hover:w-16 group-hover:h-16 transition-all duration-500 pointer-events-none`} />
     <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-500 pointer-events-none bg-[linear-gradient(135deg,transparent_40%,rgba(255,255,255,0.08)_50%,transparent_60%)]" />
-    <div className={cn(`relative rounded-2xl flex items-center justify-center overflow-hidden group-hover:scale-105 transition-transform duration-300`, ICON_SIZE[level])}>
+    <div className="relative rounded-2xl flex items-center justify-center overflow-hidden group-hover:scale-105 transition-transform duration-300 w-16 h-16">
       <div className={`absolute inset-0 rounded-2xl bg-gradient-to-br ${mod.accent} opacity-[0.08] group-hover:opacity-[0.15] transition-opacity duration-300`} />
       <div className="absolute inset-[1px] rounded-2xl bg-card/80 backdrop-blur-sm" />
       <img
         src={mod.image}
         alt={mod.title}
-        className={cn("relative z-10 object-contain drop-shadow-md", IMG_SIZE[level])}
+        className="relative z-10 object-contain drop-shadow-md w-14 h-14 sm:w-[4.5rem] sm:h-[4.5rem]"
         loading="lazy"
         decoding="async"
       />
     </div>
     <div className="relative z-10">
-      <p className={cn("font-bold text-foreground leading-tight", TITLE_SIZE[level])}>{mod.title}</p>
-      <p className={cn("text-muted-foreground mt-0.5 leading-snug", DESC_SIZE[level])}>{mod.desc}</p>
+      <p className="font-bold text-foreground leading-tight text-base">{mod.title}</p>
+      <p className="text-muted-foreground mt-0.5 leading-snug text-[12px]">{mod.desc}</p>
     </div>
   </button>
 ));
@@ -98,7 +90,6 @@ const Homepage = () => {
   const { user, trader } = useAuth();
   const isDesktop = useDesktopMode();
   const { isDark, toggleTheme } = useTheme();
-  const { level } = useFontSize();
   const { canAccessModule } = usePermissions();
 
   const greeting = () => {
@@ -136,17 +127,17 @@ const Homepage = () => {
             <div className="w-16 h-16 rounded-2xl bg-white/15 backdrop-blur-md flex items-center justify-center shadow-lg border border-white/20 mb-3 animate-fade-in">
               <MercotraceIcon size={36} color="white" className="drop-shadow-md" />
             </div>
-            <h1 className={cn("font-bold text-white tracking-tight animate-fade-in", level === 0 ? 'text-xl' : level === 1 ? 'text-2xl' : 'text-3xl')}>
+            <h1 className="font-bold text-white tracking-tight animate-fade-in text-xl">
               Mercotrace
             </h1>
-            <p className={cn("text-white/70 mt-1 animate-fade-in", level === 0 ? 'text-xs' : level === 1 ? 'text-sm' : 'text-base')}>
+            <p className="text-white/70 mt-1 animate-fade-in text-xs">
               Smart Mandi Operations Platform
             </p>
             <div className="mt-3 space-y-1 animate-fade-in">
-              <p className={cn("text-white/90 font-semibold", level === 0 ? 'text-sm' : level === 1 ? 'text-base' : 'text-lg')}>
+              <p className="text-white/90 font-semibold text-sm">
                 {greeting()}, {displayName} 👋
               </p>
-              <p className={cn("text-white/60 flex items-center justify-center gap-1", level === 0 ? 'text-[11px]' : level === 1 ? 'text-xs' : 'text-sm')}>
+              <p className="text-white/60 flex items-center justify-center gap-1 text-[11px]">
                 <Sparkles className="w-3 h-3" /> {welcomeMsg}
               </p>
             </div>
@@ -167,10 +158,10 @@ const Homepage = () => {
                   <MercotraceIcon size={28} color="white" />
                 </div>
                 <div>
-                  <h2 className={cn("font-bold text-foreground", level === 0 ? 'text-xl' : level === 1 ? 'text-2xl' : 'text-3xl')}>
+                  <h2 className="font-bold text-foreground text-xl">
                     {greeting()}, <span className="bg-gradient-to-r from-primary to-violet-500 bg-clip-text text-transparent">{displayName}</span> 👋
                   </h2>
-                  <p className={cn("text-muted-foreground flex items-center gap-1.5 mt-0.5", level === 0 ? 'text-sm' : level === 1 ? 'text-base' : 'text-lg')}>
+                  <p className="text-muted-foreground flex items-center gap-1.5 mt-0.5 text-sm">
                     <Sparkles className="w-3.5 h-3.5 text-primary" /> {welcomeMsg}
                   </p>
                 </div>
@@ -182,14 +173,14 @@ const Homepage = () => {
                     <Clock className="w-3.5 h-3.5 text-primary" />
                     <p className="text-[10px] text-muted-foreground uppercase font-semibold">Today</p>
                   </div>
-                  <p className={cn("font-bold text-foreground", level === 0 ? 'text-xs' : level === 1 ? 'text-sm' : 'text-base')}>{todayStr}</p>
+                  <p className="font-bold text-foreground text-xs">{todayStr}</p>
                 </div>
                 <div className="glass-card rounded-xl p-3 text-center border border-emerald-500/10">
                   <div className="flex items-center gap-1.5 mb-1">
                     <TrendingUp className="w-3.5 h-3.5 text-emerald-500" />
                     <p className="text-[10px] text-muted-foreground uppercase font-semibold">Modules</p>
                   </div>
-                  <p className={cn("font-bold text-foreground", level === 0 ? 'text-xs' : level === 1 ? 'text-sm' : 'text-base')}>{modules.length} Active</p>
+                  <p className="font-bold text-foreground text-xs">{modules.length} Active</p>
                 </div>
               </div>
             </div>
@@ -210,7 +201,6 @@ const Homepage = () => {
                 key={mod.title}
                 mod={mod}
                 onClick={() => navigate(mod.path)}
-                level={level}
               />
             );
           })}

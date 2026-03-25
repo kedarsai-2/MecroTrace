@@ -8,7 +8,6 @@ import com.mercotrace.service.dto.ArrivalDTOs.ArrivalDetailDTO;
 import com.mercotrace.service.dto.ArrivalDTOs.ArrivalFullDetailDTO;
 import com.mercotrace.service.dto.ArrivalDTOs.ArrivalUpdateDTO;
 import com.mercotrace.web.rest.errors.BadRequestAlertException;
-import jakarta.validation.Valid;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.util.List;
@@ -49,12 +48,35 @@ public class ArrivalResource {
     }
 
     /**
-     * {@code POST  /arrivals} : Create a new arrival.
+     * {@code POST  /arrivals} : Create a new completed arrival (drafts should use {@code POST /arrivals/partial}).
      */
     @PostMapping("")
     @PreAuthorize("hasAuthority(\"" + AuthoritiesConstants.ARRIVALS_CREATE + "\")")
-    public ResponseEntity<ArrivalSummaryDTO> createArrival(@Valid @RequestBody ArrivalRequestDTO request) throws URISyntaxException {
+    public ResponseEntity<ArrivalSummaryDTO> createArrival(@RequestBody ArrivalRequestDTO request) throws URISyntaxException {
         LOG.debug("REST request to create Arrival : {}", request);
+        request.setPartiallyCompleted(false);
+        try {
+            ArrivalSummaryDTO result = arrivalService.createArrival(request);
+            return ResponseEntity
+                .created(new URI("/api/arrivals/" + result.getVehicleId()))
+                .headers(HeaderUtil.createEntityCreationAlert(applicationName, true, ENTITY_NAME, String.valueOf(result.getVehicleId())))
+                .body(result);
+        } catch (IllegalArgumentException ex) {
+            throw new BadRequestAlertException(ex.getMessage(), ENTITY_NAME, "validation");
+        } catch (DataIntegrityViolationException ex) {
+            throw new BadRequestAlertException("Lot Name already exists for this seller", ENTITY_NAME, "validation");
+        }
+    }
+
+    /**
+     * {@code POST  /arrivals/partial} : Save a draft arrival without completion rules (no minimum sellers).
+     * Uses a dedicated path so environments that enable {@code @Valid} on {@code POST /arrivals} do not reject empty payloads.
+     */
+    @PostMapping("/partial")
+    @PreAuthorize("hasAuthority(\"" + AuthoritiesConstants.ARRIVALS_CREATE + "\")")
+    public ResponseEntity<ArrivalSummaryDTO> createPartialArrival(@RequestBody ArrivalRequestDTO request) throws URISyntaxException {
+        LOG.debug("REST request to create partial Arrival : {}", request);
+        request.setPartiallyCompleted(true);
         try {
             ArrivalSummaryDTO result = arrivalService.createArrival(request);
             return ResponseEntity
@@ -81,15 +103,17 @@ public class ArrivalResource {
     /**
      * {@code GET  /arrivals} : get paginated arrivals summaries.
      * @param status optional filter: PENDING, WEIGHED, AUCTIONED, SETTLED (filter applied in memory on current page).
+     * @param partiallyCompleted optional filter: true = drafts only, false/null = completed only (default).
      */
     @GetMapping("")
     @PreAuthorize("hasAuthority(\"" + AuthoritiesConstants.ARRIVALS_VIEW + "\")")
     public ResponseEntity<List<ArrivalSummaryDTO>> getAllArrivals(
         @org.springdoc.core.annotations.ParameterObject Pageable pageable,
-        @RequestParam(required = false) String status
+        @RequestParam(required = false) String status,
+        @RequestParam(required = false) Boolean partiallyCompleted
     ) {
-        LOG.debug("REST request to get Arrivals page: {} status: {}", pageable, status);
-        Page<ArrivalSummaryDTO> page = arrivalService.listArrivals(pageable, status);
+        LOG.debug("REST request to get Arrivals page: {} status: {} partiallyCompleted: {}", pageable, status, partiallyCompleted);
+        Page<ArrivalSummaryDTO> page = arrivalService.listArrivals(pageable, status, partiallyCompleted);
         HttpHeaders headers = PaginationUtil.generatePaginationHttpHeaders(ServletUriComponentsBuilder.fromCurrentRequest(), page);
         return ResponseEntity.ok().headers(headers).body(page.getContent());
     }
