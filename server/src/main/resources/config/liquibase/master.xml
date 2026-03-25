@@ -73,6 +73,7 @@
     <include file="config/liquibase/changelog/20260318130000_remove_contact_type_add_mark_unique.xml" relativeToChangelogFile="false"/>
     <include file="config/liquibase/changelog/20260320120000_seed_system_ledgers_trader101.xml" relativeToChangelogFile="false"/>
     <include file="config/liquibase/changelog/20260320140000_trader_portal_contact_link.xml" relativeToChangelogFile="false"/>
+    <include file="config/liquibase/changelog/20260323101000_lot_name_uniqueness_within_seller.xml" relativeToChangelogFile="false"/>
     <include file="config/liquibase/changelog/20260324130000_auction_self_sale_unit_schema.xml" relativeToChangelogFile="false"/>
     <include file="config/liquibase/changelog/20260324150000_auction_self_sale_reauction_link.xml" relativeToChangelogFile="false"/>
     <include file="config/liquibase/changelog/20260324170000_lot_serial_no.xml" relativeToChangelogFile="false"/>

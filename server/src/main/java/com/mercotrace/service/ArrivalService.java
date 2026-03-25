@@ -19,7 +19,6 @@ import jakarta.validation.Valid;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
-import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -43,6 +42,7 @@ import org.springframework.transaction.annotation.Transactional;
 public class ArrivalService {
 
     private static final Logger LOG = LoggerFactory.getLogger(ArrivalService.class);
+    private static final LocalDate GLOBAL_SELLER_SERIAL_DATE = LocalDate.of(1970, 1, 1);
 
     private final VehicleRepository vehicleRepository;
     private final VehicleWeightRepository vehicleWeightRepository;
@@ -129,8 +129,9 @@ public class ArrivalService {
         weight.setRecordedAt(now);
         vehicleWeightRepository.save(weight);
 
-        DailySerial dailySerial = getOrCreateDailySerialForUpdate(traderId, LocalDate.now());
+        DailySerial dailySerial = getOrCreateGlobalSellerSerialForUpdate(traderId);
         int sellerSerial = dailySerial.getSellerSerial() != null ? dailySerial.getSellerSerial() : 0;
+        int arrivalLotSerial = 0;
 
         List<SellerInVehicle> sellerLinks = new ArrayList<>();
         List<Lot> lots = new ArrayList<>();
@@ -162,18 +163,17 @@ public class ArrivalService {
             sellerLinks.add(sellerInVehicle);
 
             sellerSerial = nextSellerSerial(sellerSerial);
-            int lotSerial = 0;
             for (ArrivalLotDTO lotDTO : sellerDTO.getLots()) {
                 Lot lot = new Lot();
                 lot.setSellerVehicleId(sellerInVehicle.getId());
                 lot.setCommodityId(resolveCommodityId(traderId, lotDTO.getCommodityName()));
-                lot.setLotName(lotDTO.getLotName());
+                lot.setLotName(lotDTO.getLotName().trim());
                 lot.setBagCount(lotDTO.getBagCount());
                 if (lotDTO.getVariant() != null && !lotDTO.getVariant().isBlank()) lot.setVariant(lotDTO.getVariant().trim());
                 if (lotDTO.getBrokerTag() != null && !lotDTO.getBrokerTag().isBlank()) lot.setBrokerTag(lotDTO.getBrokerTag().trim());
                 lot.setSellerSerialNo(sellerSerial);
-                lotSerial = nextLotSerial(lotSerial);
-                lot.setLotSerialNo(lotSerial);
+                arrivalLotSerial = nextLotSerial(arrivalLotSerial);
+                lot.setLotSerialNo(arrivalLotSerial);
                 lot.setCreatedAt(now);
                 lots.add(lot);
             }
@@ -502,10 +502,11 @@ public class ArrivalService {
             sellerInVehicleRepository.deleteByVehicleId(vehicleId);
 
             Instant now = Instant.now();
-            LocalDate serialDate = resolveSerialDate(vehicle.getArrivalDatetime());
             DailySerial dailySerial = null;
             int sellerSerial = 0;
             Set<Integer> usedSellerSerials = new HashSet<>();
+            Set<Integer> usedLotSerialsAcrossArrival = new HashSet<>();
+            int arrivalLotSerial = 0;
             Long updateBrokerContactId = update.getBrokerContactId();
             for (ArrivalSellerDTO sellerDTO : update.getSellers()) {
                 SellerInVehicle siv = new SellerInVehicle();
@@ -542,34 +543,32 @@ public class ArrivalService {
                     }
                 } else {
                     if (dailySerial == null) {
-                        dailySerial = getOrCreateDailySerialForUpdate(traderId, serialDate);
+                        dailySerial = getOrCreateGlobalSellerSerialForUpdate(traderId);
                         sellerSerial = dailySerial.getSellerSerial() != null ? dailySerial.getSellerSerial() : 0;
                     }
                     requestedSerial = nextAvailableSellerSerial(sellerSerial, usedSellerSerials);
                     sellerSerial = requestedSerial;
                     usedSellerSerials.add(requestedSerial);
                 }
-                Set<Integer> usedLotSerials = new HashSet<>();
-                int lotSerial = 0;
                 for (ArrivalLotDTO lotDTO : sellerDTO.getLots()) {
                     Lot lot = new Lot();
                     lot.setSellerVehicleId(siv.getId());
                     lot.setCommodityId(resolveCommodityId(traderId, lotDTO.getCommodityName()));
-                    lot.setLotName(lotDTO.getLotName());
+                    lot.setLotName(lotDTO.getLotName().trim());
                     lot.setBagCount(lotDTO.getBagCount());
                     if (lotDTO.getVariant() != null && !lotDTO.getVariant().isBlank()) lot.setVariant(lotDTO.getVariant().trim());
                     if (lotDTO.getBrokerTag() != null && !lotDTO.getBrokerTag().isBlank()) lot.setBrokerTag(lotDTO.getBrokerTag().trim());
                     lot.setSellerSerialNo(requestedSerial);
                     Integer requestedLotSerial = normalizeLotSerialNumber(lotDTO.getLotSerialNumber());
                     if (requestedLotSerial != null) {
-                        if (!usedLotSerials.add(requestedLotSerial)) {
-                            throw new IllegalArgumentException("Duplicate lot serial number for seller: " + requestedLotSerial);
+                        if (!usedLotSerialsAcrossArrival.add(requestedLotSerial)) {
+                            throw new IllegalArgumentException("Duplicate lot serial number in arrival update: " + requestedLotSerial);
                         }
-                        lotSerial = Math.max(lotSerial, requestedLotSerial);
+                        arrivalLotSerial = Math.max(arrivalLotSerial, requestedLotSerial);
                     } else {
-                        requestedLotSerial = nextAvailableLotSerial(lotSerial, usedLotSerials);
-                        lotSerial = requestedLotSerial;
-                        usedLotSerials.add(requestedLotSerial);
+                        requestedLotSerial = nextAvailableLotSerial(arrivalLotSerial, usedLotSerialsAcrossArrival);
+                        arrivalLotSerial = requestedLotSerial;
+                        usedLotSerialsAcrossArrival.add(requestedLotSerial);
                     }
                     lot.setLotSerialNo(requestedLotSerial);
                     lot.setCreatedAt(now);
@@ -816,6 +815,7 @@ public class ArrivalService {
                 }
             }
         }
+        validateUniqueLotNamesWithinSeller(sellers);
     }
 
     private void validateRequest(ArrivalRequestDTO request) {
@@ -849,9 +849,29 @@ public class ArrivalService {
                 }
             }
         }
+        validateUniqueLotNamesWithinSeller(request.getSellers());
         if (request.isMultiSeller()) {
             if (request.getVehicleNumber() == null || request.getVehicleNumber().isBlank()) {
                 throw new IllegalArgumentException("Vehicle number is required for multi-seller arrivals");
+            }
+        }
+    }
+
+    private void validateUniqueLotNamesWithinSeller(List<ArrivalSellerDTO> sellers) {
+        for (ArrivalSellerDTO seller : sellers) {
+            if (seller.getLots() == null || seller.getLots().isEmpty()) {
+                continue;
+            }
+            Set<String> normalizedLotNames = new HashSet<>();
+            for (ArrivalLotDTO lot : seller.getLots()) {
+                String lotName = lot.getLotName();
+                if (lotName == null || lotName.isBlank()) {
+                    continue;
+                }
+                String normalized = lotName.trim().toLowerCase();
+                if (!normalizedLotNames.add(normalized)) {
+                    throw new IllegalArgumentException("Lot Name already exists for this seller");
+                }
             }
         }
     }
@@ -860,23 +880,18 @@ public class ArrivalService {
         return traderContextService.getCurrentTraderId();
     }
 
-    private DailySerial getOrCreateDailySerialForUpdate(Long traderId, LocalDate date) {
+    private DailySerial getOrCreateGlobalSellerSerialForUpdate(Long traderId) {
         return dailySerialRepository
-            .findOneByTraderIdAndSerialDateForUpdate(traderId, date)
+            .findOneByTraderIdAndSerialDateForUpdate(traderId, GLOBAL_SELLER_SERIAL_DATE)
             .orElseGet(() -> {
                 DailySerial serial = new DailySerial();
                 serial.setTraderId(traderId);
-                serial.setSerialDate(date);
+                serial.setSerialDate(GLOBAL_SELLER_SERIAL_DATE);
                 serial.setSellerSerial(0);
                 serial.setLotSerial(0);
                 DailySerial saved = dailySerialRepository.saveAndFlush(serial);
-                return dailySerialRepository.findOneByTraderIdAndSerialDateForUpdate(traderId, date).orElse(saved);
+                return dailySerialRepository.findOneByTraderIdAndSerialDateForUpdate(traderId, GLOBAL_SELLER_SERIAL_DATE).orElse(saved);
             });
-    }
-
-    private LocalDate resolveSerialDate(Instant timestamp) {
-        Instant effectiveTimestamp = timestamp != null ? timestamp : Instant.now();
-        return effectiveTimestamp.atZone(ZoneId.systemDefault()).toLocalDate();
     }
 
     private int nextSellerSerial(int currentSerial) {
@@ -889,7 +904,7 @@ public class ArrivalService {
 
     private int nextAvailableSellerSerial(int currentSerial, Set<Integer> reservedSerials) {
         int candidate = currentSerial;
-        for (int attempt = 0; attempt < 9999; attempt++) {
+        for (int attempt = 0; attempt < 10000; attempt++) {
             candidate = nextSellerSerial(candidate);
             if (!reservedSerials.contains(candidate)) {
                 return candidate;
