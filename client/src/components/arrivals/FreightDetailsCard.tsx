@@ -22,9 +22,9 @@ const FreightDetailsCard = ({ freightRate = 0, netWeight = 0, freightMethod = 'B
   const finalCharges = Math.max(0, calculatedCharges - advancePaid);
 
   return (
-    <div className="rounded-xl border border-border/30 p-3 space-y-2">
-      <p className="text-[10px] font-bold text-amber-600 dark:text-amber-400 uppercase tracking-wider">Freight — Weight Based</p>
-      <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs">
+    <div className="rounded-xl border border-border/30 p-3.5 space-y-3">
+      <p className="text-xs font-bold text-amber-600 dark:text-amber-400 uppercase tracking-wider">Freight — Weight Based</p>
+      <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
         <span className="text-muted-foreground">Method</span>
         <span className="font-medium text-foreground text-right">{METHODS[freightMethod] || freightMethod}</span>
 
@@ -48,11 +48,11 @@ const FreightDetailsCard = ({ freightRate = 0, netWeight = 0, freightMethod = 'B
         <span className="font-medium text-red-500 text-right">− ₹{advancePaid.toLocaleString()}</span>
       </div>
 
-      <div className="rounded-lg bg-amber-50 dark:bg-amber-950/20 p-2.5 flex justify-between items-center border border-amber-200/40 dark:border-amber-800/30 mt-1">
-        <span className="text-xs font-semibold text-amber-700 dark:text-amber-300">Freight Charges (Final)</span>
-        <span className="text-base font-bold text-foreground">₹{finalCharges.toLocaleString()}</span>
+      <div className="rounded-lg bg-amber-50 dark:bg-amber-950/20 p-3 flex justify-between items-center border border-amber-200/40 dark:border-amber-800/30 mt-1">
+        <span className="text-sm font-semibold text-amber-700 dark:text-amber-300">Freight Charges (Final)</span>
+        <span className="text-lg font-bold text-foreground">₹{finalCharges.toLocaleString()}</span>
       </div>
-      <p className="text-[9px] text-muted-foreground italic">Freight Charges = Calculated Charges − Rental Advance</p>
+      <p className="text-[11px] text-muted-foreground italic">Freight Charges = Calculated Charges − Rental Advance</p>
     </div>
   );
 };

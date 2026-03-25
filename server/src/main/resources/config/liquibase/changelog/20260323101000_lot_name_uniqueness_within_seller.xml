@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!-- Normalize stored values first so DB uniqueness uses canonical values. -->
+    <changeSet id="20260323101000-1" author="mercotrace">
+        <sql dbms="postgresql">
+            UPDATE lot
+            SET lot_name = BTRIM(lot_name)
+            WHERE lot_name IS NOT NULL AND lot_name &lt;&gt; BTRIM(lot_name);
+        </sql>
+    </changeSet>
+
+    <!-- Abort migration if legacy duplicate data exists after normalization. -->
+    <changeSet id="20260323101000-2" author="mercotrace">
+        <preConditions onFail="HALT" onError="HALT">
+            <sqlCheck expectedResult="0">
+                SELECT COUNT(*)
+                FROM (
+                    SELECT seller_vehicle_id, LOWER(BTRIM(lot_name)) AS normalized_lot_name, COUNT(*) AS c
+                    FROM lot
+                    GROUP BY seller_vehicle_id, LOWER(BTRIM(lot_name))
+                    HAVING COUNT(*) &gt; 1
+                ) dups
+            </sqlCheck>
+        </preConditions>
+        <comment>Pre-check for duplicate lot names within seller before adding unique index.</comment>
+    </changeSet>
+
+    <!-- Enforce backend safety at DB layer: case-insensitive + trimmed uniqueness within seller. -->
+    <changeSet id="20260323101000-3" author="mercotrace">
+        <sql dbms="postgresql">
+            CREATE UNIQUE INDEX IF NOT EXISTS uq_lot_seller_lot_name_norm
+            ON lot (seller_vehicle_id, LOWER(BTRIM(lot_name)));
+        </sql>
+        <rollback>
+            <sql dbms="postgresql">
+                DROP INDEX IF EXISTS uq_lot_seller_lot_name_norm;
+            </sql>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

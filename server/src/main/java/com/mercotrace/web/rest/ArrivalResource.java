@@ -20,6 +20,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.servlet.support.ServletUriComponentsBuilder;
 import tech.jhipster.web.util.HeaderUtil;
@@ -62,6 +63,8 @@ public class ArrivalResource {
                 .body(result);
         } catch (IllegalArgumentException ex) {
             throw new BadRequestAlertException(ex.getMessage(), ENTITY_NAME, "validation");
+        } catch (DataIntegrityViolationException ex) {
+            throw new BadRequestAlertException("Lot Name already exists for this seller", ENTITY_NAME, "validation");
         }
     }
 
@@ -111,8 +114,14 @@ public class ArrivalResource {
     @PatchMapping("/{id}")
     @PreAuthorize("hasAuthority(\"" + AuthoritiesConstants.ARRIVALS_EDIT + "\")")
     public ResponseEntity<ArrivalSummaryDTO> updateArrival(@PathVariable Long id, @RequestBody ArrivalUpdateDTO update) {
-        ArrivalSummaryDTO result = arrivalService.updateArrival(id, update);
-        return ResponseEntity.ok(result);
+        try {
+            ArrivalSummaryDTO result = arrivalService.updateArrival(id, update);
+            return ResponseEntity.ok(result);
+        } catch (IllegalArgumentException ex) {
+            throw new BadRequestAlertException(ex.getMessage(), ENTITY_NAME, "validation");
+        } catch (DataIntegrityViolationException ex) {
+            throw new BadRequestAlertException("Lot Name already exists for this seller", ENTITY_NAME, "validation");
+        }
     }
 
     /**

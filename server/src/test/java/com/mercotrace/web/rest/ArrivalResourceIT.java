@@ -157,6 +157,42 @@ class ArrivalResourceIT {
 
     @Test
     @Transactional
+    void createArrivalWithDuplicateLotNamesWithinSameSellerIsBadRequest() throws Exception {
+        ArrivalLotDTO lot1 = new ArrivalLotDTO();
+        lot1.setLotName("Lot-1");
+        lot1.setBagCount(10);
+        lot1.setCommodityName(commodity.getCommodityName());
+
+        ArrivalLotDTO lot2 = new ArrivalLotDTO();
+        lot2.setLotName("  lot-1  ");
+        lot2.setBagCount(12);
+        lot2.setCommodityName(commodity.getCommodityName());
+
+        ArrivalSellerDTO seller = new ArrivalSellerDTO();
+        seller.setContactId(contact.getId());
+        seller.setSellerName(contact.getName());
+        seller.setSellerPhone(contact.getPhone());
+        seller.setLots(List.of(lot1, lot2));
+
+        ArrivalRequestDTO request = new ArrivalRequestDTO();
+        request.setMultiSeller(false);
+        request.setLoadedWeight(1000.0);
+        request.setEmptyWeight(100.0);
+        request.setDeductedWeight(100.0);
+        request.setFreightMethod(FreightMethod.BY_WEIGHT);
+        request.setFreightRate(2.5);
+        request.setNoRental(false);
+        request.setAdvancePaid(0.0);
+        request.setSellers(List.of(seller));
+
+        restArrivalMockMvc
+            .perform(post(ENTITY_API_URL).contentType(MediaType.APPLICATION_JSON).content(om.writeValueAsBytes(request)))
+            .andExpect(status().isBadRequest())
+            .andExpect(content().string(org.hamcrest.Matchers.containsString("Lot Name already exists for this seller")));
+    }
+
+    @Test
+    @Transactional
     void getAllArrivalsReturnsPaginatedSummaries() throws Exception {
         ArrivalRequestDTO request = buildBasicRequest(false);
 
