@@ -2,7 +2,7 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Home, Settings, Users, Truck, Gavel, Printer,
-  FileText, Receipt, BookOpen, CreditCard, User,
+  FileText, Receipt, BookOpen, CreditCard, User, Scale,
   ChevronLeft, ChevronRight, Moon, Sun, LogOut, ShieldCheck,
   ShoppingBag, Box, Send
 } from 'lucide-react';
@@ -31,6 +31,8 @@ const navSections = [
       { icon: Settings, title: 'Commodity Settings', path: '/commodity-settings' },
       { icon: Truck, title: 'Arrivals', path: '/arrivals' },
       { icon: Gavel, title: 'Auctions / Sales', path: '/auctions' },
+      { icon: Scale, title: 'Weighing', path: '/weighing' },
+      { icon: FileText, title: "Writer's Pad", path: '/writers-pad' },
       { icon: Printer, title: 'Print Hub', path: '/logistics' },
     ],
   },
