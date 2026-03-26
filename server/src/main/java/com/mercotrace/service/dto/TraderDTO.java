@@ -54,6 +54,8 @@ public class TraderDTO implements Serializable {
 
     private Instant updatedAt;
 
+    private Instant approvalDecisionAt;
+
     // Comma-separated URLs/paths
     private String shopPhotos;
 
@@ -64,6 +66,8 @@ public class TraderDTO implements Serializable {
     private String rmcApmcCode;
 
     private Boolean active = true;
+
+    private Boolean presetEnabled = true;
 
     public Long getId() {
         return id;
@@ -185,6 +189,14 @@ public class TraderDTO implements Serializable {
         this.updatedAt = updatedAt;
     }
 
+    public Instant getApprovalDecisionAt() {
+        return approvalDecisionAt;
+    }
+
+    public void setApprovalDecisionAt(Instant approvalDecisionAt) {
+        this.approvalDecisionAt = approvalDecisionAt;
+    }
+
     public String getShopPhotos() {
         return shopPhotos;
     }
@@ -215,6 +227,14 @@ public class TraderDTO implements Serializable {
 
     public void setActive(Boolean active) {
         this.active = active;
+    }
+
+    public Boolean getPresetEnabled() {
+        return presetEnabled;
+    }
+
+    public void setPresetEnabled(Boolean presetEnabled) {
+        this.presetEnabled = presetEnabled;
     }
 
     @Override
@@ -252,6 +272,7 @@ public class TraderDTO implements Serializable {
             ", billPrefix='" + getBillPrefix() + "'" +
             ", createdAt='" + getCreatedAt() + "'" +
             ", updatedAt='" + getUpdatedAt() + "'" +
+            ", approvalDecisionAt='" + getApprovalDecisionAt() + "'" +
             "}";
     }
 }

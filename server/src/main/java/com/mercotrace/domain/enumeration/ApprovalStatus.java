@@ -6,4 +6,5 @@ package com.mercotrace.domain.enumeration;
 public enum ApprovalStatus {
     PENDING,
     APPROVED,
+    REJECTED,
 }

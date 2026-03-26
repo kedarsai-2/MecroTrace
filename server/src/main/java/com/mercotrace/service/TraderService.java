@@ -71,4 +71,9 @@ public interface TraderService {
      * @param id the trader id.
      */
     void permanentDelete(Long id);
+
+    /**
+     * When true, trader manages own preset marks; when false, global admin presets apply.
+     */
+    TraderDTO setPresetEnabled(Long id, boolean enabled);
 }

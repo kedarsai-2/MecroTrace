@@ -17,7 +17,9 @@ type TraderDTO = {
   billPrefix?: string;
   createdAt?: string;
   updatedAt?: string;
+  approvalDecisionAt?: string | null;
   active?: boolean;
+  presetEnabled?: boolean;
 };
 
 function mapDtoToTrader(dto: TraderDTO): Trader {
@@ -37,7 +39,9 @@ function mapDtoToTrader(dto: TraderDTO): Trader {
     shop_photos: [],
     created_at: dto.createdAt ?? new Date().toISOString(),
     updated_at: dto.updatedAt ?? new Date().toISOString(),
+    approval_decision_at: dto.approvalDecisionAt ?? null,
     active: dto.active ?? true,
+    preset_enabled: dto.presetEnabled !== false,
   };
 }
 
@@ -76,6 +80,14 @@ export const traderApi = {
     return mapDtoToTrader(dto);
   },
 
+  /** Admin: reject pending trader (PATCH /api/admin/traders/{id}/reject). */
+  async reject(traderId: string): Promise<Trader> {
+    const res = await apiFetch(`/admin/traders/${encodeURIComponent(traderId)}/reject`, { method: 'PATCH' });
+    if (!res.ok) throw new Error('Failed to reject trader');
+    const dto = (await res.json()) as TraderDTO;
+    return mapDtoToTrader(dto);
+  },
+
   /** Admin: list inactive traders (GET /api/admin/traders/inactive). */
   async listInactive(params: { page?: number; size?: number } = {}): Promise<Trader[]> {
     const searchParams = new URLSearchParams();
@@ -103,6 +115,17 @@ export const traderApi = {
   async permanentDelete(traderId: string): Promise<void> {
     const res = await apiFetch(`/admin/traders/${encodeURIComponent(traderId)}/permanent`, { method: 'DELETE' });
     if (!res.ok) throw new Error('Failed to permanently delete trader');
+  },
+
+  /** Admin: enable/disable trader-owned preset marks (PATCH /api/admin/traders/{id}/preset-enabled). */
+  async setPresetEnabled(traderId: string, enabled: boolean): Promise<Trader> {
+    const res = await apiFetch(`/admin/traders/${encodeURIComponent(traderId)}/preset-enabled`, {
+      method: 'PATCH',
+      body: JSON.stringify({ enabled }),
+    });
+    if (!res.ok) throw new Error('Failed to update preset setting');
+    const dto = (await res.json()) as TraderDTO;
+    return mapDtoToTrader(dto);
   },
 };
 

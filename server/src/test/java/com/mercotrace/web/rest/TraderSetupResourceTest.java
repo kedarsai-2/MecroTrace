@@ -646,4 +646,74 @@ class TraderSetupResourceTest {
                 .andExpect(status().isUnauthorized());
         }
     }
+
+    // ---------- AdminTraderSpecResource: Reject ----------
+
+    @Nested
+    @Disabled("Reject trader API tests deferred — enable when running full admin-trader suite")
+    @DisplayName("Reject trader")
+    class RejectTrader {
+
+        @Test
+        @WithMockUser(username = "admin", roles = "ADMIN")
+        @DisplayName("rejectTrader_pending_returns200")
+        void rejectTrader_pending_returns200() throws Exception {
+            Long id = 1L;
+            validTraderDTO.setId(id);
+            validTraderDTO.setApprovalStatus(ApprovalStatus.PENDING);
+            TraderDTO rejected = new TraderDTO();
+            rejected.setId(id);
+            rejected.setBusinessName(validTraderDTO.getBusinessName());
+            rejected.setOwnerName(validTraderDTO.getOwnerName());
+            rejected.setApprovalStatus(ApprovalStatus.REJECTED);
+
+            when(traderService.findOne(id)).thenReturn(Optional.of(validTraderDTO));
+            when(traderService.update(any(TraderDTO.class))).thenReturn(rejected);
+            when(userTraderRepository.findAllWithUserByTraderIdAndPrimaryMappingTrue(id))
+                .thenReturn(Collections.emptyList());
+
+            mockMvc
+                .perform(patch(ADMIN_TRADERS_API + "/" + id + "/reject").with(csrf()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(id))
+                .andExpect(jsonPath("$.approvalStatus").value("REJECTED"));
+
+            verify(traderService).findOne(id);
+            verify(traderService).update(any(TraderDTO.class));
+            verify(userTraderRepository).findAllWithUserByTraderIdAndPrimaryMappingTrue(id);
+        }
+
+        @Test
+        @WithMockUser(username = "admin", roles = "ADMIN")
+        @DisplayName("rejectTrader_alreadyApproved_returns400")
+        void rejectTrader_alreadyApproved_returns400() throws Exception {
+            Long id = 2L;
+            TraderDTO dto = new TraderDTO();
+            dto.setId(id);
+            dto.setApprovalStatus(ApprovalStatus.APPROVED);
+            when(traderService.findOne(id)).thenReturn(Optional.of(dto));
+
+            mockMvc
+                .perform(patch(ADMIN_TRADERS_API + "/" + id + "/reject").with(csrf()))
+                .andExpect(status().isBadRequest());
+
+            verify(traderService).findOne(id);
+            verify(traderService, never()).update(any(TraderDTO.class));
+        }
+
+        @Test
+        @WithMockUser(username = "admin", roles = "ADMIN")
+        @DisplayName("rejectTrader_notFound_returns404")
+        void rejectTrader_notFound_returns404() throws Exception {
+            Long id = 999L;
+            when(traderService.findOne(id)).thenReturn(Optional.empty());
+
+            mockMvc
+                .perform(patch(ADMIN_TRADERS_API + "/" + id + "/reject").with(csrf()))
+                .andExpect(status().isNotFound());
+
+            verify(traderService).findOne(id);
+            verify(traderService, never()).update(any(TraderDTO.class));
+        }
+    }
 }

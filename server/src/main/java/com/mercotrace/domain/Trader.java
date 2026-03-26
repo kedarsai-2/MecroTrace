@@ -81,6 +81,9 @@ public class Trader implements Serializable {
     @Column(name = "updated_at")
     private Instant updatedAt;
 
+    @Column(name = "approval_decision_at")
+    private Instant approvalDecisionAt;
+
     @Column(name = "shop_photos")
     private String shopPhotos; // comma-separated URLs/paths
 
@@ -95,6 +98,13 @@ public class Trader implements Serializable {
     @NotNull
     @Column(name = "active", nullable = false)
     private Boolean active = true;
+
+    /**
+     * When true, trader may define own preset marks; when false, auction uses {@link GlobalPresetMarkSetting} rows only.
+     */
+    @NotNull
+    @Column(name = "preset_enabled", nullable = false)
+    private Boolean presetEnabled = true;
 
     // jhipster-needle-entity-add-field - JHipster will add fields here
 
@@ -268,6 +278,19 @@ public class Trader implements Serializable {
         this.updatedAt = updatedAt;
     }
 
+    public Instant getApprovalDecisionAt() {
+        return approvalDecisionAt;
+    }
+
+    public Trader approvalDecisionAt(Instant approvalDecisionAt) {
+        this.setApprovalDecisionAt(approvalDecisionAt);
+        return this;
+    }
+
+    public void setApprovalDecisionAt(Instant approvalDecisionAt) {
+        this.approvalDecisionAt = approvalDecisionAt;
+    }
+
     public String getShopPhotos() {
         return shopPhotos;
     }
@@ -305,6 +328,19 @@ public class Trader implements Serializable {
         this.active = active;
     }
 
+    public Boolean getPresetEnabled() {
+        return presetEnabled;
+    }
+
+    public Trader presetEnabled(Boolean presetEnabled) {
+        this.setPresetEnabled(presetEnabled);
+        return this;
+    }
+
+    public void setPresetEnabled(Boolean presetEnabled) {
+        this.presetEnabled = presetEnabled;
+    }
+
     // jhipster-needle-entity-add-getters-setters - JHipster will add getters and setters here
 
     @Override
@@ -338,6 +374,7 @@ public class Trader implements Serializable {
             ", billPrefix='" + getBillPrefix() + "'" +
             ", createdAt='" + getCreatedAt() + "'" +
             ", updatedAt='" + getUpdatedAt() + "'" +
+            ", approvalDecisionAt='" + getApprovalDecisionAt() + "'" +
             "}";
     }
 }

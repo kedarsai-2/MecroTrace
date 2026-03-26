@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useCallback, useRef, useLayoutEffect, Fra
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   ArrowLeft, Gavel, Plus, Trash2,
-  ShoppingCart, User, Package, Truck, IndianRupee, Banknote, ChevronDown,
+  ShoppingCart, User, Package, Truck, Banknote, ChevronDown,
   Search, AlertTriangle, Merge, Hash,
   ChevronLeft, ChevronRight, List, Filter, Printer,
   Pencil, Check, X,
@@ -1199,7 +1199,7 @@ const AuctionsPage = () => {
     });
   };
 
-  const handleSaveAndCompleteAuction = async () => {
+  const runAuctionCompletion = useCallback(async (openPrintAfter: boolean) => {
     if (!selectedLot) return;
     setCompleteLoading(true);
     if (!can('Auctions / Sales', 'Approve')) {
@@ -1207,10 +1207,16 @@ const AuctionsPage = () => {
       setCompleteLoading(false);
       return;
     }
+    const partial = remaining > 0;
     try {
       const completed = await completeAuctionForCurrentSelection();
-      setCompletedAuction(completed);
-      setShowPrint(true);
+      if (openPrintAfter) {
+        setCompletedAuction(completed);
+        setShowPrint(true);
+      } else {
+        setCompletedAuction(null);
+        setShowPrint(false);
+      }
       clearDraft();
       setShowLotSelector(true);
       setSelectedLot(null);
@@ -1220,13 +1226,33 @@ const AuctionsPage = () => {
       void loadTemporaryBuyerMarks();
       loadLots();
       loadSelfSaleLots();
-      toast.success(remaining > 0 ? 'Auction saved (partial). Navigate to Logistics or Weighing.' : 'Auction saved! Navigate to Logistics or Weighing.');
+      if (openPrintAfter) {
+        toast.success(partial ? 'Auction saved (partial). Opening print…' : 'Auction completed. Opening print…');
+      } else {
+        toast.success(partial ? 'Auction saved (partial). Back to lot list.' : 'Auction completed. Back to lot list.');
+      }
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Failed to complete auction');
     } finally {
       setCompleteLoading(false);
     }
-  };
+  }, [
+    selectedLot,
+    can,
+    remaining,
+    completeAuctionForCurrentSelection,
+    loadTemporaryBuyerMarks,
+    loadLots,
+    loadSelfSaleLots,
+  ]);
+
+  const handleSaveAndCompleteAuction = useCallback(() => {
+    void runAuctionCompletion(false);
+  }, [runAuctionCompletion]);
+
+  const handleCompleteAndPrint = useCallback(() => {
+    void runAuctionCompletion(true);
+  }, [runAuctionCompletion]);
 
   useEffect(() => {
     if (!showPrint || !completedAuction) return;
@@ -1511,18 +1537,23 @@ const AuctionsPage = () => {
 
   useEffect(() => {
     if (editingBidId) return;
+    if (!showPresetMargin) return;
     if (rate.trim() !== '') return;
     if (previousBidRate <= 0) return;
-    const displayRate = showPresetMargin ? previousBidRate + preset : previousBidRate;
+    const displayRate = previousBidRate + preset;
     setRate(String(displayRate));
   }, [editingBidId, previousBidRate, rate, showPresetMargin, preset]);
 
   const handleShowPresetMarginChange = useCallback((checked: boolean) => {
     if (!editingBidId) {
-      const currentInput = parseInt(rate, 10);
-      if (Number.isFinite(currentInput) && currentInput > 0) {
-        const nextInput = checked ? currentInput + preset : currentInput - preset;
-        setRate(String(Math.max(0, nextInput)));
+      if (checked) {
+        if (previousBidRate > 0) {
+          setRate(String(previousBidRate + preset));
+        } else {
+          setRate('');
+        }
+      } else {
+        setRate('');
       }
     }
     setShowPresetMargin(checked);
@@ -1532,7 +1563,7 @@ const AuctionsPage = () => {
       const nextPreset = checked ? preset : 0;
       return { ...d, preset: nextPreset, presetType: nextPreset < 0 ? 'LOSS' : 'PROFIT' };
     });
-  }, [editingBidId, preset, rate]);
+  }, [editingBidId, preset, previousBidRate]);
 
   const selectLot = useCallback((lot: LotInfo, source: LotSource = statusFilter === 'self_sale' ? 'self_sale' : 'regular') => {
     setSelectedLotSource(source);
@@ -2190,10 +2221,6 @@ const AuctionsPage = () => {
                       {opt.label}
                     </button>
                   ))}
-                  <div className="flex items-center gap-1 px-2 py-1.5 rounded-xl bg-muted/30 min-w-[60px]">
-                    <IndianRupee className="w-3.5 h-3.5 text-primary" />
-                    <span className={cn("text-sm font-bold", preset >= 0 ? 'text-success' : 'text-destructive')}>{preset}</span>
-                  </div>
                 </div>
                 {preset !== 0 && highestBid > 0 && (
                   <motion.p initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="text-[10px] text-muted-foreground mt-2">
@@ -2532,16 +2559,9 @@ const AuctionsPage = () => {
 
         {/* Auction Grid — entries list */}
         <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }} className={cn(!isDesktop && "order-2")}>
-          <div className="flex items-center justify-between mb-2">
-            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-              Auction Grid · {entries.length} entries
-            </p>
-            {entries.length > 0 && (
-              <p className="text-xs text-muted-foreground">
-                Total: <span className="font-bold text-foreground">₹{entries.reduce((s, e) => s + e.amount, 0).toLocaleString()}</span>
-              </p>
-            )}
-          </div>
+          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">
+            Auction Grid · {entries.length} entries
+          </p>
 
           {entries.length === 0 ? (
             <div className="glass-card rounded-2xl p-8 text-center">
@@ -2615,7 +2635,7 @@ const AuctionsPage = () => {
                               )}
                             </div>
                           </td>
-                          <td className={cn("font-semibold text-foreground align-top", isDesktop ? "px-3 py-2 text-sm" : "px-2 py-1.5 text-xs")}>
+                          <td className={cn("align-top font-semibold text-foreground", isDesktop ? "px-3 py-2 text-sm" : "px-2 py-1.5 text-xs")}>
                             <div>₹{entry.rate}</div>
                             {showPresetMargin && (
                               <div className="text-[10px] font-medium text-muted-foreground">
@@ -2730,12 +2750,23 @@ const AuctionsPage = () => {
               <>
                 <p className="text-[10px] text-muted-foreground mt-1">{remaining} bags remaining</p>
                 {isDesktop && (
-                  <Button
-                    disabled={completeLoading}
-                    onClick={handleSaveAndCompleteAuction}
-                    className="mt-2 w-full h-10 rounded-xl bg-gradient-to-r from-emerald-500 to-green-500 text-white font-bold text-sm shadow-md">
-                    {completeLoading ? 'Completing…' : `✓ Save & Complete (${remaining} unsold)`}
-                  </Button>
+                  <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-stretch">
+                    <Button
+                      disabled={completeLoading}
+                      onClick={handleSaveAndCompleteAuction}
+                      className="h-10 flex-1 rounded-xl bg-gradient-to-r from-emerald-500 to-green-500 text-white font-bold text-sm shadow-md">
+                      {completeLoading ? 'Completing…' : `✓ Save & Complete (${remaining} unsold)`}
+                    </Button>
+                    <Button
+                      type="button"
+                      disabled={completeLoading}
+                      onClick={handleCompleteAndPrint}
+                      variant="outline"
+                      className="h-10 flex-1 rounded-xl border-primary/35 font-bold text-sm shadow-sm hover:bg-primary/5">
+                      <Printer className="w-4 h-4 shrink-0 sm:mr-1.5" />
+                      Print
+                    </Button>
+                  </div>
                 )}
               </>
             )}
@@ -2743,12 +2774,23 @@ const AuctionsPage = () => {
               <>
                 <p className="text-[10px] text-success font-semibold mt-1">✓ All bags sold!</p>
                 {isDesktop && (
-                  <Button
-                    disabled={completeLoading}
-                    onClick={handleSaveAndCompleteAuction}
-                    className="mt-2 w-full h-10 rounded-xl bg-gradient-to-r from-emerald-500 to-green-500 text-white font-bold text-sm shadow-md">
-                    {completeLoading ? 'Completing…' : '✓ Save & Complete Auction'}
-                  </Button>
+                  <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-stretch">
+                    <Button
+                      disabled={completeLoading}
+                      onClick={handleSaveAndCompleteAuction}
+                      className="h-10 flex-1 rounded-xl bg-gradient-to-r from-emerald-500 to-green-500 text-white font-bold text-sm shadow-md">
+                      {completeLoading ? 'Completing…' : '✓ Save & Complete Auction'}
+                    </Button>
+                    <Button
+                      type="button"
+                      disabled={completeLoading}
+                      onClick={handleCompleteAndPrint}
+                      variant="outline"
+                      className="h-10 flex-1 rounded-xl border-primary/35 font-bold text-sm shadow-sm hover:bg-primary/5">
+                      <Printer className="w-4 h-4 shrink-0 sm:mr-1.5" />
+                      Print
+                    </Button>
+                  </div>
                 )}
               </>
             )}
@@ -3039,10 +3081,6 @@ const AuctionsPage = () => {
                   {opt.label}
                 </button>
               ))}
-              <div className="flex items-center gap-0.5 px-1.5 py-1 rounded-lg bg-muted/30 min-w-[48px] justify-center">
-                <IndianRupee className="w-3 h-3 text-primary" />
-                <span className={cn("text-xs font-bold", preset >= 0 ? 'text-success' : 'text-destructive')}>{preset}</span>
-              </div>
             </div>
           )}
           <div className="grid grid-cols-[1.4fr_1fr] gap-1.5 items-stretch">
@@ -3143,14 +3181,25 @@ const AuctionsPage = () => {
                   </button>
                 </div>
               )}
-              <button
-                type="button"
-                disabled={completeLoading || entries.length === 0}
-                onClick={handleSaveAndCompleteAuction}
-                className="w-full h-8 rounded-lg bg-gradient-to-r from-emerald-500 to-green-500 text-white text-[10px] font-bold disabled:opacity-50"
-              >
-                {completeLoading ? 'Completing…' : 'Save & Complete'}
-              </button>
+              <div className="grid grid-cols-2 gap-1.5 w-full">
+                <button
+                  type="button"
+                  disabled={completeLoading || entries.length === 0}
+                  onClick={handleSaveAndCompleteAuction}
+                  className="h-9 rounded-lg bg-gradient-to-r from-emerald-500 to-green-500 text-white text-[10px] sm:text-[11px] font-bold disabled:opacity-50 px-1 leading-tight"
+                >
+                  {completeLoading ? 'Completing…' : 'Save & Complete'}
+                </button>
+                <button
+                  type="button"
+                  disabled={completeLoading || entries.length === 0}
+                  onClick={handleCompleteAndPrint}
+                  className="h-9 rounded-lg border border-primary/40 bg-background text-foreground text-[10px] sm:text-[11px] font-bold disabled:opacity-50 inline-flex items-center justify-center gap-0.5 px-1 leading-tight"
+                >
+                  <Printer className="w-3.5 h-3.5 shrink-0" />
+                  {completeLoading ? 'Completing…' : 'Print'}
+                </button>
+              </div>
             </div>
           </div>
         </div>

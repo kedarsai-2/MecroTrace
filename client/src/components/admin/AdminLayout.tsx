@@ -3,6 +3,7 @@ import { useNavigate, useLocation, Outlet } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Users,
+  Sliders,
   ChevronLeft,
   ChevronRight,
   LogOut,
@@ -28,6 +29,7 @@ type AdminNavItem = {
 
 const navItems: AdminNavItem[] = [
   { icon: Users, label: 'Traders', path: '/admin/traders', moduleKey: 'Traders' },
+  { icon: Sliders, label: 'Settings', path: '/admin/settings/global-presets', moduleKey: 'Settings' },
 ];
 
 const AdminLayout = () => {

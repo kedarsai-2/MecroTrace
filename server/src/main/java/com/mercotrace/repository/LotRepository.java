@@ -3,6 +3,7 @@ package com.mercotrace.repository;
 import com.mercotrace.domain.Lot;
 import java.util.Collection;
 import java.util.List;
+import java.util.Optional;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -72,6 +73,28 @@ public interface LotRepository extends JpaRepository<Lot, Long> {
         @Param("excludedLotIds") Collection<Long> excludedLotIds,
         @Param("q") String q,
         Pageable pageable
+    );
+
+    /**
+     * Smallest seller serial on any historical lot for this contact under this trader (for seeding stable arrival seller serials).
+     */
+    @Query(
+        "SELECT MIN(l.sellerSerialNo) FROM Lot l, SellerInVehicle siv, Vehicle v WHERE l.sellerVehicleId = siv.id AND siv.vehicleId = v.id " +
+        "AND v.traderId = :traderId AND siv.contactId = :contactId"
+    )
+    Optional<Integer> findMinSellerSerialNoForContactAndTrader(@Param("contactId") Long contactId, @Param("traderId") Long traderId);
+
+    /**
+     * Smallest seller serial on any historical lot for a free-text seller (no contact) with this mark under this trader.
+     * {@code normalizedMark} must be {@code trim + lowerCase} to match {@link com.mercotrace.service.ArrivalService} keys.
+     */
+    @Query(
+        "SELECT MIN(l.sellerSerialNo) FROM Lot l, SellerInVehicle siv, Vehicle v WHERE l.sellerVehicleId = siv.id AND siv.vehicleId = v.id " +
+        "AND v.traderId = :traderId AND siv.contactId IS NULL AND LOWER(TRIM(siv.sellerMark)) = :normalizedMark"
+    )
+    Optional<Integer> findMinSellerSerialNoForFreeTextMarkAndTrader(
+        @Param("normalizedMark") String normalizedMark,
+        @Param("traderId") Long traderId
     );
 }
 

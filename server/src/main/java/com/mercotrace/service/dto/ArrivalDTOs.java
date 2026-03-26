@@ -18,7 +18,7 @@ public final class ArrivalDTOs {
 
         private String lotName;
 
-        /** Preserved on edit/reopen; generated server-side when absent. */
+        /** Returned by API; recalculated server-side as arrival-scoped sequential (1..N). */
         private Integer lotSerialNumber;
 
         @Min(1)
@@ -85,7 +85,7 @@ public final class ArrivalDTOs {
         /** When null, seller is free-text (name/phone from DTO only). */
         private Long contactId;
 
-        /** Preserved on edit/reopen; ignored during create allocation when absent. */
+        /** Returned by API; serial is assigned server-side from stable per-trader seller identity (incoming value ignored). */
         private Integer sellerSerialNumber;
 
         private String sellerName;

@@ -121,4 +121,13 @@ public class TraderServiceImpl implements TraderService {
         LOG.debug("Request to permanent delete Trader : {}", id);
         traderPermanentDeleteService.permanentDelete(id);
     }
+
+    @Override
+    public TraderDTO setPresetEnabled(Long id, boolean enabled) {
+        LOG.debug("Request to set Trader {} presetEnabled={}", id, enabled);
+        Trader trader = traderRepository.findById(id).orElseThrow(() -> new jakarta.persistence.EntityNotFoundException("Trader not found: " + id));
+        trader.setPresetEnabled(enabled);
+        trader = traderRepository.save(trader);
+        return traderMapper.toDto(trader);
+    }
 }

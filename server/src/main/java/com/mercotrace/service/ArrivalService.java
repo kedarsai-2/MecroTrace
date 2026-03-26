@@ -45,6 +45,9 @@ public class ArrivalService {
     private static final Logger LOG = LoggerFactory.getLogger(ArrivalService.class);
     private static final LocalDate GLOBAL_SELLER_SERIAL_DATE = LocalDate.of(1970, 1, 1);
 
+    /** Persisted in {@code daily_serial_allocation}; stable seller-to-serial mapping per trader (not per arrival). */
+    private static final String KEY_TYPE_ARRIVAL_SELLER = "ARRIVAL_SELLER";
+
     /** JSON omitted {@code multiSeller} → multi mode (matches UI default); explicit false → single. */
     private static boolean effectiveRequestMultiSeller(ArrivalRequestDTO request) {
         Boolean m = request.getMultiSeller();
@@ -59,6 +62,7 @@ public class ArrivalService {
     private final FreightDistributionRepository freightDistributionRepository;
     private final VoucherRepository voucherRepository;
     private final DailySerialRepository dailySerialRepository;
+    private final DailySerialAllocationRepository dailySerialAllocationRepository;
     private final CommodityRepository commodityRepository;
     private final ContactRepository contactRepository;
     private final ContactService contactService;
@@ -79,6 +83,7 @@ public class ArrivalService {
         FreightDistributionRepository freightDistributionRepository,
         VoucherRepository voucherRepository,
         DailySerialRepository dailySerialRepository,
+        DailySerialAllocationRepository dailySerialAllocationRepository,
         CommodityRepository commodityRepository,
         ContactRepository contactRepository,
         ContactService contactService,
@@ -95,6 +100,7 @@ public class ArrivalService {
         this.freightDistributionRepository = freightDistributionRepository;
         this.voucherRepository = voucherRepository;
         this.dailySerialRepository = dailySerialRepository;
+        this.dailySerialAllocationRepository = dailySerialAllocationRepository;
         this.commodityRepository = commodityRepository;
         this.contactRepository = contactRepository;
         this.contactService = contactService;
@@ -157,7 +163,9 @@ public class ArrivalService {
         vehicleWeightRepository.save(weight);
 
         DailySerial dailySerial = getOrCreateGlobalSellerSerialForUpdate(traderId);
-        int sellerSerial = dailySerial.getSellerSerial() != null ? dailySerial.getSellerSerial() : 0;
+        int sellerSerialPeak = dailySerial.getSellerSerial() != null ? dailySerial.getSellerSerial() : 0;
+        Set<Integer> usedSellerSerials = new HashSet<>();
+        Set<String> seenSellerKeys = new HashSet<>();
         int arrivalLotSerial = 0;
 
         List<SellerInVehicle> sellerLinks = new ArrayList<>();
@@ -186,7 +194,8 @@ public class ArrivalService {
             sellerInVehicle = sellerInVehicleRepository.save(sellerInVehicle);
             sellerLinks.add(sellerInVehicle);
 
-            sellerSerial = nextSellerSerial(sellerSerial);
+            int sellerSerial = assignStableSellerSerial(traderId, sellerDTO, dailySerial, usedSellerSerials, seenSellerKeys);
+            sellerSerialPeak = Math.max(sellerSerialPeak, sellerSerial);
             List<ArrivalLotDTO> sellerLots = sellerDTO.getLots() != null ? sellerDTO.getLots() : List.of();
             for (ArrivalLotDTO lotDTO : sellerLots) {
                 // DB constraints require commodity_id + lot_name; skip incomplete lot rows.
@@ -220,7 +229,7 @@ public class ArrivalService {
             lotRepository.saveAll(lots);
         }
 
-        dailySerial.setSellerSerial(sellerSerial);
+        dailySerial.setSellerSerial(sellerSerialPeak);
         if (dailySerial.getLotSerial() == null) {
             dailySerial.setLotSerial(0);
         }
@@ -576,10 +585,10 @@ public class ArrivalService {
             sellerInVehicleRepository.deleteByVehicleId(vehicleId);
 
             Instant now = Instant.now();
-            DailySerial dailySerial = null;
-            int sellerSerial = 0;
+            DailySerial dailySerial = getOrCreateGlobalSellerSerialForUpdate(traderId);
+            int sellerSerialPeak = dailySerial.getSellerSerial() != null ? dailySerial.getSellerSerial() : 0;
             Set<Integer> usedSellerSerials = new HashSet<>();
-            Set<Integer> usedLotSerialsAcrossArrival = new HashSet<>();
+            Set<String> seenSellerKeys = new HashSet<>();
             int arrivalLotSerial = 0;
             Long updateBrokerContactId = update.getBrokerContactId();
             for (ArrivalSellerDTO sellerDTO : update.getSellers()) {
@@ -607,20 +616,8 @@ public class ArrivalService {
                     siv.setBrokerId(updateBrokerContactId);
                 }
                 siv = sellerInVehicleRepository.save(siv);
-                Integer requestedSerial = normalizeSellerSerialNumber(sellerDTO.getSellerSerialNumber());
-                if (requestedSerial != null) {
-                    if (!usedSellerSerials.add(requestedSerial)) {
-                        throw new IllegalArgumentException("Duplicate seller serial number in arrival update: " + requestedSerial);
-                    }
-                } else {
-                    if (dailySerial == null) {
-                        dailySerial = getOrCreateGlobalSellerSerialForUpdate(traderId);
-                        sellerSerial = dailySerial.getSellerSerial() != null ? dailySerial.getSellerSerial() : 0;
-                    }
-                    requestedSerial = nextAvailableSellerSerial(sellerSerial, usedSellerSerials);
-                    sellerSerial = requestedSerial;
-                    usedSellerSerials.add(requestedSerial);
-                }
+                int requestedSerial = assignStableSellerSerial(traderId, sellerDTO, dailySerial, usedSellerSerials, seenSellerKeys);
+                sellerSerialPeak = Math.max(sellerSerialPeak, requestedSerial);
                 List<ArrivalLotDTO> sellerLots = sellerDTO.getLots() != null ? sellerDTO.getLots() : List.of();
                 for (ArrivalLotDTO lotDTO : sellerLots) {
                     // DB constraints require commodity_id + lot_name; skip incomplete lot rows.
@@ -639,29 +636,19 @@ public class ArrivalService {
                     if (lotDTO.getVariant() != null && !lotDTO.getVariant().isBlank()) lot.setVariant(lotDTO.getVariant().trim());
                     if (lotDTO.getBrokerTag() != null && !lotDTO.getBrokerTag().isBlank()) lot.setBrokerTag(lotDTO.getBrokerTag().trim());
                     lot.setSellerSerialNo(requestedSerial);
-                    Integer requestedLotSerial = normalizeLotSerialNumber(lotDTO.getLotSerialNumber());
-                    if (requestedLotSerial != null) {
-                        if (!usedLotSerialsAcrossArrival.add(requestedLotSerial)) {
-                            throw new IllegalArgumentException("Duplicate lot serial number in arrival update: " + requestedLotSerial);
-                        }
-                        arrivalLotSerial = Math.max(arrivalLotSerial, requestedLotSerial);
-                    } else {
-                        requestedLotSerial = nextAvailableLotSerial(arrivalLotSerial, usedLotSerialsAcrossArrival);
-                        arrivalLotSerial = requestedLotSerial;
-                        usedLotSerialsAcrossArrival.add(requestedLotSerial);
-                    }
-                    lot.setLotSerialNo(requestedLotSerial);
+                    // Lot serials are arrival-scoped and always re-numbered sequentially (1..N)
+                    // across all sellers in the submitted order.
+                    arrivalLotSerial = nextLotSerial(arrivalLotSerial);
+                    lot.setLotSerialNo(arrivalLotSerial);
                     lot.setCreatedAt(now);
                     currentLots.add(lot);
                 }
             }
-            if (dailySerial != null) {
-                dailySerial.setSellerSerial(sellerSerial);
-                if (dailySerial.getLotSerial() == null) {
-                    dailySerial.setLotSerial(0);
-                }
-                dailySerialRepository.save(dailySerial);
+            dailySerial.setSellerSerial(sellerSerialPeak);
+            if (dailySerial.getLotSerial() == null) {
+                dailySerial.setLotSerial(0);
             }
+            dailySerialRepository.save(dailySerial);
             if (updateBrokerContactId != null) {
                 contactService.ensureTraderUsesPortalContact(traderId, updateBrokerContactId);
             }
@@ -1085,6 +1072,119 @@ public class ArrivalService {
         return traderContextService.getCurrentTraderId();
     }
 
+    /**
+     * Identity key for stable seller serial: registered contact; for free-text prefer {@code sellerMark} (unique per trader rules),
+     * then phone digits, then normalized name. When this returns null, a one-off serial is allocated without persisting a mapping
+     * (incomplete/partial rows).
+     */
+    private String resolveArrivalSellerSerialKey(ArrivalSellerDTO sellerDTO) {
+        Long contactId = sellerDTO.getContactId();
+        if (contactId != null) {
+            return "c:" + contactId;
+        }
+        String sellerMark = sellerDTO.getSellerMark();
+        if (sellerMark != null && !sellerMark.isBlank()) {
+            String normMark = sellerMark.trim().toLowerCase();
+            return "m:" + normMark;
+        }
+        String phone = sellerDTO.getSellerPhone();
+        if (phone != null && !phone.isBlank()) {
+            String digits = phone.trim().replaceAll("\\D+", "");
+            if (digits.length() >= 6 && digits.length() <= 20) {
+                return "p:" + digits;
+            }
+        }
+        String name = sellerDTO.getSellerName();
+        if (name != null && !name.isBlank()) {
+            String norm = name.trim().toLowerCase().replaceAll("\\s+", " ");
+            return "n:" + norm;
+        }
+        return null;
+    }
+
+    private int nextFreshSellerSerialForTrader(Long traderId, DailySerial lockedDailySerial, Set<Integer> usedInArrival) {
+        int maxAlloc = dailySerialAllocationRepository
+            .findMaxSerialNumberByTraderIdAndSerialDateAndKeyType(traderId, GLOBAL_SELLER_SERIAL_DATE, KEY_TYPE_ARRIVAL_SELLER)
+            .orElse(0);
+        int maxDaily = lockedDailySerial.getSellerSerial() != null ? lockedDailySerial.getSellerSerial() : 0;
+        int base = Math.max(maxAlloc, maxDaily);
+        return nextAvailableSellerSerial(base, usedInArrival);
+    }
+
+    /**
+     * Assigns seller serial unique in this arrival; for known seller identity reuse persisted serial across all arrivals for the trader.
+     */
+    private int assignStableSellerSerial(
+        Long traderId,
+        ArrivalSellerDTO sellerDTO,
+        DailySerial lockedDailySerial,
+        Set<Integer> usedSellerSerialsInArrival,
+        Set<String> seenKeysInArrival
+    ) {
+        String key = resolveArrivalSellerSerialKey(sellerDTO);
+        if (key != null) {
+            if (!seenKeysInArrival.add(key)) {
+                throw new IllegalArgumentException(
+                    "Duplicate seller identity in this arrival (same contact, mark, phone, or name). Remove the duplicate seller row."
+                );
+            }
+            Optional<DailySerialAllocation> existing = dailySerialAllocationRepository.findOneByTraderIdAndSerialDateAndKeyTypeAndKeyValue(
+                traderId,
+                GLOBAL_SELLER_SERIAL_DATE,
+                KEY_TYPE_ARRIVAL_SELLER,
+                key
+            );
+            if (existing.isPresent()) {
+                int serial = existing.get().getSerialNumber();
+                if (!usedSellerSerialsInArrival.add(serial)) {
+                    throw new IllegalStateException("Duplicate seller serial in the same arrival for different identities");
+                }
+                return serial;
+            }
+            int serial;
+            Optional<Integer> legacy = Optional.empty();
+            if (key.startsWith("c:")) {
+                long cid = Long.parseLong(key.substring(2));
+                legacy = lotRepository.findMinSellerSerialNoForContactAndTrader(cid, traderId);
+            } else if (key.startsWith("m:")) {
+                legacy = lotRepository.findMinSellerSerialNoForFreeTextMarkAndTrader(key.substring(2), traderId);
+            }
+            if (legacy.isPresent()) {
+                int l = legacy.get();
+                if (l < 1 || l > 9999) {
+                    serial = nextFreshSellerSerialForTrader(traderId, lockedDailySerial, usedSellerSerialsInArrival);
+                    if (!usedSellerSerialsInArrival.add(serial)) {
+                        throw new IllegalStateException("Could not assign unique seller serial");
+                    }
+                } else if (usedSellerSerialsInArrival.contains(l)) {
+                    throw new IllegalArgumentException("Duplicate seller serial in this arrival");
+                } else {
+                    serial = l;
+                    usedSellerSerialsInArrival.add(serial);
+                }
+            } else {
+                serial = nextFreshSellerSerialForTrader(traderId, lockedDailySerial, usedSellerSerialsInArrival);
+                if (!usedSellerSerialsInArrival.add(serial)) {
+                    throw new IllegalStateException("Could not assign unique seller serial");
+                }
+            }
+            DailySerialAllocation alloc = new DailySerialAllocation();
+            alloc.setTraderId(traderId);
+            alloc.setSerialDate(GLOBAL_SELLER_SERIAL_DATE);
+            alloc.setKeyType(KEY_TYPE_ARRIVAL_SELLER);
+            alloc.setKeyValue(key);
+            alloc.setSerialNumber(serial);
+            dailySerialAllocationRepository.save(alloc);
+            dailySerialAllocationRepository.flush();
+            return serial;
+        }
+        int serial = nextFreshSellerSerialForTrader(traderId, lockedDailySerial, usedSellerSerialsInArrival);
+        if (!usedSellerSerialsInArrival.add(serial)) {
+            throw new IllegalStateException("Could not assign unique seller serial");
+        }
+        return serial;
+    }
+
     private DailySerial getOrCreateGlobalSellerSerialForUpdate(Long traderId) {
         return dailySerialRepository
             .findOneByTraderIdAndSerialDateForUpdate(traderId, GLOBAL_SELLER_SERIAL_DATE)
@@ -1116,37 +1216,6 @@ public class ArrivalService {
             }
         }
         throw new IllegalArgumentException("No seller serial numbers available for this arrival context");
-    }
-
-    private int nextAvailableLotSerial(int currentSerial, Set<Integer> reservedSerials) {
-        int candidate = currentSerial;
-        for (int attempt = 0; attempt < 9999; attempt++) {
-            candidate = nextLotSerial(candidate);
-            if (!reservedSerials.contains(candidate)) {
-                return candidate;
-            }
-        }
-        throw new IllegalArgumentException("No lot serial numbers available for this seller context");
-    }
-
-    private Integer normalizeSellerSerialNumber(Integer sellerSerialNumber) {
-        if (sellerSerialNumber == null) {
-            return null;
-        }
-        if (sellerSerialNumber < 1 || sellerSerialNumber > 9999) {
-            throw new IllegalArgumentException("Seller serial number must be between 1 and 9999");
-        }
-        return sellerSerialNumber;
-    }
-
-    private Integer normalizeLotSerialNumber(Integer lotSerialNumber) {
-        if (lotSerialNumber == null) {
-            return null;
-        }
-        if (lotSerialNumber < 1 || lotSerialNumber > 9999) {
-            throw new IllegalArgumentException("Lot serial number must be between 1 and 9999");
-        }
-        return lotSerialNumber;
     }
 
     private Long resolveCommodityId(Long traderId, String commodityName) {

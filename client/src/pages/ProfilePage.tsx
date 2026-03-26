@@ -1,5 +1,5 @@
 import BottomNav from '@/components/BottomNav';
-import { User, Shield, Bell, Settings, HelpCircle, LogOut, ChevronRight, ArrowLeft, CheckCircle2, Clock } from 'lucide-react';
+import { User, Shield, Bell, Settings, HelpCircle, LogOut, ChevronRight, ArrowLeft, CheckCircle2, Clock, XCircle } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/context/AuthContext';
@@ -85,6 +85,11 @@ const ProfilePage = () => {
                     <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
                       <CheckCircle2 className="w-3.5 h-3.5" />
                       Approved
+                    </span>
+                  ) : trader.approval_status === 'REJECTED' ? (
+                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-rose-500/15 text-rose-700 dark:text-rose-400 border border-rose-500/20">
+                      <XCircle className="w-3.5 h-3.5" />
+                      Rejected
                     </span>
                   ) : (
                     <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-500/15 text-amber-700 dark:text-amber-400 border border-amber-500/20">

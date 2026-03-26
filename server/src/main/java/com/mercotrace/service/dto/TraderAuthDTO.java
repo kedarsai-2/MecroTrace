@@ -195,6 +195,10 @@ public class TraderAuthDTO {
         @JsonProperty("shop_photos")
         private String[] shopPhotos;
 
+        /** When false, trader uses administrator-defined global preset marks only. */
+        @JsonProperty("preset_enabled")
+        private Boolean presetEnabled;
+
         public String getTraderId() {
             return traderId;
         }
@@ -329,6 +333,14 @@ public class TraderAuthDTO {
 
         public void setShopPhotos(String[] shopPhotos) {
             this.shopPhotos = shopPhotos;
+        }
+
+        public Boolean getPresetEnabled() {
+            return presetEnabled;
+        }
+
+        public void setPresetEnabled(Boolean presetEnabled) {
+            this.presetEnabled = presetEnabled;
         }
     }
 }

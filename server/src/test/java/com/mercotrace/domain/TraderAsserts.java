@@ -55,7 +55,9 @@ public class TraderAsserts {
             .satisfies(a -> assertThat(a.getBusinessMode()).as("check businessMode").isEqualTo(expected.getBusinessMode()))
             .satisfies(a -> assertThat(a.getBillPrefix()).as("check billPrefix").isEqualTo(expected.getBillPrefix()))
             .satisfies(a -> assertThat(a.getCreatedAt()).as("check createdAt").isEqualTo(expected.getCreatedAt()))
-            .satisfies(a -> assertThat(a.getUpdatedAt()).as("check updatedAt").isEqualTo(expected.getUpdatedAt()));
+            .satisfies(a -> assertThat(a.getUpdatedAt()).as("check updatedAt").isEqualTo(expected.getUpdatedAt()))
+            .satisfies(a -> assertThat(a.getPresetEnabled()).as("check presetEnabled").isEqualTo(expected.getPresetEnabled()))
+            .satisfies(a -> assertThat(a.getActive()).as("check active").isEqualTo(expected.getActive()));
     }
 
     /**

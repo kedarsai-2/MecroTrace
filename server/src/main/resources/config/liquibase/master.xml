@@ -79,4 +79,6 @@
     <include file="config/liquibase/changelog/20260324150000_auction_self_sale_reauction_link.xml" relativeToChangelogFile="false"/>
     <include file="config/liquibase/changelog/20260324170000_lot_serial_no.xml" relativeToChangelogFile="false"/>
     <include file="config/liquibase/changelog/20260325120000_vehicle_multi_seller.xml" relativeToChangelogFile="false"/>
+    <include file="config/liquibase/changelog/20260326120000_trader_approval_decision_at.xml" relativeToChangelogFile="false"/>
+    <include file="config/liquibase/changelog/20260326140000_trader_preset_enabled_global_presets.xml" relativeToChangelogFile="false"/>
 </databaseChangeLog>

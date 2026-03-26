@@ -3,6 +3,7 @@
  * - GET  /api/admin/traders
  * - GET  /api/admin/traders/{id}
  * - PATCH /api/admin/traders/{id}/approve
+ * - PATCH /api/admin/traders/{id}/reject
  *
  * Aligned with:
  * - AdminTraderSpecResource
@@ -178,6 +179,18 @@ describe('Admin Trader API', () => {
         expectErrorSanitized(res.body);
       });
     });
+
+    it('PATCH /api/admin/traders/{id}/reject without token returns 401 or 403', function () {
+      const id = existingTrader?.id ?? 1;
+      cy.request({
+        method: 'PATCH',
+        url: `${apiUrl()}${ADMIN_TRADERS}/${id}/reject`,
+        failOnStatusCode: false,
+      }).then((res) => {
+        expect(res.status).to.be.oneOf([401, 403]);
+        expectErrorSanitized(res.body);
+      });
+    });
   });
 
   // --- RBAC (Rule 2) ---
@@ -226,6 +239,28 @@ describe('Admin Trader API', () => {
           res.status,
           res.status === 200
             ? 'Critical RBAC bug: trader token must not approve admin traders'
+            : undefined,
+        ).to.be.oneOf([401, 403]);
+        expectErrorSanitized(res.body);
+      });
+    });
+
+    it('TRADER JWT cannot PATCH /api/admin/traders/{id}/reject (must return 401/403)', function () {
+      if (!traderToken) {
+        this.skip();
+        return;
+      }
+      const id = existingTrader?.id ?? 1;
+      cy.request({
+        method: 'PATCH',
+        url: `${apiUrl()}${ADMIN_TRADERS}/${id}/reject`,
+        headers: authHeaders(traderToken),
+        failOnStatusCode: false,
+      }).then((res) => {
+        expect(
+          res.status,
+          res.status === 200
+            ? 'Critical RBAC bug: trader token must not reject admin traders'
             : undefined,
         ).to.be.oneOf([401, 403]);
         expectErrorSanitized(res.body);
@@ -349,6 +384,22 @@ describe('Admin Trader API', () => {
       });
     });
 
+    it('PATCH /api/admin/traders/abc/reject (non-numeric id) returns 400', function () {
+      if (!adminToken) {
+        this.skip();
+        return;
+      }
+      cy.request({
+        method: 'PATCH',
+        url: `${apiUrl()}${ADMIN_TRADERS}/abc/reject`,
+        headers: authHeaders(adminToken),
+        failOnStatusCode: false,
+      }).then((res) => {
+        expect(res.status).to.eq(400);
+        expectErrorSanitized(res.body);
+      });
+    });
+
     it('GET /api/admin/traders/{id} with non-existent id returns 404', function () {
       if (!adminToken) {
         this.skip();
@@ -373,6 +424,22 @@ describe('Admin Trader API', () => {
       cy.request({
         method: 'PATCH',
         url: `${apiUrl()}${ADMIN_TRADERS}/999999/approve`,
+        headers: authHeaders(adminToken),
+        failOnStatusCode: false,
+      }).then((res) => {
+        expect(res.status).to.eq(404);
+        expectErrorSanitized(res.body);
+      });
+    });
+
+    it('PATCH /api/admin/traders/{id}/reject with non-existent id returns 404', function () {
+      if (!adminToken) {
+        this.skip();
+        return;
+      }
+      cy.request({
+        method: 'PATCH',
+        url: `${apiUrl()}${ADMIN_TRADERS}/999999/reject`,
         headers: authHeaders(adminToken),
         failOnStatusCode: false,
       }).then((res) => {

@@ -1,6 +1,6 @@
 import { motion } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
-import { Shield, Cog, ChevronRight } from 'lucide-react';
+import { Shield, Cog, ChevronRight, Sliders } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAdminPermissions } from '@/admin/lib/adminPermissions';
 import AdminForbiddenPage from '@/admin/components/AdminForbiddenPage';
@@ -40,9 +40,8 @@ const AdminSettingsPage = () => {
       </motion.div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {settingsCards.map((card, i) => {
-          if (!canManageRbac) return null;
-          return (
+        {canManageRbac &&
+          settingsCards.map((card, i) => (
             <motion.button
               key={card.title}
               initial={{ opacity: 0, y: 15, scale: 0.95 }}
@@ -64,8 +63,32 @@ const AdminSettingsPage = () => {
                 </div>
               </div>
             </motion.button>
-          );
-        })}
+          ))}
+        {canView && (
+          <motion.button
+            key="global-presets"
+            initial={{ opacity: 0, y: 15, scale: 0.95 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            transition={{ delay: (canManageRbac ? settingsCards.length : 0) * 0.08 }}
+            whileHover={{ scale: 1.02, y: -3 }}
+            onClick={() => navigate('/admin/settings/global-presets')}
+            className="glass-card rounded-2xl p-6 text-left hover:shadow-elevated transition-all border border-border/50 group relative overflow-hidden"
+          >
+            <div className="absolute -top-6 -right-6 w-24 h-24 rounded-full blur-2xl opacity-15 bg-gradient-to-br from-amber-500 to-orange-600" />
+            <div className="relative z-10">
+              <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-amber-500 to-orange-600 flex items-center justify-center shadow-lg mb-4 shadow-amber-500/20">
+                <Sliders className="w-6 h-6 text-white" />
+              </div>
+              <h3 className="font-bold text-foreground mb-1">Global preset marks</h3>
+              <p className="text-xs text-muted-foreground mb-4">
+                Default auction margin presets for traders without their own preset settings
+              </p>
+              <div className="flex items-center gap-1 text-xs text-primary font-medium group-hover:gap-2 transition-all">
+                Open <ChevronRight className="w-3.5 h-3.5" />
+              </div>
+            </div>
+          </motion.button>
+        )}
       </div>
     </div>
   );

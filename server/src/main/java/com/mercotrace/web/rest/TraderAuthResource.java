@@ -1,7 +1,9 @@
 package com.mercotrace.web.rest;
 
 import com.mercotrace.domain.Authority;
+import com.mercotrace.domain.Trader;
 import com.mercotrace.domain.User;
+import com.mercotrace.domain.enumeration.ApprovalStatus;
 import com.mercotrace.repository.TraderRepository;
 import com.mercotrace.repository.UserRepository;
 import com.mercotrace.repository.UserTraderRepository;
@@ -60,6 +62,14 @@ import org.springframework.web.server.ResponseStatusException;
 public class TraderAuthResource {
 
     private static final Logger log = LoggerFactory.getLogger(TraderAuthResource.class);
+
+    /** Shown on trader login / OTP when registration was rejected by admin. */
+    private static final String TRADER_ACCOUNT_REJECTED_LOGIN_MESSAGE =
+        "Account rejected! Your trader registration was not approved. You cannot sign in with this email or mobile. Contact support if you need help.";
+
+    /** Shown when a rejected trader tries to register again with the same email or mobile. */
+    private static final String TRADER_ACCOUNT_REJECTED_REREGISTER_MESSAGE =
+        "Account rejected! This email or mobile is linked to a rejected registration. You cannot register again with these details. Contact support if you need help.";
 
     private final UserService userService;
     private final MailService mailService;
@@ -123,20 +133,37 @@ public class TraderAuthResource {
         }
 
         // Duplicate checks before creating trader or user — return 409 to avoid duplicate entries and re-registration
-        if (userRepository.findOneByEmailIgnoreCase(vm.getEmail()).isPresent()) {
+        java.util.Optional<User> existingByEmail = userRepository.findOneByEmailIgnoreCase(vm.getEmail());
+        if (existingByEmail.isPresent()) {
+            java.util.Optional<TraderDTO> traderForEmailUser = existingByEmail
+                .flatMap(u -> userTraderRepository.findFirstByUserIdAndPrimaryMappingTrueAndActiveTrue(u.getId()))
+                .flatMap(m -> traderService.findOne(m.getTrader().getId()));
+            if (
+                traderForEmailUser.isPresent() && traderForEmailUser.get().getApprovalStatus() == ApprovalStatus.REJECTED
+            ) {
+                throw new ResponseStatusException(HttpStatus.FORBIDDEN, TRADER_ACCOUNT_REJECTED_REREGISTER_MESSAGE);
+            }
             throw new TraderEmailAlreadyRegisteredException();
         }
         String mobile = vm.getMobile() != null ? vm.getMobile().trim() : null;
         if (mobile != null && !mobile.isEmpty()) {
             // Ensure the mobile is not already used anywhere (trader, trader user, admin user, or contact).
-            traderRepository
-                .findOneByMobile(mobile)
-                .ifPresent(existing -> {
-                    throw new TraderMobileAlreadyRegisteredException();
-                });
+            java.util.Optional<Trader> traderByMobile = traderRepository.findOneByMobile(mobile);
+            if (traderByMobile.isPresent()) {
+                if (traderByMobile.get().getApprovalStatus() == ApprovalStatus.REJECTED) {
+                    throw new ResponseStatusException(HttpStatus.FORBIDDEN, TRADER_ACCOUNT_REJECTED_REREGISTER_MESSAGE);
+                }
+                throw new TraderMobileAlreadyRegisteredException();
+            }
             userRepository
                 .findOneByMobile(mobile)
                 .ifPresent(existing -> {
+                    java.util.Optional<TraderDTO> tOpt = userTraderRepository
+                        .findFirstByUserIdAndPrimaryMappingTrueAndActiveTrue(existing.getId())
+                        .flatMap(m -> traderService.findOne(m.getTrader().getId()));
+                    if (tOpt.isPresent() && tOpt.get().getApprovalStatus() == ApprovalStatus.REJECTED) {
+                        throw new ResponseStatusException(HttpStatus.FORBIDDEN, TRADER_ACCOUNT_REJECTED_REREGISTER_MESSAGE);
+                    }
                     throw new TraderMobileAlreadyRegisteredException();
                 });
             adminUserRepository
@@ -268,6 +295,8 @@ public class TraderAuthResource {
                 .ifPresent(user -> loginVM.setUsername(user.getLogin()));
         }
 
+        rejectIfPrimaryTraderRejectedForLogin(loginVM.getUsername());
+
         // Delegate authentication to existing JWT controller
         ResponseEntity<com.mercotrace.web.rest.AuthenticateController.JWTToken> jwtResponse;
         try {
@@ -296,6 +325,9 @@ public class TraderAuthResource {
         TraderDTO trader = traderOpt.orElse(null);
         if (trader == null && !isAdminAccount(account)) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Trader not configured");
+        }
+        if (trader != null && trader.getApprovalStatus() == ApprovalStatus.REJECTED) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, TRADER_ACCOUNT_REJECTED_LOGIN_MESSAGE);
         }
         if (trader != null && !Boolean.TRUE.equals(trader.getActive())) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Trader account is inactive. Contact support.");
@@ -326,6 +358,9 @@ public class TraderAuthResource {
         if (trader == null && !isAdminAccount(account)) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Trader not configured");
         }
+        if (trader != null && trader.getApprovalStatus() == ApprovalStatus.REJECTED) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, TRADER_ACCOUNT_REJECTED_LOGIN_MESSAGE);
+        }
         if (trader != null && !Boolean.TRUE.equals(trader.getActive())) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Trader account is inactive. Contact support.");
         }
@@ -347,6 +382,8 @@ public class TraderAuthResource {
         HttpServletRequest request
     ) {
         String mobile = vm.getMobile();
+
+        assertOtpFlowAllowedForMobile(mobile);
 
         // OTP login is only allowed when this mobile belongs to a trader or trader user.
         boolean hasTraderByMobile = traderRepository.findOneByMobile(mobile).isPresent();
@@ -374,6 +411,8 @@ public class TraderAuthResource {
         String mobile = vm.getMobile();
         String otp = vm.getOtp();
 
+        assertOtpFlowAllowedForMobile(mobile);
+
         OtpService.OtpValidationStatus status = otpService.validateOtp(mobile, otp);
         if (status == OtpService.OtpValidationStatus.EXPIRED || status == OtpService.OtpValidationStatus.NOT_FOUND) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "OTP expired");
@@ -386,13 +425,13 @@ public class TraderAuthResource {
         }
 
         // At this point, OTP is valid. Resolve trader and user by mobile.
-        com.mercotrace.domain.User user = null;
-        com.mercotrace.domain.Trader traderEntity = null;
+        User user = null;
+        Trader traderEntity = null;
 
         // Prefer a trader user whose mobile matches and has a primary trader mapping.
-        java.util.Optional<com.mercotrace.domain.User> userOpt = userRepository.findOneByMobile(mobile);
+        java.util.Optional<User> userOpt = userRepository.findOneByMobile(mobile);
         if (userOpt.isPresent()) {
-            com.mercotrace.domain.User candidate = userOpt.get();
+            User candidate = userOpt.get();
             traderEntity =
                 userTraderRepository
                     .findFirstByUserIdAndPrimaryMappingTrueAndActiveTrue(candidate.getId())
@@ -407,6 +446,17 @@ public class TraderAuthResource {
                     .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "No trader registered with this mobile"));
             // Resolve or create canonical user associated with this trader for OTP-based login.
             user = resolveOrCreateUserForTrader(traderEntity, mobile);
+        }
+
+        TraderDTO trader = traderService
+            .findOne(traderEntity.getId())
+            .orElseThrow(() -> new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Trader not configured"));
+
+        if (trader.getApprovalStatus() == ApprovalStatus.REJECTED) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, TRADER_ACCOUNT_REJECTED_LOGIN_MESSAGE);
+        }
+        if (!Boolean.TRUE.equals(trader.getActive())) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Trader account is inactive. Contact support.");
         }
 
         // Load user with authorities to build a consistent security principal.
@@ -426,14 +476,6 @@ public class TraderAuthResource {
         HttpHeaders httpHeaders = authenticateController.buildAuthHeaders(jwt);
 
         AdminUserDTO account = accountResource.getAccount();
-
-        TraderDTO trader = traderService
-            .findOne(traderEntity.getId())
-            .orElseThrow(() -> new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Trader not configured"));
-
-        if (!Boolean.TRUE.equals(trader.getActive())) {
-            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Trader account is inactive. Contact support.");
-        }
 
         TraderAuthDTO dto = buildAuthDto(account, trader);
         // Persistable token for the same reason as /auth/login above.
@@ -479,6 +521,50 @@ public class TraderAuthResource {
                 return account;
             })
             .orElse(account);
+    }
+
+    /**
+     * Block password login before issuing a JWT when the user's primary trader was rejected by admin.
+     */
+    private void rejectIfPrimaryTraderRejectedForLogin(String login) {
+        if (login == null || login.isBlank()) {
+            return;
+        }
+        userRepository
+            .findOneByLogin(login)
+            .flatMap(user -> userTraderRepository.findFirstByUserIdAndPrimaryMappingTrueAndActiveTrue(user.getId()))
+            .flatMap(m -> traderService.findOne(m.getTrader().getId()))
+            .ifPresent(t -> {
+                if (t.getApprovalStatus() == ApprovalStatus.REJECTED) {
+                    throw new ResponseStatusException(HttpStatus.FORBIDDEN, TRADER_ACCOUNT_REJECTED_LOGIN_MESSAGE);
+                }
+            });
+    }
+
+    /** Block OTP request/flow for mobiles tied to a rejected trader. */
+    private void assertOtpFlowAllowedForMobile(String mobile) {
+        if (mobile == null || mobile.isBlank()) {
+            return;
+        }
+        traderRepository
+            .findOneByMobile(mobile)
+            .ifPresent(t -> {
+                if (t.getApprovalStatus() == ApprovalStatus.REJECTED) {
+                    throw new ResponseStatusException(HttpStatus.FORBIDDEN, TRADER_ACCOUNT_REJECTED_LOGIN_MESSAGE);
+                }
+            });
+        userRepository
+            .findOneByMobile(mobile)
+            .ifPresent(user ->
+                userTraderRepository
+                    .findFirstByUserIdAndPrimaryMappingTrueAndActiveTrue(user.getId())
+                    .flatMap(m -> traderService.findOne(m.getTrader().getId()))
+                    .ifPresent(t -> {
+                        if (t.getApprovalStatus() == ApprovalStatus.REJECTED) {
+                            throw new ResponseStatusException(HttpStatus.FORBIDDEN, TRADER_ACCOUNT_REJECTED_LOGIN_MESSAGE);
+                        }
+                    })
+            );
     }
 
     private TraderAuthDTO buildAuthDto(AdminUserDTO account, TraderDTO trader) {
@@ -537,6 +623,7 @@ public class TraderAuthResource {
             traderPayload.setGstNumber(trader.getGstNumber());
             traderPayload.setRmcApmcCode(trader.getRmcApmcCode());
             traderPayload.setShopPhotos(splitShopPhotos(trader.getShopPhotos()));
+            traderPayload.setPresetEnabled(trader.getPresetEnabled() != null ? trader.getPresetEnabled() : Boolean.TRUE);
 
             dto.setTrader(traderPayload);
         }

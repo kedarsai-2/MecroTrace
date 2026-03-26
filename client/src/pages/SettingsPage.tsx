@@ -5,6 +5,7 @@ import { cn } from '@/lib/utils';
 import BottomNav from '@/components/BottomNav';
 import { usePermissions } from '@/lib/permissions';
 import ForbiddenPage from '@/components/ForbiddenPage';
+import { useAuth } from '@/context/AuthContext';
 
 const settingsCards = [
   {
@@ -41,6 +42,7 @@ const settingsCards = [
 
 const SettingsPage = () => {
   const navigate = useNavigate();
+  const { trader } = useAuth();
   const { canAccessModule, can } = usePermissions();
 
   const canViewSettings = canAccessModule('Settings');
@@ -53,9 +55,11 @@ const SettingsPage = () => {
 
   const canViewPresetSettings = can('Preset Settings', 'View');
 
+  const traderCanCustomizePresets = trader?.preset_enabled !== false;
+
   const visibleCards = settingsCards.filter(card => {
     if (card.path === '/settings/rbac') return canManageRoles || canManageUsers;
-    if (card.path === '/settings/preset-settings') return canViewPresetSettings;
+    if (card.path === '/settings/preset-settings') return canViewPresetSettings && traderCanCustomizePresets;
     return true;
   });
 

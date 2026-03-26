@@ -76,6 +76,7 @@ import PresetSettingsPage from "./pages/settings/PresetSettingsPage";
 const AdminLayout = lazy(() => import("./components/admin/AdminLayout"));
 const AdminLoginPage = lazy(() => import("./pages/admin/AdminLoginPage"));
 const AdminTradersPage = lazy(() => import("./pages/admin/AdminTradersPage"));
+const AdminGlobalPresetSettingsPage = lazy(() => import("./pages/admin/settings/AdminGlobalPresetSettingsPage"));
 
 const queryClient = new QueryClient();
 
@@ -216,6 +217,9 @@ const router = createBrowserRouter(
       >
         <Route index element={<Navigate to="/admin/traders" replace />} />
         <Route path="traders" element={<AdminTradersPage />} />
+        <Route path="settings/global-presets" element={<AdminGlobalPresetSettingsPage />} />
+        {/* Settings module is preset settings only */}
+        <Route path="settings" element={<Navigate to="/admin/settings/global-presets" replace />} />
       </Route>
 
       <Route path="*" element={<NotFound />} />

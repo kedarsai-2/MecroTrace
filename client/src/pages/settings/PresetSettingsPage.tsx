@@ -26,6 +26,7 @@ import BottomNav from '@/components/BottomNav';
 import { usePermissions } from '@/lib/permissions';
 import ForbiddenPage from '@/components/ForbiddenPage';
 import useUnsavedChangesGuard from '@/hooks/useUnsavedChangesGuard';
+import { useAuth } from '@/context/AuthContext';
 
 const PREDEFINED_MARK_MIN = 1;
 const PREDEFINED_MARK_MAX = 20;
@@ -66,6 +67,7 @@ function isDuplicateMark(
 
 const PresetSettingsPage = () => {
   const navigate = useNavigate();
+  const { trader, hasBootstrapped } = useAuth();
   const { can } = usePermissions();
   const [list, setList] = useState<PresetMarkSettingDTO[]>([]);
   const [loading, setLoading] = useState(true);
@@ -116,9 +118,12 @@ const PresetSettingsPage = () => {
     }
   };
 
+  const traderCanCustomizePresets = trader?.preset_enabled !== false;
+
   useEffect(() => {
-    if (canViewPresetSettings) fetchList();
-  }, [canViewPresetSettings]);
+    if (!canViewPresetSettings || !traderCanCustomizePresets) return;
+    fetchList();
+  }, [canViewPresetSettings, traderCanCustomizePresets]);
 
   const openCreate = () => {
     setEditingId(null);
@@ -205,6 +210,21 @@ const PresetSettingsPage = () => {
 
   if (!canViewPresetSettings) {
     return <ForbiddenPage moduleName="Preset Settings" />;
+  }
+
+  if (!hasBootstrapped) {
+    return (
+      <div className="min-h-[50vh] flex items-center justify-center text-muted-foreground text-sm">Loading…</div>
+    );
+  }
+
+  if (!traderCanCustomizePresets) {
+    return (
+      <ForbiddenPage
+        moduleName="Preset Settings"
+        message="Your business uses administrator-defined preset marks for auctions. You cannot view or change them here."
+      />
+    );
   }
 
   return (
