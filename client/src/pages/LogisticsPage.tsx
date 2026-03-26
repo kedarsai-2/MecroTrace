@@ -57,23 +57,52 @@ const LogisticsPage = () => {
     let cancelled = false;
 
     (async () => {
-      // Build lotId -> commodityName from arrival full details (so sticker shows commodity when auction API doesn't)
-      const vehicleNumbersFromAuction = new Set<string>();
+      // Root-cause fix:
+      // Mapping by vehicle number was missing for some records, so seller/lot serial and godown stayed empty.
+      // Build linkage from lotId -> arrival vehicleId first, then fetch full arrivals by vehicleId.
+      const auctionLotIds = new Set<string>();
       auctionData.forEach((auction: any) => {
-        if (auction.vehicleNumber) vehicleNumbersFromAuction.add(auction.vehicleNumber);
+        if (auction?.lotId != null) auctionLotIds.add(String(auction.lotId));
       });
-      const vehicleIdsToFetch = arrivalDetails
-        .filter((arr) => vehicleNumbersFromAuction.has(arr.vehicleNumber))
-        .map((arr) => arr.vehicleId);
+
+      const lotIdMetaFromList = new Map<string, { sellerName?: string; lotName?: string; vehicleNumber?: string; origin?: string; godown?: string }>();
+      const vehicleIdsToFetch = new Set<number>();
+      arrivalDetails.forEach((arr) => {
+        (arr.sellers || []).forEach((seller) => {
+          (seller.lots || []).forEach((lot) => {
+            const lotId = String(lot.id);
+            if (!auctionLotIds.has(lotId)) return;
+            vehicleIdsToFetch.add(arr.vehicleId);
+            lotIdMetaFromList.set(lotId, {
+              sellerName: seller.sellerName,
+              lotName: lot.lotName,
+              vehicleNumber: arr.vehicleNumber,
+              origin: arr.origin,
+              godown: arr.godown,
+            });
+          });
+        });
+      });
+
       const lotIdToCommodity = new Map<string, string>();
+      const lotIdToSellerSerial = new Map<string, number>();
+      const lotIdToLotSerial = new Map<string, number>();
       await Promise.all(
-        [...new Set(vehicleIdsToFetch)].map(async (vehicleId) => {
+        [...vehicleIdsToFetch].map(async (vehicleId) => {
           try {
             const full = await arrivalsApi.getById(vehicleId);
             (full.sellers || []).forEach((seller) => {
               (seller.lots || []).forEach((lot) => {
                 const name = (lot as any).commodityName ?? (lot as any).commodity_name ?? '';
                 if (name) lotIdToCommodity.set(String(lot.id), name);
+                const sellerSerial = (seller as any).sellerSerialNumber ?? (seller as any).seller_serial_number;
+                if (sellerSerial != null && sellerSerial > 0) {
+                  lotIdToSellerSerial.set(String(lot.id), sellerSerial);
+                }
+                const lotSerial = (lot as any).lotSerialNumber ?? (lot as any).lot_serial_number;
+                if (lotSerial != null && lotSerial > 0) {
+                  lotIdToLotSerial.set(String(lot.id), lotSerial);
+                }
               });
             });
           } catch {
@@ -87,27 +116,24 @@ const LogisticsPage = () => {
       const allBids: BidInfo[] = [];
       auctionData.forEach((auction: any) => {
         (auction.entries || []).forEach((entry: any) => {
+          const listMeta = lotIdMetaFromList.get(String(auction.lotId));
           let sellerName = auction.sellerName || 'Unknown';
           let vehicleNumber = auction.vehicleNumber || 'Unknown';
           const fromAuction = auction.commodityName ?? (auction as any).commodity_name ?? '';
           const commodityName = lotIdToCommodity.get(String(auction.lotId)) || fromAuction;
           let lotName = auction.lotName || '';
+          let sellerSerial = lotIdToSellerSerial.get(String(auction.lotId)) ?? 0;
+          let lotNumber = lotIdToLotSerial.get(String(auction.lotId)) ?? 0;
           let origin: string | undefined;
           let godown: string | undefined;
 
-          arrivalDetails.forEach((arr) => {
-            (arr.sellers || []).forEach((seller) => {
-              (seller.lots || []).forEach((lot) => {
-                if (String(lot.id) === String(auction.lotId)) {
-                  sellerName = seller.sellerName;
-                  vehicleNumber = arr.vehicleNumber || vehicleNumber;
-                  lotName = lot.lotName || lotName;
-                  origin = arr.origin;
-                  godown = arr.godown;
-                }
-              });
-            });
-          });
+          if (listMeta) {
+            sellerName = listMeta.sellerName || sellerName;
+            vehicleNumber = listMeta.vehicleNumber || vehicleNumber;
+            lotName = listMeta.lotName || lotName;
+            origin = listMeta.origin;
+            godown = listMeta.godown;
+          }
 
           allBids.push({
             bidNumber: entry.bidNumber,
@@ -118,8 +144,8 @@ const LogisticsPage = () => {
             lotId: String(auction.lotId),
             lotName,
             sellerName,
-            sellerSerial: 0,
-            lotNumber: 0,
+            sellerSerial,
+            lotNumber,
             vehicleNumber,
             commodityName,
             origin,
@@ -160,8 +186,10 @@ const LogisticsPage = () => {
         if (cancelled) return;
         const withSerials = allBids.map(b => ({
           ...b,
-          sellerSerial: res.sellerSerials[b.sellerName] ?? b.sellerSerial,
-          lotNumber: res.lotNumbers[b.lotId] ?? b.lotNumber,
+          // Seller serial must come from arrival auto-generated serial only.
+          sellerSerial: b.sellerSerial,
+          // Lot serial must come from arrival auto-generated serial only.
+          lotNumber: b.lotNumber,
           vehicleTotalQty: vehicleTotals.get(b.vehicleNumber || '') ?? b.quantity,
           sellerVehicleQty: vehicleSellerTotals.get(`${b.vehicleNumber || ''}||${b.sellerName}`) ?? b.quantity,
         }));

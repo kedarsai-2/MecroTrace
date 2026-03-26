@@ -6,6 +6,20 @@ import type { PluginListenerHandle } from '@capacitor/core';
 /** Extra gap (px) between the field's bottom edge and the keyboard top. */
 const PADDING = 16;
 
+/**
+ * Tracks overflow containers that had paddingBottom injected so they can be
+ * scrolled when their content doesn't naturally exceed the viewport height.
+ * Keyed by element; value is the original inline paddingBottom (to restore).
+ */
+const injectedPaddingContainers = new Map<HTMLElement, string>();
+
+function cleanupInjectedPaddings(): void {
+  for (const [el, origPadding] of injectedPaddingContainers) {
+    el.style.paddingBottom = origPadding;
+  }
+  injectedPaddingContainers.clear();
+}
+
 /** Return the height of any fixed bottom-nav overlay that is currently visible. */
 function getFixedBottomOverlayHeight(): number {
   const vpHeight = window.visualViewport?.height ?? window.innerHeight;
@@ -75,10 +89,15 @@ function getAvailableBottom(effectiveKb: number): number {
 /**
  * Walk ALL scroll ancestors of `el` from innermost to outermost and scroll
  * each one so that `el` moves above the keyboard.
- * After that, also scroll the window for any remaining uncovered amount.
+ *
+ * If the element is still covered after the ancestor walk (e.g. because the
+ * outermost scroll container's content fits the full viewport so it cannot
+ * scroll naturally), we inject a temporary paddingBottom on it to force
+ * overflow, enabling the scroll. The padding is cleaned up on keyboard hide.
  *
  * This handles nested scroll containers like ArrivalsPage's LotsScrollPanel
- * (inner, fixed-height) inside a tall page-level scroll (outer, window).
+ * (inner, fixed-height) inside the form's full-screen fixed panel whose
+ * overflow container often has content shorter than the viewport.
  */
 function ensureVisible(el: Element, keyboardHeight: number): void {
   const effectiveKb = getEffectiveKeyboardHeight(keyboardHeight);
@@ -91,30 +110,74 @@ function ensureVisible(el: Element, keyboardHeight: number): void {
   if (initialRect.bottom <= availableBottom) return; // already visible
 
   // Walk up ALL scroll-overflow ancestors and scroll each one as needed.
+  // NOTE: No `canScroll` gate — even if the container appears non-scrollable
+  // right now, layout may have settled by a later retry; always attempt.
+  let outerScrollAncestor: HTMLElement | null = null;
   let node: Element | null = el.parentElement;
   while (node && node !== document.documentElement) {
     const { overflowY } = window.getComputedStyle(node);
     if (overflowY === 'auto' || overflowY === 'scroll') {
-      const canScroll = node.scrollHeight - node.clientHeight > 2;
-      if (canScroll) {
-        // Re-read element position after each ancestor scroll so the deltas are fresh.
-        const elRect = el.getBoundingClientRect();
-        if (elRect.bottom > availableBottom) {
-          node.scrollTop += elRect.bottom - availableBottom;
-        }
+      // Re-read element position after each ancestor scroll so the deltas are fresh.
+      const elRect = el.getBoundingClientRect();
+      if (elRect.bottom > availableBottom) {
+        (node as HTMLElement).scrollTop += elRect.bottom - availableBottom;
       }
+      outerScrollAncestor = node as HTMLElement; // keep updating → ends up as outermost
     }
     node = node.parentElement;
   }
 
-  // Finally, scroll the window for whatever's left. Use rAF so the ancestor
-  // scroll positions settle (and ArrivalsPage's own scroll-to-bottom effect
-  // has had a chance to run).
+  // After ancestor scrolling, check if the element is still covered.
+  // On mobile, the form sits inside a `position:fixed; inset-0` panel whose
+  // overflow container height equals the full screen. When the keyboard is open
+  // and the form content is shorter than the screen, the container cannot scroll
+  // naturally. To fix this, inject a temporary paddingBottom that forces content
+  // to overflow — making scrollTop work — then scroll the container.
   requestAnimationFrame(() => {
-    const finalRect = el.getBoundingClientRect();
-    const stillCovered = finalRect.bottom - availableBottom;
-    if (stillCovered > 1) {
-      window.scrollBy({ top: stillCovered, behavior: 'smooth' });
+    const rect = el.getBoundingClientRect();
+    const covered = rect.bottom - availableBottom;
+    if (covered <= 1) return; // already visible after ancestor scrolling
+
+    if (outerScrollAncestor) {
+      // Save original inline padding once (restored on keyboardDidHide).
+      if (!injectedPaddingContainers.has(outerScrollAncestor)) {
+        injectedPaddingContainers.set(outerScrollAncestor, outerScrollAncestor.style.paddingBottom);
+      }
+      // Ensure scrollHeight - clientHeight >= covered + PADDING so that
+      // scrollTop can move far enough to bring the element above the keyboard.
+      const needed = outerScrollAncestor.clientHeight + covered + PADDING;
+      const current = outerScrollAncestor.scrollHeight;
+      if (needed > current) {
+        const extra = needed - current;
+        const existingPb = parseFloat(window.getComputedStyle(outerScrollAncestor).paddingBottom) || 0;
+        outerScrollAncestor.style.paddingBottom = `${existingPb + extra}px`;
+      }
+
+      requestAnimationFrame(() => {
+        const elRect = el.getBoundingClientRect();
+        const delta = elRect.bottom - availableBottom;
+        if (delta > 1) {
+          outerScrollAncestor!.scrollTop += delta;
+        }
+        // If the element is STILL covered (most often when a new field is inserted
+        // and auto-focused, like "+ Add Lot"), fall back to scrollIntoView as a
+        // last resort. This tends to handle edge timing/layout cases more reliably.
+        requestAnimationFrame(() => {
+          const after = el.getBoundingClientRect();
+          const stillCovered = after.bottom - availableBottom;
+          if (stillCovered > 1 && el instanceof HTMLElement) {
+            try {
+              el.scrollIntoView({ block: 'center', inline: 'nearest' });
+            } catch {
+              el.scrollIntoView();
+            }
+          }
+        });
+      });
+    } else {
+      // No scroll ancestor found (e.g. plain window-scrolled page): fall back
+      // to scrolling the window directly.
+      window.scrollBy({ top: covered, behavior: 'smooth' });
     }
   });
 }
@@ -149,15 +212,25 @@ const KeyboardAvoidance: React.FC = () => {
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
-    // Always read the *latest* keyboard height at execution time.
-    // This prevents races where focus moves before keyboardHeightRef updates.
-    const scheduleEnsureVisible = (el: Element | null, delays = [0, 80, 180, 320, 520, 900, 1300]) => {
+    // Always read the *latest* keyboard height AND active element at execution
+    // time. This covers races where:
+    //   • focus moves before keyboardHeightRef updates (stale 0 height), and
+    //   • ClickToFocusNewFields focuses a newer element between scheduling and
+    //     execution (auto-focus on runtime-inserted inputs like "+ Add Lot").
+    const scheduleEnsureVisible = (el: Element | null, delays = [0, 80, 180, 320, 520, 900, 1300, 2000, 2500]) => {
       if (!el) return;
       for (const d of delays) {
+        const run = () => {
+          // Prefer the currently focused element if it's editable; otherwise fall
+          // back to the element captured at scheduling time.
+          const active = document.activeElement;
+          const target = isEditableField(active) ? active : el;
+          ensureVisible(target, keyboardHeightRef.current);
+        };
         if (d === 0) {
-          requestAnimationFrame(() => ensureVisible(el, keyboardHeightRef.current));
+          requestAnimationFrame(run);
         } else {
-          window.setTimeout(() => ensureVisible(el, keyboardHeightRef.current), d);
+          window.setTimeout(run, d);
         }
       }
     };
@@ -169,7 +242,8 @@ const KeyboardAvoidance: React.FC = () => {
 
       // Always schedule checks. For dynamic UIs, the keyboard may open *after*
       // focus is applied (or after layout changes), so later checks catch it.
-      scheduleEnsureVisible(e.target, [0, 80, 180, 320, 520, 900, 1300]);
+      // Delays up to 2500 ms to cover Framer Motion animations + React re-renders.
+      scheduleEnsureVisible(e.target);
     };
     document.addEventListener('focusin', handleFocusIn, true);
 
@@ -192,11 +266,22 @@ const KeyboardAvoidance: React.FC = () => {
         keyboardHeightRef.current = info.keyboardHeight;
         const el = lastFocusedRef.current
           ?? (isEditableField(document.activeElement) ? document.activeElement : null);
-        scheduleEnsureVisible(el, [0, 80, 180, 320, 520, 900, 1300]);
+        scheduleEnsureVisible(el);
       });
 
       const didHide = await Keyboard.addListener('keyboardDidHide', () => {
         keyboardHeightRef.current = 0;
+        // Delay cleanup: when the user taps a button (e.g. "+ Add Lot") while a text
+        // field is focused, iOS briefly dismisses the keyboard before re-showing it for
+        // the newly focused field. If we clean up injected padding immediately, the
+        // outer scroll container loses its extra scrollable space before the scroll to
+        // the new field completes. Waiting 350 ms lets keyboardWillShow fire first; we
+        // only clean up if the keyboard is still hidden after that window.
+        window.setTimeout(() => {
+          if (keyboardHeightRef.current === 0) {
+            cleanupInjectedPaddings();
+          }
+        }, 350);
       });
 
       listenerHandles.push(willShow, didShow, didHide);
@@ -249,15 +334,22 @@ const KeyboardAvoidance: React.FC = () => {
 
       if (!candidateInput) return;
 
+      // Re-read activeElement at every retry: focus may shift slightly after
+      // DOM insertion (ClickToFocusNewFields focuses the new input a few frames
+      // after the mutation, and the active element changes again when the user
+      // taps a different field). Always target the CURRENTLY focused editable
+      // field; fall back to the candidateInput from the mutation if none.
       const tryScroll = () => {
         const active = document.activeElement;
         const target = isEditableField(active) ? active : candidateInput;
-        ensureVisible(target, keyboardHeightRef.current);
+        ensureVisible(target!, keyboardHeightRef.current);
       };
 
-      // Use longer delays here: ArrivalsPage has a useEffect([sellers]) that
-      // scrolls the LotsScrollPanel after React renders. We wait for that to
-      // complete and also re-check after the next paints.
+      // Use longer delays: ArrivalsPage's useLayoutEffect([sellers]) scrolls the
+      // LotsScrollPanel to the bottom after React renders, then
+      // ClickToFocusNewFields focuses the new input ~2 frames later.
+      // We continue retrying through 2500 ms to cover Framer Motion animations
+      // and any layout/state settling after that.
       requestAnimationFrame(tryScroll);
       window.setTimeout(tryScroll, 120);
       window.setTimeout(tryScroll, 280);
@@ -265,6 +357,10 @@ const KeyboardAvoidance: React.FC = () => {
       window.setTimeout(tryScroll, 780);
       window.setTimeout(tryScroll, 1050);
       window.setTimeout(tryScroll, 1400);
+      window.setTimeout(tryScroll, 2000);
+      window.setTimeout(tryScroll, 2500);
+      window.setTimeout(tryScroll, 3200);
+      window.setTimeout(tryScroll, 4000);
     });
 
     mutationObserver.observe(document.body, { childList: true, subtree: true });
@@ -275,6 +371,7 @@ const KeyboardAvoidance: React.FC = () => {
       window.visualViewport?.removeEventListener('resize', handleViewportResize);
       for (const h of listenerHandles) h.remove();
       mutationObserver.disconnect();
+      cleanupInjectedPaddings();
     };
   }, []);
 

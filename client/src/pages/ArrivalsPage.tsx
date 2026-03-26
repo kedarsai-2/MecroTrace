@@ -125,6 +125,42 @@ function resolveMultiSellerForEdit(detail: ArrivalFullDetail, mappedSellersCount
   return mappedSellersCount > 1;
 }
 
+function isCompleteArrivalForSubmit(
+  payload: Pick<ArrivalCreatePayload, 'vehicle_number' | 'is_multi_seller' | 'sellers'>,
+): boolean {
+  if (payload.is_multi_seller) {
+    const vn = (payload.vehicle_number ?? '').trim();
+    if (vn.length === 0) return false;
+  }
+
+  const sellers = payload.sellers ?? [];
+  if (sellers.length === 0) return false;
+  if (!payload.is_multi_seller && sellers.length > 1) return false;
+
+  for (const s of sellers) {
+    const hasContactId = s.contact_id !== undefined && s.contact_id !== null;
+    if (!hasContactId) {
+      if (!s.seller_name?.trim()) return false;
+      if (!s.seller_phone?.trim()) return false;
+    }
+    const lots = s.lots ?? [];
+    if (lots.length === 0) return false;
+    let hasAtLeastOneValidLot = false;
+    for (const l of lots) {
+      const ln = l.lot_name?.trim();
+      const cn = l.commodity_name?.trim();
+      const qty = typeof l.quantity === 'number' ? l.quantity : 0;
+      if (ln && cn && qty > 0) {
+        hasAtLeastOneValidLot = true;
+        break;
+      }
+    }
+    if (!hasAtLeastOneValidLot) return false;
+  }
+
+  return true;
+}
+
 const ARRIVAL_SUMMARY_PRIMARY_PILL_CLASS =
   'px-2 py-0.5 rounded-md bg-blue-100 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300 text-xs font-bold shrink-0';
 
@@ -204,6 +240,7 @@ function LotsScrollPanel({
     top: 0,
     height: 0,
   });
+  const [thumbPressed, setThumbPressed] = useState(false);
 
   const mergedRef = useCallback(
     (el: HTMLDivElement | null) => {
@@ -250,17 +287,18 @@ function LotsScrollPanel({
     }
 
     // Keep thumb inside capsule ends and clear top/bottom arrow buttons.
-    const insetPx = 14;
+    const insetPx = 12;
     const available = Math.max(0, clientH - insetPx * 2);
     if (available <= 0) return;
 
-    const minThumbPx = 26;
-    const thumbHeightFromRatio = (clientH / Math.max(1, outer.scrollHeight)) * available;
-    const thumbHeight = Math.max(minThumbPx, Math.min(available, thumbHeightFromRatio));
+    // Single small round "volume knob" (fixed size).
+    const knobSizePx = 26;
+    const thumbHeight = Math.min(available, knobSizePx);
 
     const maxTop = Math.max(0, available - thumbHeight);
     const ratio = totalScrollable > LOTS_SCROLL_EPS ? outer.scrollTop / totalScrollable : 0;
-    const top = insetPx + maxTop * Math.max(0, Math.min(1, ratio));
+    const clampedRatio = Math.max(0, Math.min(1, ratio));
+    const top = insetPx + maxTop * clampedRatio;
 
     setThumbMetrics({ visible: true, top, height: thumbHeight });
   }, [ensureVerticalScrollThumbWhenShort]);
@@ -316,6 +354,48 @@ function LotsScrollPanel({
     };
   }, [runScrollMetrics, updateHints, updateThumbMetrics, showEdgeHints, sellerId]);
 
+  const setScrollTopFromPointerY = useCallback((clientY: number) => {
+    const outer = outerRef.current;
+    if (!outer) return;
+
+    const totalScrollable = Math.max(0, outer.scrollHeight - outer.clientHeight);
+    if (totalScrollable <= LOTS_SCROLL_EPS) return;
+
+    const insetPx = 12;
+    const rect = outer.getBoundingClientRect();
+    const yInPanel = clientY - rect.top;
+    const available = Math.max(0, outer.clientHeight - insetPx * 2);
+    if (available <= 0) return;
+
+    const ratio = Math.max(0, Math.min(1, (yInPanel - insetPx) / available));
+    outer.scrollTop = ratio * totalScrollable;
+  }, []);
+
+  const onThumbPointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    const outer = outerRef.current;
+    if (!outer) return;
+
+    e.preventDefault();
+    e.stopPropagation();
+
+    setThumbPressed(true);
+
+    // Immediately seek based on press location.
+    setScrollTopFromPointerY(e.clientY);
+
+    const onMove = (ev: PointerEvent) => setScrollTopFromPointerY(ev.clientY);
+    const onUp = () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
+      setThumbPressed(false);
+    };
+
+    window.addEventListener('pointermove', onMove, { passive: true });
+    window.addEventListener('pointerup', onUp, { passive: true });
+    window.addEventListener('pointercancel', onUp, { passive: true });
+  }, [setScrollTopFromPointerY]);
+
   return (
     <>
       <div className="relative">
@@ -334,12 +414,11 @@ function LotsScrollPanel({
         </div>
         {thumbMetrics.visible && (
           <div
-            className="absolute right-0 top-0 bottom-0 w-[18px] z-[4]"
-            aria-hidden
+            className="absolute right-0 top-0 bottom-0 w-[22px] z-[4]"
           >
             {/* Track capsule */}
             <div
-              className="absolute right-0 w-[18px] rounded-full"
+              className="absolute right-0 w-[22px] rounded-full"
               style={{
                 top: 2,
                 bottom: 2,
@@ -348,57 +427,26 @@ function LotsScrollPanel({
               }}
             />
 
-            {/* Clickable end buttons */}
-            <button
-              type="button"
-              onClick={() => scrollByStep('up')}
-              className="absolute left-1/2 top-[6px] -translate-x-1/2 h-[8px] w-[8px] rounded-full grid place-items-center"
-              style={{
-                backgroundColor: 'hsl(var(--card))',
-                boxShadow: 'inset 0 0 0 1px hsl(var(--foreground) / 0.28)',
-              }}
-              aria-label="Scroll lots up"
-            >
-              <ChevronUp className="h-[5px] w-[5px]" style={{ color: 'hsl(var(--foreground) / 0.58)' }} strokeWidth={1.7} />
-            </button>
-            <button
-              type="button"
-              onClick={() => scrollByStep('down')}
-              className="absolute left-1/2 bottom-[6px] -translate-x-1/2 h-[8px] w-[8px] rounded-full grid place-items-center"
-              style={{
-                backgroundColor: 'hsl(var(--card))',
-                boxShadow: 'inset 0 0 0 1px hsl(var(--foreground) / 0.28)',
-              }}
-              aria-label="Scroll lots down"
-            >
-              <ChevronDown className="h-[5px] w-[5px]" style={{ color: 'hsl(var(--foreground) / 0.58)' }} strokeWidth={1.7} />
-            </button>
-
             {/* Thumb capsule */}
             <div
-              className="absolute left-0 right-0 rounded-full border-2"
+              className="absolute left-0 right-0 rounded-full border-2 cursor-ns-resize select-none touch-none z-[6] transition-[box-shadow,transform] duration-150 active:scale-[0.99]"
               style={{
                 top: thumbMetrics.top,
                 height: thumbMetrics.height,
-                borderColor: 'hsl(var(--card))',
-                backgroundColor: 'hsl(var(--card))',
-                boxShadow: 'inset 0 0 0 1px hsl(var(--foreground) / 0.32)',
+                borderColor: thumbPressed ? 'hsl(var(--foreground) / 0.75)' : 'hsl(var(--foreground) / 0.45)',
+                backgroundColor: thumbPressed ? 'hsl(var(--foreground) / 0.22)' : 'hsl(var(--foreground) / 0.14)',
+                // "Gooey/glow" look: crisp inner border + soft outer glow
+                boxShadow:
+                  thumbPressed
+                    ? 'inset 0 0 0 1px hsl(var(--foreground) / 0.75), 0 0 26px hsl(var(--foreground) / 0.26)'
+                    : 'inset 0 0 0 1px hsl(var(--foreground) / 0.55), 0 0 18px hsl(var(--foreground) / 0.18)',
               }}
+              onPointerDown={onThumbPointerDown}
+              role="slider"
+              aria-label="Drag to scroll lots"
+              aria-valuemin={0}
+              aria-valuemax={1}
             >
-              {/* Grip lines */}
-              <div className="absolute inset-0">
-                {[38, 50, 62].map(pct => (
-                  <div
-                    // eslint-disable-next-line react/no-array-index-key
-                    key={pct}
-                    className="absolute left-[20%] right-[20%] h-[1px]"
-                    style={{
-                      top: `${pct}%`,
-                      backgroundColor: 'hsl(var(--foreground) / 0.42)',
-                    }}
-                  />
-                ))}
-              </div>
             </div>
           </div>
         )}
@@ -439,6 +487,31 @@ function LotFieldsHorizontalScroll({ children }: { children: ReactNode }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const [hintRight, setHintRight] = useState(false);
+  const [thumbPressed, setThumbPressed] = useState(false);
+  const [thumbMetrics, setThumbMetrics] = useState<{ visible: boolean; left: number; width: number }>({
+    visible: false,
+    left: 0,
+    width: 0,
+  });
+  const trackRef = useRef<HTMLDivElement>(null);
+
+  const setScrollLeftFromPointerX = useCallback((clientX: number) => {
+    const el = scrollRef.current;
+    const trackEl = trackRef.current;
+    if (!el || !trackEl) return;
+
+    const totalScrollableX = Math.max(0, el.scrollWidth - el.clientWidth);
+    if (totalScrollableX <= LOTS_SCROLL_EPS) return;
+
+    const insetPx = 4;
+    const available = Math.max(0, trackEl.clientWidth - insetPx * 2);
+    if (available <= 0) return;
+
+    const rect = trackEl.getBoundingClientRect();
+    const xInTrack = clientX - rect.left;
+    const ratio = Math.max(0, Math.min(1, (xInTrack - insetPx) / available));
+    el.scrollLeft = ratio * totalScrollableX;
+  }, []);
 
   const update = useCallback(() => {
     const el = scrollRef.current;
@@ -446,6 +519,34 @@ function LotFieldsHorizontalScroll({ children }: { children: ReactNode }) {
     const hOverflow = el.scrollWidth > el.clientWidth + LOTS_SCROLL_EPS;
     const notAtRight = el.scrollLeft < el.scrollWidth - el.clientWidth - LOTS_SCROLL_EPS;
     setHintRight(hOverflow && notAtRight);
+
+    const trackEl = trackRef.current;
+    if (!trackEl) return;
+
+    if (!hOverflow) {
+      setThumbMetrics({ visible: false, left: 0, width: 0 });
+      return;
+    }
+
+    const totalScrollableX = Math.max(0, el.scrollWidth - el.clientWidth);
+    if (totalScrollableX <= LOTS_SCROLL_EPS) {
+      setThumbMetrics({ visible: false, left: 0, width: 0 });
+      return;
+    }
+
+    const insetPx = 4;
+    const available = Math.max(0, trackEl.clientWidth - insetPx * 2);
+    if (available <= 0) return;
+
+    const knobWidthPx = 18;
+    const thumbWidth = Math.min(available, knobWidthPx);
+
+    const ratio = el.scrollLeft / totalScrollableX;
+    const maxLeft = Math.max(0, available - thumbWidth);
+    const clampedRatio = Math.max(0, Math.min(1, ratio));
+    const left = insetPx + maxLeft * clampedRatio;
+
+    setThumbMetrics({ visible: true, left, width: thumbWidth });
   }, []);
 
   useLayoutEffect(() => {
@@ -467,16 +568,75 @@ function LotFieldsHorizontalScroll({ children }: { children: ReactNode }) {
     };
   }, [update]);
 
+  const onThumbPointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    const el = scrollRef.current;
+    const trackEl = trackRef.current;
+    if (!el || !trackEl) return;
+
+    e.preventDefault();
+    e.stopPropagation();
+
+    setThumbPressed(true);
+    setScrollLeftFromPointerX(e.clientX);
+
+    const onMove = (ev: PointerEvent) => setScrollLeftFromPointerX(ev.clientX);
+    const onUp = () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
+      setThumbPressed(false);
+    };
+
+    window.addEventListener('pointermove', onMove, { passive: true });
+    window.addEventListener('pointerup', onUp, { passive: true });
+    window.addEventListener('pointercancel', onUp, { passive: true });
+  }, [setScrollLeftFromPointerX]);
+
   return (
-    <div className="relative -mx-1 px-1">
+    <div className="relative -mx-1 px-1 pb-[16px]">
       <div
         ref={scrollRef}
-        className="lot-fields-x-scroll overflow-x-scroll overflow-y-visible overscroll-x-contain"
-        style={{ scrollbarWidth: 'thin' }}
+        className="lot-fields-x-scroll overflow-x-scroll overflow-y-visible overscroll-x-contain no-scrollbar"
         onScroll={update}
       >
         <div ref={contentRef}>{children}</div>
       </div>
+
+      {/* Horizontal thumb (volume-like) for the lot fields scroller */}
+      <div
+        ref={trackRef}
+        className="pointer-events-none absolute left-1 right-1 bottom-0 z-[2] h-[18px] flex items-center"
+        aria-hidden
+      >
+        <div
+          className="relative w-full h-[6px] rounded-full"
+          style={{
+            backgroundColor: 'hsl(var(--card))',
+            boxShadow: 'inset 0 0 0 1px hsl(var(--foreground) / 0.22)',
+          }}
+        >
+          {thumbMetrics.visible && (
+            <div
+              className="absolute top-1/2 -translate-y-1/2 rounded-full cursor-ew-resize select-none touch-none pointer-events-auto transition-[box-shadow,transform] duration-150 active:scale-[0.98]"
+              style={{
+                left: thumbMetrics.left,
+                width: thumbMetrics.width,
+                height: 12,
+                backgroundColor: thumbPressed ? 'hsl(var(--foreground) / 0.22)' : 'hsl(var(--foreground) / 0.14)',
+                boxShadow: thumbPressed
+                  ? 'inset 0 0 0 1px hsl(var(--foreground) / 0.75), 0 0 26px hsl(var(--foreground) / 0.26)'
+                  : 'inset 0 0 0 1px hsl(var(--foreground) / 0.45), 0 0 18px hsl(var(--foreground) / 0.18)',
+              }}
+              onPointerDown={onThumbPointerDown}
+              role="slider"
+              aria-label="Drag to scroll lots horizontally"
+              aria-valuemin={0}
+              aria-valuemax={1}
+            />
+          )}
+        </div>
+      </div>
+
       {hintRight && (
         <div
           className="pointer-events-none absolute inset-y-0 right-0 z-[1] flex w-9 items-center justify-end bg-gradient-to-l from-background from-25% via-background/80 to-transparent pr-0.5"
@@ -552,6 +712,7 @@ const ArrivalsPage = () => {
   const [sellerExpanded, setSellerExpanded] = useState<Record<string, boolean>>({});
   const lotsScrollRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const pendingLotsScrollToEndSellerIdRef = useRef<string | null>(null);
+  const newArrivalPanelScrollRef = useRef<HTMLDivElement | null>(null);
   const [sellerSearch, setSellerSearch] = useState('');
   const [sellerDropdown, setSellerDropdown] = useState(false);
   const sellerSearchWrapRef = useRef<HTMLDivElement>(null);
@@ -1211,13 +1372,40 @@ const ArrivalsPage = () => {
   };
 
   // Scroll the seller's lots panel to the newly added lot (internal scroll only).
-  useEffect(() => {
+  // useLayoutEffect runs synchronously after React commits the DOM (before the browser
+  // paints and before MutationObserver microtasks fire), so KeyboardAvoidance's
+  // ensureVisible calls always see the panel already scrolled to the correct position.
+  useLayoutEffect(() => {
     const sellerId = pendingLotsScrollToEndSellerIdRef.current;
     if (!sellerId) return;
     const el = lotsScrollRefs.current[sellerId];
     if (!el) return;
     el.scrollTop = el.scrollHeight;
     pendingLotsScrollToEndSellerIdRef.current = null;
+
+    // Mobile fix: when "+ Add Lot" auto-focuses the new input, focus is applied
+    // with preventScroll and the full-screen sheet's scroller may not move,
+    // leaving the new field under the keyboard. After we scroll the inner lots
+    // panel to the end, also nudge the outer "New Arrival" panel scroller to
+    // reveal the currently focused input.
+    const panel = newArrivalPanelScrollRef.current;
+    const vp = window.visualViewport;
+    const isKeyboardLikelyOpen = !!vp && (window.innerHeight - vp.height) > 50;
+    if (!panel || !isKeyboardLikelyOpen) return;
+
+    const tryBringActiveIntoView = () => {
+      const active = document.activeElement;
+      if (!(active instanceof HTMLElement)) return;
+      if (!panel.contains(active)) return;
+      active.scrollIntoView({ block: 'center' });
+    };
+
+    requestAnimationFrame(tryBringActiveIntoView);
+    window.setTimeout(tryBringActiveIntoView, 120);
+    window.setTimeout(tryBringActiveIntoView, 280);
+    window.setTimeout(tryBringActiveIntoView, 520);
+    window.setTimeout(tryBringActiveIntoView, 900);
+    window.setTimeout(tryBringActiveIntoView, 1300);
   }, [sellers, sellerExpanded]);
 
   const updateLot = (sellerIdx: number, lotIdx: number, updates: Partial<LotEntry>) => {
@@ -1256,130 +1444,21 @@ const ArrivalsPage = () => {
   };
 
   const handleSubmitArrival = async () => {
-    // ── Conditional format/range validation (only when values are present) ──
-    const vNum = vehicleNumber.trim();
-    if (isMultiSeller && vNum && (vNum.length < 2 || vNum.length > 12)) {
-      toast.error('Vehicle number must be between 2 and 12 characters');
-      return;
-    }
-    const gdwn = godown.trim();
-    if (gdwn && (gdwn.length < 2 || gdwn.length > 50)) {
-      toast.error('Godown name must be between 2 and 50 characters');
-      return;
-    }
-    const gpNum = gatepassNumber.trim();
-    if (gpNum && (gpNum.length < 1 || gpNum.length > 30 || !/^[a-zA-Z0-9]+$/.test(gpNum))) {
-      toast.error('Gatepass number must be between 1 and 30 characters (alphanumeric)');
-      return;
-    }
-    const brkName = brokerName.trim();
-    if (brkName && (brkName.length < 2 || brkName.length > 100 || !/^[a-zA-Z\s]+$/.test(brkName))) {
-      toast.error('Broker name must be between 2 and 100 characters (alphabets and spaces)');
-      return;
-    }
-    if (loadedWeight?.trim()) {
-      const lw = parseFloat(loadedWeight);
-      if (Number.isNaN(lw) || lw < 0 || lw > 100000) {
-        toast.error('Loaded weight must be between 0 and 100,000 kg');
-        return;
-      }
-    }
-    if (emptyWeight?.trim()) {
-      const ew = parseFloat(emptyWeight);
-      if (Number.isNaN(ew) || ew < 0 || ew > 100000) {
-        toast.error('Empty weight must be between 0 and 100,000 kg');
-        return;
-      }
-      if (loadedWeight?.trim() && ew > (parseFloat(loadedWeight) || 0)) {
-        toast.error('Empty weight must be less than or equal to loaded weight');
-        return;
-      }
-    }
-    const dw = parseFloat(deductedWeight) || 0;
-    if (deductedWeight?.trim() && (dw < 0 || dw > 10000)) {
-      toast.error('Deducted weight must be between 0 and 10,000 kg');
-      return;
-    }
-    if (!noRental && freightRate?.trim()) {
-      const fr = parseFloat(freightRate);
-      if (Number.isNaN(fr) || fr < 0 || fr > 100000) {
-        toast.error('Freight rate must be between 0 and 100,000');
-        return;
-      }
-    }
-    const ap = parseFloat(advancePaid) || 0;
-    if (advancePaid?.trim() && (ap < 0 || ap > 1000000)) {
-      toast.error('Advance paid must be between 0 and 1,000,000');
-      return;
-    }
-
-    if (!isMultiSeller && sellers.length > 1) {
-      toast.error('Single-seller arrival allows only one seller');
-      return;
-    }
-    for (const seller of sellers) {
-      const hasContactId = seller.contact_id !== '' && !Number.isNaN(Number(seller.contact_id));
-      const sName = (seller.seller_name ?? '').trim();
-      if (!hasContactId && sName && (sName.length < 2 || sName.length > 100)) {
-        toast.error(`Seller name must be between 2 and 100 characters${sName ? `: "${sName.slice(0, 20)}…"` : ''}`);
-        return;
-      }
-      const sMark = (seller.seller_mark ?? '').trim();
-      if (sMark && (sMark.length < 2 || sMark.length > 50)) {
-        toast.error(`${sName || 'Seller'}: Alias / mark must be between 2 and 50 characters`);
-        return;
-      }
-    }
-    const seenMarks = new Set<string>();
-    for (let i = 0; i < sellers.length; i++) {
-      const seller = sellers[i];
-      const sMark = (seller.seller_mark ?? '').trim();
-      if (!sMark) continue;
-      const markLower = sMark.toLowerCase();
-      if (seenMarks.has(markLower)) {
-        toast.error(`Mark "${sMark}" is already in use by another seller in this vehicle. Marks must be unique.`);
-        return;
-      }
-      seenMarks.add(markLower);
-      const isDynamic = seller.contact_id === '' || Number.isNaN(Number(seller.contact_id));
-      if (isDynamic && contacts.some(c => c.mark && c.mark.toLowerCase() === markLower)) {
-        toast.error(`Mark "${sMark}" is already in use by a contact. Please choose a unique mark or select the seller from Contacts.`);
-        return;
-      }
-    }
-    for (const seller of sellers) {
-      const seenLotNames = new Set<string>();
-      for (const lot of seller.lots) {
-        const ln = lot.lot_name?.trim() ?? '';
-        if (!ln) continue;
-        if (ln.length < 2 || ln.length > 50) {
-          toast.error(`${seller.seller_name} → ${ln}: Lot name must be between 2 and 50 characters`);
-          return;
-        }
-        if (!/^[a-zA-Z0-9][a-zA-Z0-9\s_\-]*$/.test(ln)) {
-          toast.error(`Lot name may contain letters/numbers plus spaces, '-' and '_': ${lot.lot_name}`);
-          return;
-        }
-        const lnLower = ln.toLowerCase();
-        if (seenLotNames.has(lnLower)) {
-          toast.error(`${seller.seller_name} → ${ln}: Lot Name already exists for this seller`);
-          return;
-        }
-        seenLotNames.add(lnLower);
-        if (lot.quantity < 0 || lot.quantity > 100000) {
-          toast.error(`${seller.seller_name} → ${ln}: Quantity must be between 0 and 100,000`);
-          return;
-        }
-      }
-    }
-
-    const warnings = validateWeightOutliers();
-    if (warnings.length > 0) {
-      warnings.forEach(w => toast.warning(w));
-    }
+    // Submit should never block users with validations.
+    // If required fields for completion aren't present, save as draft (partial) instead.
+    const base = buildPartialPayload();
+    const shouldComplete = isCompleteArrivalForSubmit({
+      vehicle_number: base.vehicle_number,
+      is_multi_seller: base.is_multi_seller,
+      sellers: base.sellers,
+    });
 
     if (editingVehicleId != null) {
-      await handleUpdateArrival();
+      if (!shouldComplete) {
+        await handlePartialSave();
+        return;
+      }
+      await handleUpdateArrival(); // completed update path
       return;
     }
 
@@ -1389,47 +1468,19 @@ const ArrivalsPage = () => {
     }
 
     try {
-      const payload: ArrivalCreatePayload = {
-        vehicle_number: isMultiSeller ? vehicleNumber.trim().toUpperCase() || undefined : undefined,
-        is_multi_seller: isMultiSeller,
-        loaded_weight: parseFloat(loadedWeight) || 0,
-        empty_weight: parseFloat(emptyWeight) || 0,
-        deducted_weight: parseFloat(deductedWeight) || 0,
-        freight_method: freightMethod,
-        freight_rate: parseFloat(freightRate) || 0,
-        no_rental: noRental,
-        advance_paid: parseFloat(advancePaid) || 0,
-        broker_name: brokerName || undefined,
-        broker_contact_id: brokerContactId ?? undefined,
-        narration: narration || undefined,
-        godown: godown || undefined,
-        gatepass_number: gatepassNumber || undefined,
-        origin: origin || undefined,
-        partially_completed: false,
-        sellers: sellers.map(s => {
-          const hasContactId = s.contact_id !== '' && !Number.isNaN(Number(s.contact_id));
-          return {
-            contact_id: hasContactId ? Number(s.contact_id) : null,
-            seller_name: s.seller_name,
-            seller_phone: s.seller_phone,
-            seller_mark: s.seller_mark || undefined,
-            lots: s.lots.map(l => ({
-              lot_name: l.lot_name,
-              lot_serial_number: l.lot_serial_number ?? undefined,
-              quantity: l.quantity,
-              commodity_name: l.commodity_name,
-              broker_tag: l.broker_tag || undefined,
-              variant: l.variant || undefined,
-            })),
-          };
-        }),
-      };
-      const created = await arrivalsApi.create(payload);
+      const created = await arrivalsApi.create({
+        ...base,
+        partially_completed: !shouldComplete,
+      });
       await loadArrivalsFromApi();
       resetForm();
       setShowAdd(false);
       setDesktopTab('summary');
-      toast.success(`✅ Vehicle ${created.vehicleNumber} registered with ${created.sellerCount} seller(s) and ${created.lotCount} lot(s)`);
+      if (shouldComplete) {
+        toast.success(`✅ Vehicle ${created.vehicleNumber} registered with ${created.sellerCount} seller(s) and ${created.lotCount} lot(s)`);
+      } else {
+        toast.success('Draft saved');
+      }
     } catch (err) {
       console.error('Submit arrival error:', err);
       const message = err instanceof Error ? err.message : 'Failed to submit arrival. Please try again.';
@@ -1577,6 +1628,17 @@ const ArrivalsPage = () => {
     if (editingVehicleId == null) return;
     if (!can('Arrivals', 'Edit')) {
       toast.error('You do not have permission to edit arrivals.');
+      return;
+    }
+    const base = buildPartialPayload();
+    const shouldComplete = isCompleteArrivalForSubmit({
+      vehicle_number: base.vehicle_number,
+      is_multi_seller: base.is_multi_seller,
+      sellers: base.sellers,
+    });
+
+    if (!shouldComplete) {
+      await handlePartialSave();
       return;
     }
     try {
@@ -2778,7 +2840,7 @@ const ArrivalsPage = () => {
                   )}
                   style={{ WebkitBackdropFilter: 'blur(24px)' }}
                 >
-                <div className="w-full max-w-[480px] md:max-w-full overflow-y-auto">
+                <div ref={newArrivalPanelScrollRef} className="w-full max-w-[480px] md:max-w-full overflow-y-auto">
                   <div className="bg-gradient-to-br from-blue-400 via-blue-500 to-violet-500 pt-[max(1.5rem,env(safe-area-inset-top))] pb-4 px-4 sticky top-0 z-10">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-3">

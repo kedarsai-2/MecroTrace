@@ -236,35 +236,32 @@ async function directPrintViaIframe(html: string): Promise<boolean> {
 // ── 1. Sales Sticker (Thermal Adhesive, Landscape) ──────
 // Layout: top = firm name, then seller name; then origin full width; then lot id; then buyer mark; then grid (label + value start from left)
 export function generateSalesSticker(bid: BidInfo): string {
-  const commodity = (bid.commodityName && bid.commodityName.trim()) ? bid.commodityName.trim() : '—';
+  const lotIdentifier = formatLotIdentifierForBid(bid);
+  const shortOrigin = String(bid.origin || "—").trim().slice(0, 28);
   return `<!DOCTYPE html><html><head><style>
     @page { size: landscape; margin: 2mm; }
     body { font-family: Arial, sans-serif; margin: 0; padding: 4mm; }
     .sticker { border: 2px dashed #333; border-radius: 8px; padding: 10px; max-width: 400px; }
-    .firm-name { text-align: center; font-size: 13px; font-weight: 900; letter-spacing: 1px; margin-bottom: 2px; }
+    .firm-name { text-align: center; font-size: 11px; font-weight: 800; letter-spacing: 1px; margin-bottom: 2px; text-transform: uppercase; }
     .cell { display: flex; align-items: baseline; gap: 6px; padding: 2px 0; font-size: 11px; }
     .cell .lbl { color: #666; font-size: 9px; text-transform: uppercase; font-weight: 600; flex-shrink: 0; }
     .cell .val { font-weight: 800; font-size: 13px; }
-    .center-top { text-align: center; font-size: 14px; font-weight: 800; margin-bottom: 4px; }
-    .origin-full { text-align: center; font-size: 11px; font-weight: 700; width: 100%; margin-bottom: 6px; word-break: break-word; }
-    .lot-big { text-align: center; font-size: 36px; font-weight: 900; padding: 8px 0; border-top: 1px solid #ddd; border-bottom: 1px solid #ddd; margin: 6px 0; }
-    .mark-big { text-align: center; font-size: 28px; font-weight: 900; letter-spacing: 3px; background: #f0f0f0; border-radius: 6px; padding: 6px; margin: 4px 0; }
+    .center-top { text-align: center; font-size: 16px; font-weight: 900; margin-bottom: 2px; }
+    .origin-full { text-align: center; font-size: 10px; font-weight: 700; width: 100%; margin-bottom: 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 2px; }
     @media print { body { margin: 0; padding: 2mm; } }
   </style></head><body>
     <div class="sticker">
       <div class="firm-name">MERCOTRACE</div>
-      <div class="center-top">${escapeStickerHtml(bid.sellerName)}</div>
-      <div class="origin-full">${escapeStickerHtml(bid.origin || '—')}</div>
-      <div class="lot-big">${lotDisplay(bid)}</div>
-      <div class="mark-big">[${escapeStickerHtml(bid.buyerMark)}]</div>
+      <div class="center-top">${escapeStickerHtml(bid.sellerName || '—')}</div>
+      <div class="origin-full">${escapeStickerHtml(shortOrigin)}</div>
       <div class="grid2">
-        <div class="cell"><span class="lbl">Sl No</span><span class="val">${bid.sellerSerial}</span></div>
-        <div class="cell"><span class="lbl">Qty</span><span class="val">${bid.quantity} bags</span></div>
+        <div class="cell"><span class="lbl">Slr Sr No</span><span class="val">${escapeStickerHtml(String(bid.sellerSerial ?? '—'))}</span></div>
+        <div class="cell"><span class="lbl">Qty</span><span class="val">${escapeStickerHtml(String(bid.quantity ?? '—'))}</span></div>
+        <div class="cell"><span class="lbl">Lot Name / No</span><span class="val">${escapeStickerHtml(lotIdentifier || '—')}</span></div>
+        <div class="cell"><span class="lbl">Lot No</span><span class="val">${escapeStickerHtml(String(bid.lotNumber ?? '—'))}</span></div>
+        <div class="cell"><span class="lbl">V. No</span><span class="val">${escapeStickerHtml(bid.vehicleNumber || '—')}</span></div>
         <div class="cell"><span class="lbl">Godown</span><span class="val">${escapeStickerHtml(bid.godown || '—')}</span></div>
-        <div class="cell"><span class="lbl">V No</span><span class="val">${escapeStickerHtml(bid.vehicleNumber)}</span></div>
-        <div class="cell"><span class="lbl">Commodity</span><span class="val">${escapeStickerHtml(commodity)}</span></div>
-        <div class="cell"><span class="lbl">Date</span><span class="val">${todayStr()}</span></div>
       </div>
     </div>
   </body></html>`;
@@ -272,22 +269,22 @@ export function generateSalesSticker(bid: BidInfo): string {
 
 // ── Thermal (ESC/POS) Templates ───────────────────────────
 export function generateSalesStickerThermal(bid: BidInfo): string {
-  const commodity = (bid.commodityName && bid.commodityName.trim()) ? bid.commodityName.trim() : "—";
-  const lot = lotDisplay(bid);
-  const dateStr = todayStr();
+  const lotIdentifier = formatLotIdentifierForBid(bid);
+  const shortOrigin = String(bid.origin ?? "—").trim().slice(0, 28);
   const col = 24; // 48/2
   const row = (a: string, b: string) => padThermalRight(clampThermalText(a, col), col) + padThermalRight(clampThermalText(b, col), col);
 
   return [
     "[C]" + escposBold("MERCOTRACE"),
     "[C]" + escposBold(String(bid.sellerName ?? "")),
-    "[C]" + clampThermalText(String(bid.origin ?? "—"), THERMAL_CHARS_PER_LINE),
-    "[C]" + escposBold(clampThermalText(lot, THERMAL_CHARS_PER_LINE)),
-    "[C]" + escposBold(`[${String(bid.buyerMark ?? "").trim()}]`),
+    "[C]" + clampThermalText(shortOrigin, THERMAL_CHARS_PER_LINE),
     "",
-    "[L]" + row(`Sl No ${bid.sellerSerial}`, `${bid.quantity} bags`),
-    "[L]" + row(`Godown ${bid.godown || "—"}`, `V No ${bid.vehicleNumber}`),
-    "[L]" + row(`Commodity ${commodity}`, `Date ${dateStr}`),
+    "[L]" + row("SLR SR NO", "QTY"),
+    "[L]" + row(String(bid.sellerSerial ?? "—"), String(bid.quantity ?? "—")),
+    "[L]" + row("LOT NAME / NO", "LOT NO"),
+    "[L]" + row(String(lotIdentifier || "—"), String(bid.lotNumber ?? "—")),
+    "[L]" + row("V. NO", "GODOWN"),
+    "[L]" + row(String(bid.vehicleNumber || "—"), String(bid.godown || "—")),
     "",
   ].join("\n");
 }
@@ -298,16 +295,18 @@ export function generateBuyerChitiThermal(
   bids: BidInfo[],
   stage: "post-auction" | "post-weighing" = "post-auction"
 ): string {
+  const _stage = stage;
+  void _stage;
   const totalQty = bids.reduce((s, b) => s + b.quantity, 0);
-  const totalAmt = bids.reduce((s, b) => s + b.quantity * b.rate, 0);
+  const totalBid = bids.length;
 
   // Column widths sum to 48 (approximation for thermal alignment)
-  const wLot = 15;
+  const wLot = 13;
+  const wLotSl = 6;
   const wGdwn = 8;
+  const wRate = 7;
   const wQty = 4;
   const wMark = 8;
-  const wRate = 8;
-  const wWt = stage === "post-weighing" ? 5 : 0;
 
   const pad = (s: string, w: number) => padThermalRight(clampThermalText(s, w), w);
   const lineLR = (left: string, right: string) => {
@@ -326,23 +325,23 @@ export function generateBuyerChitiThermal(
     "[C]Mercotrace",
     "[C]" + clampThermalText(buyerName, THERMAL_CHARS_PER_LINE),
     "[C]" + escposBold(`[${String(buyerMark ?? "").trim()}]`),
+    "[L]--------------------------------",
     "",
-    "[L]" + pad("Lot", wLot) + pad("Gdwn", wGdwn) + pad("Qty", wQty) + pad("Mark", wMark) + pad("Rate", wRate) + (stage === "post-weighing" ? pad("Wt", wWt) : ""),
+    "[L]" + pad("Lot Name", wLot) + pad("LotSL", wLotSl) + pad("Gdwn", wGdwn) + pad("Rate", wRate) + pad("Qty", wQty) + pad("Mark", wMark),
   ].join("\n");
 
   const rows = bids
     .map((b) => {
-      const lot = lotDisplay(b);
+      const lot = formatLotIdentifierForBid(b);
       const rateTxt = escapeThermalPrice(`₹${b.rate}`);
-      const wtTxt = stage === "post-weighing" ? `${b.weight ?? "—"} kg` : "";
 
       const line1 =
         pad(lot, wLot) +
+        pad(String(b.lotNumber && b.lotNumber > 0 ? b.lotNumber : "—"), wLotSl) +
         pad(b.godown || "—", wGdwn) +
-        pad(String(b.quantity), wQty) +
-        pad(`[${b.buyerMark}]`, wMark) +
         pad(rateTxt, wRate) +
-        (stage === "post-weighing" ? pad(wtTxt, wWt) : "");
+        pad(String(b.quantity), wQty) +
+        pad(`[${b.buyerMark}]`, wMark);
 
       return "[L]" + line1;
     })
@@ -350,10 +349,8 @@ export function generateBuyerChitiThermal(
 
   const totals = [
     "",
-    "[L]" + lineLR("Total Qty", `${totalQty} bags`),
-    "[L]" + lineLR("Total Amount", `₹${totalAmt.toLocaleString("en-IN")}`),
-    "",
-    "[C]Powered by Mercotrace",
+    "[L]" + lineLR("Total Bid", String(totalBid)),
+    "[L]" + lineLR("Total QTY", `${totalQty}`),
     "",
     "[L]--------------------------------",
     "",
@@ -368,17 +365,17 @@ export function generateSellerChitiThermal(
   bids: BidInfo[],
   stage: "post-auction" | "post-weighing" = "post-auction"
 ): string {
+  const _stage = stage;
+  void _stage;
   const totalQty = bids.reduce((s, b) => s + b.quantity, 0);
-  const totalAmt = bids.reduce((s, b) => s + b.quantity * b.rate, 0);
-
-  const primaryMark = bids[0]?.buyerMark ?? "";
+  const totalLot = bids.length;
 
   // Column widths sum to 48 (approximation for thermal alignment)
-  const wLot = 18;
-  const wMark = 10;
+  const wLot = 14;
+  const wLotSl = 6;
+  const wMark = 9;
   const wQty = 4;
-  const wRate = 10;
-  const wWt = stage === "post-weighing" ? 6 : 0;
+  const wRate = 8;
 
   const pad = (s: string, w: number) => padThermalRight(clampThermalText(s, w), w);
   const lineLR = (left: string, right: string) => {
@@ -397,23 +394,22 @@ export function generateSellerChitiThermal(
     "[C]Mercotrace",
     "",
     "[C]" + clampThermalText(sellerName, THERMAL_CHARS_PER_LINE),
-    "[C]" + (primaryMark ? escposBold(`[${String(primaryMark ?? "").trim()}]`) : ""),
     "[C]" + clampThermalText(`S.No: ${sellerSerial}`, THERMAL_CHARS_PER_LINE),
+    "[L]--------------------------------",
     "",
-    "[L]" + pad("Lot", wLot) + pad("Mark", wMark) + pad("Qty", wQty) + pad("Rate", wRate) + (stage === "post-weighing" ? pad("Wt", wWt) : ""),
+    "[L]" + pad("Lot Name", wLot) + pad("LotSL", wLotSl) + pad("Mark", wMark) + pad("Qty", wQty) + pad("Rate", wRate),
   ].join("\n");
 
   const rows = bids
     .map((b) => {
       const rateTxt = escapeThermalPrice(`₹${b.rate}`);
-      const wtTxt = stage === "post-weighing" ? `${b.weight ?? "—"} kg` : "";
 
       const line =
-        pad(lotDisplay(b), wLot) +
+        pad(formatLotIdentifierForBid(b), wLot) +
+        pad(String(b.lotNumber && b.lotNumber > 0 ? b.lotNumber : "—"), wLotSl) +
         pad(`[${b.buyerMark}]`, wMark) +
         pad(String(b.quantity), wQty) +
-        pad(rateTxt, wRate) +
-        (stage === "post-weighing" ? pad(wtTxt, wWt) : "");
+        pad(rateTxt, wRate);
 
       return "[L]" + line;
     })
@@ -421,10 +417,8 @@ export function generateSellerChitiThermal(
 
   const totals = [
     "",
-    "[L]" + lineLR("Total Qty", `${totalQty} bags`),
-    "[L]" + lineLR("Total Amount", `₹${totalAmt.toLocaleString("en-IN")}`),
-    "",
-    "[C]Powered by Mercotrace",
+    "[L]" + lineLR("Total Lot", String(totalLot)),
+    "[L]" + lineLR("Total QTY", String(totalQty)),
     "",
     "[L]--------------------------------",
     "",
@@ -444,16 +438,18 @@ function escapeStickerHtml(s: string): string {
 
 // ── 2. Buyer Chiti (80mm thermal) ────────────────────────
 export function generateBuyerChiti(buyerName: string, buyerMark: string, bids: BidInfo[], stage: 'post-auction' | 'post-weighing' = 'post-auction'): string {
+  const _stage = stage;
+  void _stage;
   const totalQty = bids.reduce((s, b) => s + b.quantity, 0);
-  const totalAmt = bids.reduce((s, b) => s + b.quantity * b.rate, 0);
+  const totalBid = bids.length;
   const rows = bids.map(b => `
     <tr>
-      <td>${lotDisplay(b)}</td>
+      <td>${formatLotIdentifierForBid(b)}</td>
+      <td>${b.lotNumber && b.lotNumber > 0 ? b.lotNumber : '—'}</td>
       <td>${b.godown || '—'}</td>
+      <td>₹${b.rate}</td>
       <td>${b.quantity}</td>
       <td>[${b.buyerMark}]</td>
-      <td>₹${b.rate}</td>
-      ${stage === 'post-weighing' ? `<td>${b.weight ?? '—'} kg</td>` : ''}
     </tr>`).join('');
 
   return `<!DOCTYPE html><html><head><style>
@@ -480,30 +476,30 @@ export function generateBuyerChiti(buyerName: string, buyerMark: string, bids: B
       <div class="mark">[${buyerMark}]</div>
     </div>
     <table>
-      <thead><tr><th>Lot</th><th>Gdwn</th><th>Qty</th><th>Mark</th><th>Rate</th>${stage === 'post-weighing' ? '<th>Wt</th>' : ''}</tr></thead>
+      <thead><tr><th>Lot Name</th><th>Lot SL No</th><th>Gdwn</th><th>Rate</th><th>Qty</th><th>Mark</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>
     <div class="totals">
-      <div class="row"><span>Total Qty</span><span>${totalQty} bags</span></div>
-      <div class="row"><span>Total Amount</span><span>₹${totalAmt.toLocaleString('en-IN')}</span></div>
+      <div class="row"><span>Total Bid</span><span>${totalBid}</span></div>
+      <div class="row"><span>Total QTY</span><span>${totalQty}</span></div>
     </div>
-    <div class="powered">Powered by Mercotrace</div>
     <div class="cut-line"></div>
   </body></html>`;
 }
 
 // ── 3. Seller Chiti (80mm thermal) ───────────────────────
 export function generateSellerChiti(sellerName: string, sellerSerial: number, bids: BidInfo[], stage: 'post-auction' | 'post-weighing' = 'post-auction'): string {
+  const _stage = stage;
+  void _stage;
   const totalQty = bids.reduce((s, b) => s + b.quantity, 0);
-  const totalAmt = bids.reduce((s, b) => s + b.quantity * b.rate, 0);
-  const primaryMark = bids[0]?.buyerMark ?? '';
+  const totalLot = bids.length;
   const rows = bids.map(b => `
     <tr>
-      <td>${lotDisplay(b)}</td>
+      <td>${formatLotIdentifierForBid(b)}</td>
+      <td>${b.lotNumber && b.lotNumber > 0 ? b.lotNumber : '—'}</td>
       <td>[${b.buyerMark}]</td>
       <td>${b.quantity}</td>
       <td>₹${b.rate}</td>
-      ${stage === 'post-weighing' ? `<td>${b.weight ?? '—'} kg</td>` : ''}
     </tr>`).join('');
 
   return `<!DOCTYPE html><html><head><style>
@@ -529,18 +525,16 @@ export function generateSellerChiti(sellerName: string, sellerSerial: number, bi
     <div class="header"><h3>Mercotrace</h3></div>
     <div class="seller-info">
       <div class="name">${sellerName}</div>
-      ${primaryMark ? `<div class="mark">[${primaryMark}]</div>` : ''}
       <div class="serial">S.No: ${sellerSerial}</div>
     </div>
     <table>
-      <thead><tr><th>Lot</th><th>Mark</th><th>Qty</th><th>Rate</th>${stage === 'post-weighing' ? '<th>Wt</th>' : ''}</tr></thead>
+      <thead><tr><th>Lot Name</th><th>Lot SL No</th><th>Mark</th><th>Qty</th><th>Rate</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>
     <div class="totals">
-      <div class="row"><span>Total Qty</span><span>${totalQty} bags</span></div>
-      <div class="row"><span>Total Amount</span><span>₹${totalAmt.toLocaleString('en-IN')}</span></div>
+      <div class="row"><span>Total Lot</span><span>${totalLot}</span></div>
+      <div class="row"><span>Total QTY</span><span>${totalQty}</span></div>
     </div>
-    <div class="powered">Powered by Mercotrace</div>
     <div class="cut-line"></div>
   </body></html>`;
 }
@@ -549,28 +543,30 @@ export function generateSellerChiti(sellerName: string, sellerSerial: number, bi
 export function generateSalePadPrint(bids: BidInfo[]): string {
   const rows = bids.map(b => `
     <tr>
-      <td>${b.sellerSerial}</td>
-      <td>${b.sellerName}</td>
-      <td>${lotDisplay(b)}</td>
-      <td>[${b.buyerMark}]</td>
-      <td>${b.quantity}</td>
-      <td>₹${b.rate}</td>
-      <td>₹${b.quantity * b.rate}</td>
+      <td>${b.vehicleTotalQty ?? b.quantity}</td>
+      <td>${b.sellerSerial && b.sellerSerial > 0 ? b.sellerSerial : '—'}</td>
+      <td>${escapeStickerHtml(b.sellerName || '—')}</td>
+      <td>${b.sellerVehicleQty ?? b.quantity}</td>
+      <td>${b.lotNumber && b.lotNumber > 0 ? b.lotNumber : '—'}</td>
+      <td>${escapeStickerHtml(formatLotIdentifierForBid(b))}</td>
     </tr>`).join('');
 
   return `<!DOCTYPE html><html><head><style>
     @page { size: A5 portrait; margin: 8mm; }
     body { font-family: Arial, sans-serif; margin: 0; padding: 8mm; font-size: 11px; }
-    ${firmHeaderCSS()}
     table { width: 100%; border-collapse: collapse; margin-top: 8px; }
-    th { background: #333; color: #fff; padding: 4px 6px; font-size: 9px; text-transform: uppercase; text-align: left; }
-    td { padding: 4px 6px; border-bottom: 1px solid #ddd; font-size: 10px; }
+    thead { display: table-header-group; }
+    tfoot { display: table-footer-group; }
+    tr { page-break-inside: avoid; }
+    th { background: #333; color: #fff; padding: 4px 6px; font-size: 9px; text-transform: uppercase; text-align: center; }
+    td { padding: 4px 6px; border-bottom: 1px solid #ddd; font-size: 10px; text-align: center; }
     tr:nth-child(even) { background: #f9f9f9; }
+    .sale-pad-title { text-align: center; font-size: 13px; font-weight: 800; margin-top: 2px; margin-bottom: 6px; letter-spacing: 0.3px; }
     @media print { body { margin: 0; padding: 8mm; } }
   </style></head><body>
-    ${firmHeader()}
+    <div class="sale-pad-title">SALE PAD</div>
     <table>
-      <thead><tr><th>Sl</th><th>Seller</th><th>Lot</th><th>Mark</th><th>Qty</th><th>Rate</th><th>Amount</th></tr></thead>
+      <thead><tr><th>Vehicle Qty</th><th>Seller SL No</th><th>Seller Name</th><th>Seller Qty</th><th>Lot SL No</th><th>Lot Name</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>
   </body></html>`;
@@ -622,45 +618,72 @@ export function generateTenderSlip(bids: BidInfo[]): string {
 
 // ── 6. Dispatch Control for Coolie (A5 Portrait) ────────
 export function generateDispatchControl(bids: BidInfo[]): string {
-  const sellerGroups: Record<string, BidInfo[]> = {};
-  bids.forEach(b => {
-    const key = b.sellerName;
-    if (!sellerGroups[key]) sellerGroups[key] = [];
-    sellerGroups[key].push(b);
-  });
+  const safeBids = bids.length > 0 ? bids : [{
+    bidNumber: 0,
+    buyerMark: '—',
+    buyerName: '—',
+    quantity: 0,
+    rate: 0,
+    lotId: '0',
+    lotName: '—',
+    sellerName: '—',
+    sellerSerial: 0,
+    lotNumber: 0,
+    vehicleNumber: '—',
+    commodityName: '—',
+    origin: '—',
+    godown: '—',
+  }];
 
-  let sections = '';
-  Object.entries(sellerGroups).forEach(([seller, sBids]) => {
-    const sellerQty = sBids.reduce((s, b) => s + b.quantity, 0);
-    sections += `<div class="seller-block">
-      <div class="seller-head">
-        <span class="sname">${seller}</span>
-        <span class="sqty">Total: ${sellerQty} bags</span>
-      </div>`;
-    sBids.forEach((b, idx) => {
-      sections += `<div class="lot-row">
-        <span>Sr ${idx + 1}</span>
-        <span>Lot ${lotDisplay(b)}</span>
-        <span>Gdwn: ${b.godown || '—'}</span>
-        <span>[${b.buyerMark}]</span>
-        <span>${b.quantity} bags</span>
-      </div>`;
-    });
-    sections += `</div>`;
-  });
+  const vehicleQty = safeBids.reduce((s, b) => s + b.quantity, 0);
+  const godown = safeBids[0]?.godown || '—';
+
+  const rows = safeBids.map((b) => `
+    <tr>
+      <td>${b.sellerSerial && b.sellerSerial > 0 ? b.sellerSerial : '—'}</td>
+      <td>${escapeStickerHtml(b.sellerName || '—')}</td>
+      <td>${b.sellerVehicleQty ?? b.quantity}</td>
+      <td>${b.lotNumber && b.lotNumber > 0 ? b.lotNumber : '—'}</td>
+      <td>${escapeStickerHtml(formatLotIdentifierForBid(b))}</td>
+      <td>${escapeStickerHtml(b.buyerMark || '—')}</td>
+      <td>${b.quantity}</td>
+    </tr>
+  `).join('');
 
   return `<!DOCTYPE html><html><head><style>
     @page { size: A5 portrait; margin: 6mm; }
-    body { font-family: Arial, sans-serif; margin: 0; padding: 6mm; font-size: 11px; }
-    .title { text-align: center; font-size: 14px; font-weight: 900; margin-bottom: 8px; border-bottom: 2px solid #333; padding-bottom: 4px; }
-    .seller-block { margin-bottom: 8px; border: 1px solid #ddd; border-radius: 4px; overflow: hidden; }
-    .seller-head { background: #333; color: #fff; padding: 4px 8px; display: flex; justify-content: space-between; font-size: 11px; font-weight: 700; }
-    .lot-row { display: flex; justify-content: space-between; padding: 3px 8px; font-size: 10px; border-bottom: 1px dotted #eee; }
-    .lot-row:last-child { border-bottom: none; }
+    body { font-family: Arial, sans-serif; margin: 0; padding: 6mm; font-size: 10px; color: #111; }
+    .sheet { border: 1px solid #8f8f8f; min-height: calc(100vh - 12mm); padding: 8px 10px; box-sizing: border-box; }
+    .head { display: flex; justify-content: center; gap: 24px; font-size: 10px; font-weight: 700; margin-bottom: 4px; text-align: center; }
+    table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+    thead { display: table-header-group; }
+    tfoot { display: table-footer-group; }
+    tr { page-break-inside: avoid; }
+    th { text-align: center; font-size: 9px; font-weight: 700; padding: 2px 3px; border-bottom: 1px dashed #777; }
+    td { font-size: 9px; font-weight: 700; padding: 2px 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border-bottom: 1px dotted #ddd; text-align: center; }
+    th:nth-child(1), td:nth-child(1) { width: 8%; }
+    th:nth-child(2), td:nth-child(2) { width: 19%; }
+    th:nth-child(3), td:nth-child(3) { width: 12%; }
+    th:nth-child(4), td:nth-child(4) { width: 9%; }
+    th:nth-child(5), td:nth-child(5) { width: 24%; }
+    th:nth-child(6), td:nth-child(6) { width: 14%; }
+    th:nth-child(7), td:nth-child(7) { width: 10%; }
     @media print { body { margin: 0; padding: 6mm; } }
   </style></head><body>
-    <div class="title">Dispatch Control - Coolie</div>
-    ${sections}
+    <div class="sheet">
+      <div class="head">
+        <span>Vehicle Qty ${vehicleQty}</span>
+        <span>Godown: ${escapeStickerHtml(godown)}</span>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>Slr No</th><th>Seller Name</th><th>Seller QTY</th><th>Lot No</th><th>Lot Name</th><th>Buyer Mark</th><th>Quantity</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
   </body></html>`;
 }
 

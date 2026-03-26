@@ -102,16 +102,16 @@ export function generateTemplateHTML(templateId: string, arrivalDetails: Arrival
 
     case 'sales_sticker': {
       const lot = sampleLots[0] || { lot_name: 'Onion', lot_no: 'ONI/001', seller: 'Seller', qty: 10 };
+      const shortOrigin = 'Origin';
       return `<div style="font-family:'Segoe UI',Arial,sans-serif; width:150mm; padding:10px; font-size:11px; border:2px dashed #999">
-        <div style="text-align:center; font-weight:800; font-size:15px; color:#1a1a2e">${firm.name || '—'}</div>
-        <div style="display:flex; justify-content:space-between; margin-top:8px">
+        <div style="text-align:center; font-weight:800; font-size:11px; letter-spacing:1px; text-transform:uppercase; color:#1a1a2e">${firm.name || '—'}</div>
+        <div style="text-align:center; font-size:16px; font-weight:900; margin-top:4px">${lot.seller}</div>
+        <div style="text-align:center; font-size:10px; color:#666; font-weight:700; margin-top:2px">${shortOrigin}</div>
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:2px 2px; margin-top:4px">
           <div><strong>Slr Sr No:</strong> 1</div><div><strong>Qty:</strong> ${lot.qty}</div>
+          <div><strong>Lot Name / No:</strong> ${lot.lot_name} / ${lot.lot_no}</div><div><strong>Lot No:</strong> ${lot.lot_no}</div>
+          <div><strong>V.No:</strong> ${lot.vehicle || 'MH-12-AB-1234'}</div><div><strong>Godown:</strong> A1</div>
         </div>
-        <div style="font-size:18px; font-weight:bold; text-align:center; margin:10px 0; background:#f0f4ff; padding:6px; border-radius:4px; color:#1a1a2e">${lot.lot_name} / ${lot.lot_no}</div>
-        <div style="display:flex; justify-content:space-between; font-size:10px; color:#666">
-          <span>V.No: ${lot.vehicle || 'MH-12-AB-1234'}</span><span>Godown: A1</span>
-        </div>
-        <div style="text-align:center; font-size:9px; margin-top:8px; color:#aaa">Powered by MERCOTRACE</div>
       </div>`;
     }
 
