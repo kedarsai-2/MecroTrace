@@ -141,7 +141,8 @@ function isCompleteArrivalForSubmit(
     const hasContactId = s.contact_id !== undefined && s.contact_id !== null;
     if (!hasContactId) {
       if (!s.seller_name?.trim()) return false;
-      if (!s.seller_phone?.trim()) return false;
+      // Free-text sellers are collected by name (and optional mark) in this UI.
+      // Phone is not captured for this path, so it must not gate completion.
     }
     const lots = s.lots ?? [];
     if (lots.length === 0) return false;
@@ -159,6 +160,39 @@ function isCompleteArrivalForSubmit(
   }
 
   return true;
+}
+
+function isSellerSubstantiveForSubmit(seller: ArrivalCreatePayload['sellers'][number]): boolean {
+  const hasContactId = seller.contact_id !== undefined && seller.contact_id !== null;
+  if (hasContactId) return true;
+  if ((seller.seller_name ?? '').trim()) return true;
+  if ((seller.seller_phone ?? '').trim()) return true;
+  if ((seller.seller_mark ?? '').trim()) return true;
+
+  const lots = seller.lots ?? [];
+  return lots.some((lot) => {
+    if ((lot.lot_name ?? '').trim()) return true;
+    if ((lot.commodity_name ?? '').trim()) return true;
+    if ((lot.broker_tag ?? '').trim()) return true;
+    if ((lot.variant ?? '').trim()) return true;
+    return (lot.quantity ?? 0) > 0;
+  });
+}
+
+function sanitizeSubmitPayload(payload: ArrivalCreatePayload): ArrivalCreatePayload {
+  const sellers = (payload.sellers ?? [])
+    .map((seller) => {
+      const lots = (seller.lots ?? []).filter((lot) => {
+        const hasLotName = (lot.lot_name ?? '').trim().length > 0;
+        const hasCommodity = (lot.commodity_name ?? '').trim().length > 0;
+        const hasMeta = (lot.broker_tag ?? '').trim().length > 0 || (lot.variant ?? '').trim().length > 0;
+        return hasLotName || hasCommodity || hasMeta || (lot.quantity ?? 0) > 0;
+      });
+      return { ...seller, lots };
+    })
+    .filter(isSellerSubstantiveForSubmit);
+
+  return { ...payload, sellers };
 }
 
 const ARRIVAL_SUMMARY_PRIMARY_PILL_CLASS =
@@ -1145,6 +1179,7 @@ const ArrivalsPage = () => {
     if (s === 'PARTIALLY_COMPLETED') return 'Partially Completed';
     return s.charAt(0) + s.slice(1).toLowerCase();
   };
+  const activeArrivalsLoading = statusFilter === 'PARTIALLY_COMPLETED' ? partialArrivalsLoading : apiArrivalsLoading;
 
   const loadArrivalsFromApi = async () => {
     setApiArrivalsLoading(true);
@@ -1447,10 +1482,11 @@ const ArrivalsPage = () => {
     // Submit should never block users with validations.
     // If required fields for completion aren't present, save as draft (partial) instead.
     const base = buildPartialPayload();
+    const normalizedForSubmit = sanitizeSubmitPayload(base);
     const shouldComplete = isCompleteArrivalForSubmit({
-      vehicle_number: base.vehicle_number,
-      is_multi_seller: base.is_multi_seller,
-      sellers: base.sellers,
+      vehicle_number: normalizedForSubmit.vehicle_number,
+      is_multi_seller: normalizedForSubmit.is_multi_seller,
+      sellers: normalizedForSubmit.sellers,
     });
 
     if (editingVehicleId != null) {
@@ -1469,7 +1505,7 @@ const ArrivalsPage = () => {
 
     try {
       const created = await arrivalsApi.create({
-        ...base,
+        ...(shouldComplete ? normalizedForSubmit : base),
         partially_completed: !shouldComplete,
       });
       await loadArrivalsFromApi();
@@ -1776,35 +1812,10 @@ const ArrivalsPage = () => {
           <AnimatePresence mode="wait">
             {desktopTab === 'summary' && (
               <motion.div key="summary" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} transition={{ duration: 0.2 }}>
-                {apiArrivalsLoading ? (
+                {activeArrivalsLoading ? (
                   <div className="glass-card p-12 rounded-2xl text-center">
                     <p className="text-muted-foreground">Loading arrivals…</p>
                   </div>
-                ) : apiArrivals.length === 0 && statusFilter !== 'PARTIALLY_COMPLETED' ? (
-                  statusFilter !== 'COMPLETED' ? (
-                    <div className="glass-card p-12 rounded-2xl text-center">
-                      <Filter className="w-12 h-12 text-muted-foreground/50 mx-auto mb-4" />
-                      <h3 className="text-lg font-bold text-foreground mb-1">No {statusLabel(statusFilter)} arrivals</h3>
-                      <p className="text-sm text-muted-foreground mb-4">No arrivals match the &quot;{statusLabel(statusFilter)}&quot; filter. Show all to see the full list.</p>
-                      <Button onClick={() => setStatusFilter('COMPLETED')} variant="outline" className="rounded-xl">
-                        Show completed arrivals
-                      </Button>
-                    </div>
-                  ) : (
-                  <div className="glass-card p-12 rounded-2xl text-center">
-                    <div className="relative mb-4 mx-auto w-16 h-16">
-                      <div className="absolute inset-0 bg-blue-500/20 rounded-full blur-xl" />
-                      <div className="relative w-16 h-16 rounded-full bg-gradient-to-br from-blue-400 to-violet-500 flex items-center justify-center shadow-lg">
-                        <Truck className="w-7 h-7 text-white" />
-                      </div>
-                    </div>
-                    <h3 className="text-lg font-bold text-foreground mb-1">No Arrivals Yet</h3>
-                    <p className="text-sm text-muted-foreground mb-4">Record your first vehicle arrival to start operations</p>
-                    <Button onClick={openNewArrivalPanel} className="bg-gradient-to-r from-blue-500 to-violet-500 text-white rounded-xl shadow-lg">
-                      <Plus className="w-4 h-4 mr-2" /> New Arrival
-                    </Button>
-                  </div>
-                  )
                 ) : (
                   <>
                     {/* Four summary cards — raghav: all blue icon #6075FF */}
@@ -1874,6 +1885,32 @@ const ArrivalsPage = () => {
                       </div>
                     )}
                     {summaryMode === 'arrivals' && (
+                      filteredArrivals.length === 0 ? (
+                        statusFilter !== 'COMPLETED' ? (
+                          <div className="glass-card p-12 rounded-2xl text-center">
+                            <Filter className="w-12 h-12 text-muted-foreground/50 mx-auto mb-4" />
+                            <h3 className="text-lg font-bold text-foreground mb-1">No {statusLabel(statusFilter)} arrivals</h3>
+                            <p className="text-sm text-muted-foreground mb-4">No arrivals match the &quot;{statusLabel(statusFilter)}&quot; filter. Show all to see the full list.</p>
+                            <Button onClick={() => setStatusFilter('COMPLETED')} variant="outline" className="rounded-xl">
+                              Show completed arrivals
+                            </Button>
+                          </div>
+                        ) : (
+                          <div className="glass-card p-12 rounded-2xl text-center">
+                            <div className="relative mb-4 mx-auto w-16 h-16">
+                              <div className="absolute inset-0 bg-blue-500/20 rounded-full blur-xl" />
+                              <div className="relative w-16 h-16 rounded-full bg-gradient-to-br from-blue-400 to-violet-500 flex items-center justify-center shadow-lg">
+                                <Truck className="w-7 h-7 text-white" />
+                              </div>
+                            </div>
+                            <h3 className="text-lg font-bold text-foreground mb-1">No Arrivals Yet</h3>
+                            <p className="text-sm text-muted-foreground mb-4">Record your first vehicle arrival to start operations</p>
+                            <Button onClick={openNewArrivalPanel} className="bg-gradient-to-r from-blue-500 to-violet-500 text-white rounded-xl shadow-lg">
+                              <Plus className="w-4 h-4 mr-2" /> New Arrival
+                            </Button>
+                          </div>
+                        )
+                      ) : (
                     <div className="glass-card rounded-2xl overflow-x-auto max-w-full">
                       <table className="w-full min-w-[56rem] text-sm">
                         <thead>
@@ -1987,6 +2024,7 @@ const ArrivalsPage = () => {
                         </tbody>
                       </table>
                     </div>
+                      )
                     )}
                     {summaryMode === 'sellers' && (
                       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
