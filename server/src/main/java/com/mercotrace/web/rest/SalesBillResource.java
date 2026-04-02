@@ -112,4 +112,20 @@ public class SalesBillResource {
             throw new BadRequestAlertException(e.getMessage(), ENTITY_NAME, "validation");
         }
     }
+
+    /**
+     * {@code POST /api/sales-bills/:id/assign-number} : Assign a bill number based on commodity prefixes.
+     * If the bill already has a number, this is a no-op and returns the current bill.
+     */
+    @PostMapping("/{id}/assign-number")
+    @PreAuthorize("hasAuthority(\"" + AuthoritiesConstants.BILLING_EDIT + "\")")
+    public ResponseEntity<SalesBillDTO> assignBillNumber(@PathVariable Long id) {
+        LOG.debug("REST request to assign bill number for sales bill: {}", id);
+        try {
+            SalesBillDTO result = salesBillService.assignNumber(id);
+            return ResponseEntity.ok(result);
+        } catch (IllegalArgumentException e) {
+            throw new BadRequestAlertException(e.getMessage(), ENTITY_NAME, "validation");
+        }
+    }
 }

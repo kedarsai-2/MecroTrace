@@ -7,14 +7,38 @@ import { contactApi } from '@/services/api';
 import type { Contact } from '@/types/models';
 import { useAdminPermissions } from '@/admin/lib/adminPermissions';
 import AdminForbiddenPage from '@/admin/components/AdminForbiddenPage';
+import { toast } from 'sonner';
 
 const AdminContactsPage = () => {
   const { canAccessModule } = useAdminPermissions();
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [search, setSearch] = useState('');
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    contactApi.adminList().then(setContacts);
+    let active = true;
+
+    const loadContacts = async () => {
+      try {
+        const data = await contactApi.adminList();
+        if (!active) return;
+        setContacts(Array.isArray(data) ? data : []);
+      } catch {
+        if (!active) return;
+        setContacts([]);
+        toast.error('Failed to load contacts');
+      } finally {
+        if (active) {
+          setLoading(false);
+        }
+      }
+    };
+
+    void loadContacts();
+
+    return () => {
+      active = false;
+    };
   }, []);
 
   if (!canAccessModule('Contacts')) {
@@ -22,11 +46,14 @@ const AdminContactsPage = () => {
   }
 
   const filtered = contacts.filter(c => {
+    const name = typeof c?.name === 'string' ? c.name : '';
+    const phone = typeof c?.phone === 'string' ? c.phone : '';
+    const mark = typeof c?.mark === 'string' ? c.mark : '';
     const q = search.toLowerCase();
     return (
-      c.name.toLowerCase().includes(q) ||
-      c.phone.includes(q) ||
-      (c.mark && c.mark.toLowerCase().includes(q))
+      name.toLowerCase().includes(q) ||
+      phone.includes(q) ||
+      mark.toLowerCase().includes(q)
     );
   });
 
@@ -43,7 +70,9 @@ const AdminContactsPage = () => {
         </div>
         <div>
           <h1 className="text-xl font-bold text-foreground">Contacts Directory</h1>
-          <p className="text-sm text-muted-foreground">{contacts.length} contacts across all traders</p>
+          <p className="text-sm text-muted-foreground">
+            {loading ? 'Loading contacts...' : `${contacts.length} contacts across all traders`}
+          </p>
         </div>
       </motion.div>
 
@@ -69,20 +98,29 @@ const AdminContactsPage = () => {
               </tr>
             </thead>
             <tbody>
-              {filtered.map((c, i) => (
-                <motion.tr key={c.contact_id} initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.25 + i * 0.04 }}
+              {filtered.map((c, i) => {
+                const name = typeof c?.name === 'string' ? c.name : 'Unnamed';
+                const mark = typeof c?.mark === 'string' ? c.mark : '';
+                const phone = typeof c?.phone === 'string' ? c.phone : '';
+                const address = typeof c?.address === 'string' ? c.address : '';
+                const contactKey = c?.contact_id ? String(c.contact_id) : `contact-${i}`;
+                const balanceRaw = Number(c?.current_balance ?? 0);
+                const balance = Number.isFinite(balanceRaw) ? balanceRaw : 0;
+
+                return (
+                <motion.tr key={contactKey} initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.25 + i * 0.04 }}
                   className="border-b border-border/20 hover:bg-primary/5 transition-colors">
                   <td className="py-3.5 px-4">
                     <div className="flex items-center gap-3">
                       <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-emerald-400 to-teal-500 flex items-center justify-center shadow-md">
-                        <span className="text-white font-bold text-xs">{c.mark || c.name.charAt(0)}</span>
+                        <span className="text-white font-bold text-xs">{mark || name.charAt(0) || '?'}</span>
                       </div>
-                      <span className="font-semibold text-foreground">{c.name}</span>
+                      <span className="font-semibold text-foreground">{name}</span>
                     </div>
                   </td>
-                  <td className="py-3.5 px-4 text-muted-foreground flex items-center gap-1"><Phone className="w-3 h-3" /> {c.phone}</td>
-                  <td className="py-3.5 px-4 text-foreground font-medium">{c.mark || '—'}</td>
-                  <td className="py-3.5 px-4 text-muted-foreground">{c.address || '—'}</td>
+                  <td className="py-3.5 px-4 text-muted-foreground flex items-center gap-1"><Phone className="w-3 h-3" /> {phone || '—'}</td>
+                  <td className="py-3.5 px-4 text-foreground font-medium">{mark || '—'}</td>
+                  <td className="py-3.5 px-4 text-muted-foreground">{address || '—'}</td>
                   <td className="py-3.5 px-4 text-muted-foreground">
                     {c.can_login ? (
                       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 text-[11px] font-semibold">
@@ -94,17 +132,18 @@ const AdminContactsPage = () => {
                     )}
                   </td>
                   <td className="py-3.5 px-4 text-right">
-                    <span className={cn('font-semibold', (c.current_balance ?? 0) >= 0 ? 'text-success' : 'text-destructive')}>
-                      ₹{Math.abs(c.current_balance ?? 0).toLocaleString()}
+                    <span className={cn('font-semibold', balance >= 0 ? 'text-success' : 'text-destructive')}>
+                      ₹{Math.abs(balance).toLocaleString()}
                     </span>
-                    <p className="text-[10px] text-muted-foreground">{(c.current_balance ?? 0) >= 0 ? 'Receivable' : 'Payable'}</p>
+                    <p className="text-[10px] text-muted-foreground">{balance >= 0 ? 'Receivable' : 'Payable'}</p>
                   </td>
                 </motion.tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         </div>
-        {filtered.length === 0 && <div className="p-12 text-center text-muted-foreground">No contacts found</div>}
+        {!loading && filtered.length === 0 && <div className="p-12 text-center text-muted-foreground">No contacts found</div>}
       </motion.div>
     </div>
   );

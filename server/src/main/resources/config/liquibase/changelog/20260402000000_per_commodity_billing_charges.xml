@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!-- Per-commodity billing: coolie, weighman, discount, round-off charges -->
+    <!-- Moves discount and round-off from bill-level to per-commodity basis -->
+    
+    <!-- Add per-commodity coolie charge fields -->
+    <changeSet id="20260402000000-1" author="mercotrace">
+        <addColumn tableName="sales_bill_commodity_group">
+            <column name="coolie_rate" type="numeric(15,2)" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+        </addColumn>
+    </changeSet>
+
+    <changeSet id="20260402000000-2" author="mercotrace">
+        <addColumn tableName="sales_bill_commodity_group">
+            <column name="coolie_amount" type="numeric(15,2)" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+        </addColumn>
+    </changeSet>
+
+    <!-- Add per-commodity weighman charge fields -->
+    <changeSet id="20260402000000-3" author="mercotrace">
+        <addColumn tableName="sales_bill_commodity_group">
+            <column name="weighman_charge_rate" type="numeric(15,2)" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+        </addColumn>
+    </changeSet>
+
+    <changeSet id="20260402000000-4" author="mercotrace">
+        <addColumn tableName="sales_bill_commodity_group">
+            <column name="weighman_charge_amount" type="numeric(15,2)" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+        </addColumn>
+    </changeSet>
+
+    <!-- Add per-commodity discount fields -->
+    <changeSet id="20260402000000-5" author="mercotrace">
+        <addColumn tableName="sales_bill_commodity_group">
+            <column name="discount" type="numeric(15,2)" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+        </addColumn>
+    </changeSet>
+
+    <changeSet id="20260402000000-6" author="mercotrace">
+        <addColumn tableName="sales_bill_commodity_group">
+            <column name="discount_type" type="varchar(20)" defaultValue="AMOUNT">
+                <constraints nullable="false"/>
+            </column>
+        </addColumn>
+    </changeSet>
+
+    <!-- Add per-commodity manual round-off field -->
+    <changeSet id="20260402000000-7" author="mercotrace">
+        <addColumn tableName="sales_bill_commodity_group">
+            <column name="manual_round_off" type="numeric(15,2)" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+        </addColumn>
+    </changeSet>
+
+    <!-- Remove bill-level coolie charge (now per-commodity in commodity group) -->
+    <changeSet id="20260402000000-8" author="mercotrace">
+        <dropColumn tableName="sales_bill" columnName="buyer_coolie"/>
+    </changeSet>
+
+    <!-- Remove bill-level discount (now per-commodity in commodity group) -->
+    <changeSet id="20260402000000-9" author="mercotrace">
+        <dropColumn tableName="sales_bill" columnName="discount"/>
+    </changeSet>
+
+    <!-- Remove bill-level discount_type (now per-commodity in commodity group) -->
+    <changeSet id="20260402000000-10" author="mercotrace">
+        <dropColumn tableName="sales_bill" columnName="discount_type"/>
+    </changeSet>
+
+    <!-- Remove bill-level manual round-off (now per-commodity in commodity group) -->
+    <changeSet id="20260402000000-11" author="mercotrace">
+        <dropColumn tableName="sales_bill" columnName="manual_round_off"/>
+    </changeSet>
+
+</databaseChangeLog>

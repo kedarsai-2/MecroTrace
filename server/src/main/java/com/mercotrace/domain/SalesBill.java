@@ -38,8 +38,7 @@ public class SalesBill implements Serializable {
     @Column(name = "trader_id", nullable = false)
     private Long traderId;
 
-    @NotNull
-    @Column(name = "bill_number", nullable = false, length = 30)
+    @Column(name = "bill_number", length = 30)
     private String billNumber;
 
     @NotNull
@@ -50,6 +49,34 @@ public class SalesBill implements Serializable {
     @Column(name = "buyer_mark", nullable = false, length = 100)
     private String buyerMark;
 
+    @Column(name = "buyer_contact_id")
+    private Long buyerContactId;
+
+    @Column(name = "buyer_phone", length = 20)
+    private String buyerPhone;
+
+    @Column(name = "buyer_address", length = 500)
+    private String buyerAddress;
+
+    @NotNull
+    @Column(name = "buyer_as_broker", nullable = false)
+    private Boolean buyerAsBroker = false;
+
+    @Column(name = "broker_name", length = 255)
+    private String brokerName;
+
+    @Column(name = "broker_mark", length = 100)
+    private String brokerMark;
+
+    @Column(name = "broker_contact_id")
+    private Long brokerContactId;
+
+    @Column(name = "broker_phone", length = 20)
+    private String brokerPhone;
+
+    @Column(name = "broker_address", length = 500)
+    private String brokerAddress;
+
     @NotNull
     @Column(name = "billing_name", nullable = false, length = 255)
     private String billingName;
@@ -59,10 +86,6 @@ public class SalesBill implements Serializable {
     private Instant billDate;
 
     @NotNull
-    @Column(name = "buyer_coolie", precision = 15, scale = 2, nullable = false)
-    private BigDecimal buyerCoolie = BigDecimal.ZERO;
-
-    @NotNull
     @Column(name = "outbound_freight", precision = 15, scale = 2, nullable = false)
     private BigDecimal outboundFreight = BigDecimal.ZERO;
 
@@ -70,16 +93,8 @@ public class SalesBill implements Serializable {
     private String outboundVehicle;
 
     @NotNull
-    @Column(name = "discount", precision = 15, scale = 2, nullable = false)
-    private BigDecimal discount = BigDecimal.ZERO;
-
-    @NotNull
-    @Column(name = "discount_type", nullable = false, length = 10)
-    private String discountType = "AMOUNT";
-
-    @NotNull
-    @Column(name = "manual_round_off", precision = 15, scale = 2, nullable = false)
-    private BigDecimal manualRoundOff = BigDecimal.ZERO;
+    @Column(name = "token_advance", precision = 15, scale = 2, nullable = false)
+    private BigDecimal tokenAdvance = BigDecimal.ZERO;
 
     @NotNull
     @Column(name = "grand_total", precision = 15, scale = 2, nullable = false)
@@ -135,22 +150,34 @@ public class SalesBill implements Serializable {
     public void setBuyerName(String buyerName) { this.buyerName = buyerName; }
     public String getBuyerMark() { return buyerMark; }
     public void setBuyerMark(String buyerMark) { this.buyerMark = buyerMark; }
+    public Long getBuyerContactId() { return buyerContactId; }
+    public void setBuyerContactId(Long buyerContactId) { this.buyerContactId = buyerContactId; }
+    public String getBuyerPhone() { return buyerPhone; }
+    public void setBuyerPhone(String buyerPhone) { this.buyerPhone = buyerPhone; }
+    public String getBuyerAddress() { return buyerAddress; }
+    public void setBuyerAddress(String buyerAddress) { this.buyerAddress = buyerAddress; }
+    public Boolean getBuyerAsBroker() { return buyerAsBroker; }
+    public void setBuyerAsBroker(Boolean buyerAsBroker) { this.buyerAsBroker = buyerAsBroker; }
+    public String getBrokerName() { return brokerName; }
+    public void setBrokerName(String brokerName) { this.brokerName = brokerName; }
+    public String getBrokerMark() { return brokerMark; }
+    public void setBrokerMark(String brokerMark) { this.brokerMark = brokerMark; }
+    public Long getBrokerContactId() { return brokerContactId; }
+    public void setBrokerContactId(Long brokerContactId) { this.brokerContactId = brokerContactId; }
+    public String getBrokerPhone() { return brokerPhone; }
+    public void setBrokerPhone(String brokerPhone) { this.brokerPhone = brokerPhone; }
+    public String getBrokerAddress() { return brokerAddress; }
+    public void setBrokerAddress(String brokerAddress) { this.brokerAddress = brokerAddress; }
     public String getBillingName() { return billingName; }
     public void setBillingName(String billingName) { this.billingName = billingName; }
     public Instant getBillDate() { return billDate; }
     public void setBillDate(Instant billDate) { this.billDate = billDate; }
-    public BigDecimal getBuyerCoolie() { return buyerCoolie; }
-    public void setBuyerCoolie(BigDecimal buyerCoolie) { this.buyerCoolie = buyerCoolie; }
     public BigDecimal getOutboundFreight() { return outboundFreight; }
     public void setOutboundFreight(BigDecimal outboundFreight) { this.outboundFreight = outboundFreight; }
     public String getOutboundVehicle() { return outboundVehicle; }
     public void setOutboundVehicle(String outboundVehicle) { this.outboundVehicle = outboundVehicle; }
-    public BigDecimal getDiscount() { return discount; }
-    public void setDiscount(BigDecimal discount) { this.discount = discount; }
-    public String getDiscountType() { return discountType; }
-    public void setDiscountType(String discountType) { this.discountType = discountType; }
-    public BigDecimal getManualRoundOff() { return manualRoundOff; }
-    public void setManualRoundOff(BigDecimal manualRoundOff) { this.manualRoundOff = manualRoundOff; }
+    public BigDecimal getTokenAdvance() { return tokenAdvance; }
+    public void setTokenAdvance(BigDecimal tokenAdvance) { this.tokenAdvance = tokenAdvance; }
     public BigDecimal getGrandTotal() { return grandTotal; }
     public void setGrandTotal(BigDecimal grandTotal) { this.grandTotal = grandTotal; }
     public String getBrokerageType() { return brokerageType; }

@@ -445,6 +445,8 @@ public class AuctionService {
             entry.setPresetType(request.getPresetType());
         }
 
+        applyBillingBuyerReassignFromPatch(entry, request, traderId);
+
         BigDecimal bidRate = entry.getBidRate();
         BigDecimal extra = entry.getExtraRate() != null ? entry.getExtraRate() : BigDecimal.ZERO;
         entry.setSellerRate(bidRate);
@@ -616,6 +618,8 @@ public class AuctionService {
         if (request.getPresetType() != null) {
             entry.setPresetType(request.getPresetType());
         }
+
+        applyBillingBuyerReassignFromPatch(entry, request, traderId);
 
         BigDecimal bidRate = entry.getBidRate();
         BigDecimal extra = entry.getExtraRate() != null ? entry.getExtraRate() : BigDecimal.ZERO;
@@ -1123,6 +1127,7 @@ public class AuctionService {
                 remainingSelfSale.setIsScribble(Boolean.FALSE);
                 remainingSelfSale.setPresetApplied(entry.getPresetMargin());
                 remainingSelfSale.setPresetType(entry.getPresetType());
+                remainingSelfSale.setTokenAdvance(BigDecimal.ZERO);
                 resultEntries.add(remainingSelfSale);
             }
         }
@@ -1254,9 +1259,31 @@ public class AuctionService {
         return dto;
     }
 
+    /**
+     * Billing module: move auction bid ownership to the sales bill buyer (same trader).
+     */
+    private void applyBillingBuyerReassignFromPatch(AuctionEntry entry, AuctionBidUpdateRequest request, Long traderId) {
+        if (!Boolean.TRUE.equals(request.getBillingReassignBuyer())) {
+            return;
+        }
+        String mark = request.getBuyerMark() != null ? request.getBuyerMark().trim() : "";
+        String name = request.getBuyerName() != null ? request.getBuyerName().trim() : "";
+        if (mark.isEmpty() || name.isEmpty()) {
+            throw new IllegalArgumentException("buyer_name and buyer_mark are required when billing_reassign_buyer is true");
+        }
+        entry.setBuyerMark(mark);
+        entry.setBuyerName(name);
+        entry.setBuyerId(request.getBuyerId());
+        if (entry.getBuyerId() != null) {
+            contactService.ensureTraderUsesPortalContact(traderId, entry.getBuyerId());
+        }
+        LOG.debug("Billing reassigned auction entry id {} to buyer mark {}", entry.getId(), mark);
+    }
+
     private AuctionResultEntryDTO toResultEntryDTO(AuctionEntry entry) {
         AuctionResultEntryDTO dto = new AuctionResultEntryDTO();
         dto.setBidNumber(entry.getBidNumber());
+        dto.setAuctionEntryId(entry.getId());
         dto.setBuyerId(entry.getBuyerId());
         dto.setBuyerMark(entry.getBuyerMark());
         dto.setBuyerName(entry.getBuyerName());
@@ -1267,6 +1294,7 @@ public class AuctionService {
         dto.setIsScribble(entry.getIsScribble());
         dto.setPresetApplied(entry.getPresetMargin());
         dto.setPresetType(entry.getPresetType());
+        dto.setTokenAdvance(entry.getTokenAdvance());
         return dto;
     }
 

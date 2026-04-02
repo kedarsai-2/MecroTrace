@@ -23,13 +23,10 @@ public class ContactDTO implements Serializable {
     @Size(max = 191)
     private String email;
 
-    @NotNull
     @Size(max = 150)
     private String name;
 
-    @NotNull
     @Size(max = 20)
-    @Pattern(regexp = "^[6-9]\\d{9}$")
     private String phone;
 
     @Size(max = 20)

@@ -16,8 +16,15 @@ type TraderDTO = {
   approvalStatus?: string;
   billPrefix?: string;
   createdAt?: string;
+  created_at?: string;
+  createdDate?: string;
+  created_date?: string;
   updatedAt?: string;
+  updated_at?: string;
+  updatedDate?: string;
+  updated_date?: string;
   approvalDecisionAt?: string | null;
+  approval_decision_at?: string | null;
   active?: boolean;
   presetEnabled?: boolean;
 };
@@ -37,9 +44,10 @@ function mapDtoToTrader(dto: TraderDTO): Trader {
     approval_status: (dto.approvalStatus as Trader['approval_status']) ?? 'PENDING',
     bill_prefix: dto.billPrefix ?? '',
     shop_photos: [],
-    created_at: dto.createdAt ?? new Date().toISOString(),
-    updated_at: dto.updatedAt ?? new Date().toISOString(),
-    approval_decision_at: dto.approvalDecisionAt ?? null,
+    // Read both camelCase and snake_case API fields; never fabricate "now" timestamps.
+    created_at: dto.createdAt ?? dto.created_at ?? dto.createdDate ?? dto.created_date ?? '',
+    updated_at: dto.updatedAt ?? dto.updated_at ?? dto.updatedDate ?? dto.updated_date ?? '',
+    approval_decision_at: dto.approvalDecisionAt ?? dto.approval_decision_at ?? null,
     active: dto.active ?? true,
     preset_enabled: dto.presetEnabled !== false,
   };

@@ -72,6 +72,7 @@ const MODULE_FEATURE_TO_AUTHORITY: ModuleFeatureAuthorityMap = {
   [normalize('Billing')]: {
     view: 'ROLE_BILLING_VIEW',
     create: 'ROLE_BILLING_CREATE',
+    edit: 'ROLE_BILLING_EDIT',
   },
   [normalize('Financial Reports')]: {
     view: 'ROLE_FINANCIAL_REPORTS_VIEW',

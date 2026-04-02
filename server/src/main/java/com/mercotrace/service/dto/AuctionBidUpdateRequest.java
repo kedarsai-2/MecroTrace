@@ -36,6 +36,22 @@ public class AuctionBidUpdateRequest implements Serializable {
     @JsonProperty("expected_last_modified_ms")
     private Long expectedLastModifiedMs;
 
+    /**
+     * When true (Billing module), apply {@code buyer_id}, {@code buyer_name}, {@code buyer_mark} on this entry
+     * so auction rows match the invoice buyer after cross-buyer bid moves or buyer replacement.
+     */
+    @JsonProperty("billing_reassign_buyer")
+    private Boolean billingReassignBuyer;
+
+    @JsonProperty("buyer_id")
+    private Long buyerId;
+
+    @JsonProperty("buyer_name")
+    private String buyerName;
+
+    @JsonProperty("buyer_mark")
+    private String buyerMark;
+
     public BigDecimal getRate() {
         return rate;
     }
@@ -98,6 +114,38 @@ public class AuctionBidUpdateRequest implements Serializable {
 
     public void setExpectedLastModifiedMs(Long expectedLastModifiedMs) {
         this.expectedLastModifiedMs = expectedLastModifiedMs;
+    }
+
+    public Boolean getBillingReassignBuyer() {
+        return billingReassignBuyer;
+    }
+
+    public void setBillingReassignBuyer(Boolean billingReassignBuyer) {
+        this.billingReassignBuyer = billingReassignBuyer;
+    }
+
+    public Long getBuyerId() {
+        return buyerId;
+    }
+
+    public void setBuyerId(Long buyerId) {
+        this.buyerId = buyerId;
+    }
+
+    public String getBuyerName() {
+        return buyerName;
+    }
+
+    public void setBuyerName(String buyerName) {
+        this.buyerName = buyerName;
+    }
+
+    public String getBuyerMark() {
+        return buyerMark;
+    }
+
+    public void setBuyerMark(String buyerMark) {
+        this.buyerMark = buyerMark;
     }
 }
 

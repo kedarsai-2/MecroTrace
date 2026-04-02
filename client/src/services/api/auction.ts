@@ -83,10 +83,16 @@ export interface AuctionBidUpdateRequest {
   allow_lot_increase?: boolean;
   /** Must match `last_modified_ms` from session entry when edit started */
   expected_last_modified_ms?: number | null;
+  /** Billing: set buyer on this auction row to match the sales bill buyer. */
+  billing_reassign_buyer?: boolean;
+  buyer_id?: number | null;
+  buyer_name?: string;
+  buyer_mark?: string;
 }
 
 export interface AuctionResultEntryDTO {
   bidNumber: number;
+  auctionEntryId?: number | null;
   buyerId?: number | null;
   buyerMark: string;
   buyerName: string;
@@ -97,6 +103,8 @@ export interface AuctionResultEntryDTO {
   isScribble?: boolean;
   presetApplied?: number;
   presetType?: PresetType;
+   /** Token advance collected at auction stage for this bid (₹). */
+  tokenAdvance?: number;
 }
 
 export interface AuctionResultDTO {

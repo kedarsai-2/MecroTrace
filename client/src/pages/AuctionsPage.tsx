@@ -213,17 +213,13 @@ function formatPresetMarginCell(margin: number): string {
   return m > 0 ? `+${m}` : String(m);
 }
 
-/** One character for strip avatars: prefer first letter of mark, else first letter of name. */
-function contactAvatarLetter(mark: string | undefined | null, name: string | undefined | null): string {
-  const m = (mark ?? '').trim();
-  const src = m || (name ?? '').trim();
-  return src ? src.charAt(0).toUpperCase() : '?';
-}
-
-/** First letter of a mark string (temporary-buyer chips). */
-function markAvatarLetter(mark: string): string {
-  const t = mark.trim();
-  return t ? t.charAt(0).toUpperCase() : '?';
+function normalizeScribbleBuyerName(name: string, isScribble: boolean): string {
+  if (!isScribble) return name;
+  const trimmed = (name ?? '').trim();
+  if (trimmed.startsWith('[') && trimmed.endsWith(']') && trimmed.length > 2) {
+    return trimmed.slice(1, -1);
+  }
+  return trimmed;
 }
 
 function sessionEntryToSaleEntry(e: AuctionEntryDTO): SaleEntry {
@@ -586,9 +582,9 @@ const AuctionsPage = () => {
     const list = buyers;
     if (!q) return list;
     return list.filter(b =>
-      b.name?.toLowerCase().includes(q) ||
-      (b.phone && b.phone.includes(q)) ||
-      (b.mark && b.mark.toLowerCase().includes(q))
+      b.name?.toLowerCase().startsWith(q) ||
+      (b.phone && b.phone.startsWith(q)) ||
+      (b.mark && b.mark.toLowerCase().startsWith(q))
     );
   }, [buyers, scribbleMark]);
 
@@ -597,7 +593,7 @@ const AuctionsPage = () => {
     const q = (scribbleMark || '').trim().toLowerCase();
     const list = temporaryBuyerMarks;
     if (!q) return list;
-    return list.filter(m => m.toLowerCase().includes(q));
+    return list.filter(m => m.toLowerCase().startsWith(q));
   }, [temporaryBuyerMarks, scribbleMark]);
 
   const clampInsideClosingParen = useCallback((value: string, proposedPos: number, allowManualExit = false) => {
@@ -1006,7 +1002,7 @@ const AuctionsPage = () => {
     if (currentRate <= 0) return;
     const effectivePreset = showPresetMargin ? preset : 0;
     tryAddEntry({
-      buyerName: `[${initials}]`,
+      buyerName: initials,
       buyerMark: initials,
       buyerContactId: null,
       rate: currentRate,
@@ -1033,7 +1029,7 @@ const AuctionsPage = () => {
     if (entryRate <= 0 || entryQty <= 0) return;
     const effectivePreset = showPresetMargin ? preset : 0;
     tryAddEntry({
-      buyerName: `[${scribbleMark}]`,
+      buyerName: scribbleMark,
       buyerMark: scribbleMark,
       buyerContactId: null,
       rate: entryRate,
@@ -1083,7 +1079,7 @@ const AuctionsPage = () => {
       setSelectedBuyer(null);
     } else if (scribbleMark.trim()) {
       tryAddEntry({
-        buyerName: `[${scribbleMark}]`,
+        buyerName: scribbleMark,
         buyerMark: scribbleMark,
         buyerContactId: null,
         rate: entryRate,
@@ -1537,10 +1533,9 @@ const AuctionsPage = () => {
 
   useEffect(() => {
     if (editingBidId) return;
-    if (!showPresetMargin) return;
     if (rate.trim() !== '') return;
     if (previousBidRate <= 0) return;
-    const displayRate = previousBidRate + preset;
+    const displayRate = showPresetMargin ? previousBidRate + preset : previousBidRate;
     setRate(String(displayRate));
   }, [editingBidId, previousBidRate, rate, showPresetMargin, preset]);
 
@@ -1553,7 +1548,11 @@ const AuctionsPage = () => {
           setRate('');
         }
       } else {
-        setRate('');
+        if (previousBidRate > 0) {
+          setRate(String(previousBidRate));
+        } else {
+          setRate('');
+        }
       }
     }
     setShowPresetMargin(checked);
@@ -2324,18 +2323,12 @@ const AuctionsPage = () => {
                                 setScribblePadResetTrigger((t) => t + 1);
                               }}
                               className={cn(
-                                'flex-shrink-0 pl-2.5 pr-3 py-2.5 rounded-xl text-left transition-all border border-l-4 border-l-emerald-500 flex items-center gap-2 min-h-[44px]',
+                                'flex-shrink-0 px-3 py-2.5 rounded-xl text-left transition-all border border-l-4 border-l-emerald-500 flex items-center gap-1.5 min-h-[44px]',
                                 selectedBuyer?.contact_id === b.contact_id
                                   ? 'bg-primary text-primary-foreground border-primary shadow-md border-l-primary'
                                   : 'bg-muted/40 border-border/50 hover:bg-muted/60'
                               )}
                             >
-                              <span className={cn(
-                                'w-8 h-8 rounded-lg flex items-center justify-center text-xs font-bold flex-shrink-0',
-                                selectedBuyer?.contact_id === b.contact_id ? 'bg-white/20' : 'bg-emerald-500/20 text-emerald-700 dark:text-emerald-400'
-                              )}>
-                                {contactAvatarLetter(b.mark, b.name)}
-                              </span>
                               <span className="text-sm sm:text-base font-semibold truncate max-w-[100px] sm:max-w-[120px]">{b.name}</span>
                               {b.mark && <span className="text-xs opacity-90 flex-shrink-0">({b.mark})</span>}
                             </button>
@@ -2387,18 +2380,12 @@ const AuctionsPage = () => {
                                   setScribblePadResetTrigger((t) => t + 1);
                                 }}
                                 className={cn(
-                                  'flex-shrink-0 pl-2.5 pr-3 py-2.5 rounded-xl text-left transition-all border border-l-4 border-l-violet-500 flex items-center gap-2 min-h-[44px]',
+                                  'flex-shrink-0 px-3 py-2.5 rounded-xl text-left transition-all border border-l-4 border-l-violet-500 flex items-center min-h-[44px]',
                                   isSelected
                                     ? 'bg-primary text-primary-foreground border-primary shadow-md border-l-primary'
                                     : 'bg-muted/40 border-border/50 hover:bg-muted/60'
                                 )}
                               >
-                                <span className={cn(
-                                  'w-8 h-8 rounded-lg flex items-center justify-center text-xs font-bold flex-shrink-0',
-                                  isSelected ? 'bg-white/20' : 'bg-violet-500/20 text-violet-700 dark:text-violet-300'
-                                )}>
-                                  {markAvatarLetter(mark)}
-                                </span>
                                 <span className="text-sm sm:text-base font-semibold truncate max-w-[100px]">{mark}</span>
                               </button>
                             );
@@ -2607,8 +2594,14 @@ const AuctionsPage = () => {
                           initial={{ opacity: 0, x: -15 }}
                           animate={{ opacity: 1, x: 0 }}
                           transition={{ delay: i * 0.05 }}
+                          onClick={() => {
+                            if (!isDesktop && can('Auctions / Sales', 'Edit') && !editingBidId) {
+                              startEditBid(entry);
+                            }
+                          }}
                           className={cn(
                             "border-b border-border/30 hover:bg-muted/20 transition-colors",
+                            !isDesktop && can('Auctions / Sales', 'Edit') && !editingBidId && "cursor-pointer",
                             entry.isSelfSale && "border-l-4 border-l-amber-500",
                             entry.isScribble && "border-l-4 border-l-violet-500",
                             editingBidId === entry.id && "bg-primary/5 ring-1 ring-inset ring-primary/35"
@@ -2616,19 +2609,9 @@ const AuctionsPage = () => {
                         >
                           <td className={cn("px-3 py-2", isDesktop ? "" : "px-2 py-1.5")}>
                             <div className="flex items-center gap-1.5 flex-wrap">
-                              <span className={cn(
-                                "inline-flex items-center justify-center rounded-lg font-bold flex-shrink-0",
-                                isDesktop ? "w-8 h-8 text-xs" : "w-6 h-6 text-[10px]",
-                                entry.isSelfSale ? "bg-gradient-to-br from-amber-400 to-orange-500 text-white" :
-                                  entry.isScribble ? "bg-gradient-to-br from-violet-500 to-fuchsia-500 text-white" :
-                                    "bg-gradient-to-br from-blue-500 to-cyan-400 text-white"
-                              )}>
-                                {markAvatarLetter(entry.buyerMark)}
-                              </span>
                               <span className={cn("font-medium text-foreground truncate max-w-[120px]", isDesktop ? "text-sm" : "text-xs")} title={entry.buyerName}>
-                                {entry.buyerName}
+                                {normalizeScribbleBuyerName(entry.buyerName, entry.isScribble)}
                               </span>
-                              {entry.isScribble && <span className="px-1 py-0.5 rounded bg-violet-500/15 text-violet-500 text-[8px] font-bold">SCRIBBLE</span>}
                               {entry.isSelfSale && <span className="px-1 py-0.5 rounded bg-amber-500/15 text-amber-600 dark:text-amber-400 text-[8px] font-bold">SELF</span>}
                               {editingBidId === entry.id && (
                                 <span className="px-1 py-0.5 rounded bg-primary/20 text-primary text-[8px] font-bold">EDITING</span>
@@ -2659,37 +2642,37 @@ const AuctionsPage = () => {
                             {entry.quantity}
                           </td>
                           <td className={cn("text-right", isDesktop ? "px-3 py-2" : "px-2 py-1.5")}>
-                            <div className="flex items-center justify-end gap-0.5">
+                            <div className="flex items-center justify-end gap-1.5" onClick={(e) => e.stopPropagation()}>
                               <button
                                 type="button"
                                 disabled={!!editingBidId}
                                 onClick={() => setShowTokenInput(showTokenInput === entry.id ? null : entry.id)}
                                 className={cn(
-                                  "p-1 rounded-md transition-colors disabled:opacity-40",
+                                  "p-1.5 rounded-md transition-colors disabled:opacity-40",
                                   entry.tokenAdvance > 0 ? "bg-success/15 text-success" : "bg-muted/50 text-muted-foreground hover:text-foreground"
                                 )}
                                 title="Token advance"
                               >
-                                <Banknote className={cn(isDesktop ? "w-3.5 h-3.5" : "w-3 h-3")} />
+                                <Banknote className={cn(isDesktop ? "w-4 h-4" : "w-3.5 h-3.5")} />
                               </button>
                               <button
                                 onClick={() => setPendingDeleteBid({ id: entry.id, label: `${entry.buyerName} (${entry.buyerMark})` })}
                                 type="button"
                                 disabled={!!editingBidId}
-                                className="p-1 rounded-md bg-destructive/10 text-destructive hover:bg-destructive/20 disabled:opacity-40"
+                                className="p-1.5 rounded-md bg-destructive/10 text-destructive hover:bg-destructive/20 disabled:opacity-40"
                                 title="Delete bid"
                               >
-                                <Trash2 className={cn(isDesktop ? "w-3.5 h-3.5" : "w-3 h-3")} />
+                                <Trash2 className={cn(isDesktop ? "w-4 h-4" : "w-3.5 h-3.5")} />
                               </button>
-                              {can('Auctions / Sales', 'Edit') && (
+                              {isDesktop && can('Auctions / Sales', 'Edit') && (
                                 <button
                                   type="button"
                                   disabled={!!editingBidId}
                                   onClick={() => startEditBid(entry)}
-                                  className="p-1 rounded-md bg-muted/60 text-foreground hover:bg-muted disabled:opacity-40"
+                                  className="p-1.5 rounded-md bg-muted/60 text-foreground hover:bg-muted disabled:opacity-40"
                                   title="Edit bid"
                                 >
-                                  <Pencil className={cn(isDesktop ? "w-3.5 h-3.5" : "w-3 h-3")} />
+                                  <Pencil className={cn(isDesktop ? "w-4 h-4" : "w-3.5 h-3.5")} />
                                 </button>
                               )}
                             </div>
@@ -2833,18 +2816,12 @@ const AuctionsPage = () => {
                         setScribblePadResetTrigger((t) => t + 1);
                       }}
                       className={cn(
-                        'flex-shrink-0 pl-2 pr-2.5 py-1.5 rounded-lg text-left transition-all border border-l-4 border-l-emerald-500 flex items-center gap-1.5 min-h-[40px]',
+                        'flex-shrink-0 px-2.5 py-1.5 rounded-lg text-left transition-all border border-l-4 border-l-emerald-500 flex items-center gap-1 min-h-[40px]',
                         selectedBuyer?.contact_id === b.contact_id
                           ? 'bg-primary text-primary-foreground border-primary shadow-md border-l-primary'
                           : 'bg-muted/40 border-border/50 hover:bg-muted/60'
                       )}
                     >
-                      <span className={cn(
-                        'w-6 h-6 rounded flex items-center justify-center text-[10px] font-bold flex-shrink-0',
-                        selectedBuyer?.contact_id === b.contact_id ? 'bg-white/20' : 'bg-emerald-500/20 text-emerald-700 dark:text-emerald-400'
-                      )}>
-                        {contactAvatarLetter(b.mark, b.name)}
-                      </span>
                       <span className="text-xs font-semibold truncate max-w-[78px] sm:max-w-[90px]">{b.name}</span>
                       {b.mark && <span className="text-[10px] opacity-90 flex-shrink-0">({b.mark})</span>}
                     </button>
@@ -2887,16 +2864,10 @@ const AuctionsPage = () => {
                           setScribblePadResetTrigger((t) => t + 1);
                         }}
                         className={cn(
-                          'flex-shrink-0 pl-2 pr-2.5 py-1.5 rounded-lg text-left transition-all border border-l-4 border-l-violet-500 flex items-center gap-1.5 min-h-[40px]',
+                          'flex-shrink-0 px-2.5 py-1.5 rounded-lg text-left transition-all border border-l-4 border-l-violet-500 flex items-center min-h-[40px]',
                           isSelected ? 'bg-primary text-primary-foreground border-primary shadow-md border-l-primary' : 'bg-muted/40 border-border/50 hover:bg-muted/60'
                         )}
                       >
-                        <span className={cn(
-                          'w-6 h-6 rounded flex items-center justify-center text-[10px] font-bold flex-shrink-0',
-                          isSelected ? 'bg-white/20' : 'bg-violet-500/20 text-violet-700 dark:text-violet-300'
-                        )}>
-                          {markAvatarLetter(mark)}
-                        </span>
                         <span className="text-xs font-semibold truncate max-w-[72px]">{mark}</span>
                       </button>
                     );
@@ -2909,47 +2880,41 @@ const AuctionsPage = () => {
               </div>
             </div>
           </div>
-          {/* Mobile: selected buyer/mark chip with clear — match desktop UX */}
-          {(scribbleMark || selectedBuyer) && (
-            <div className="flex items-center gap-2 flex-wrap mb-1 py-0.5">
-              {selectedBuyer ? (
-                <>
-                  <span className="text-[9px] font-semibold text-muted-foreground uppercase">Buyer:</span>
-                  <span className="px-2 py-1 rounded-lg bg-primary/15 text-primary text-[11px] font-bold border border-primary/30">
-                    {selectedBuyer.name} {selectedBuyer.mark ? `(${selectedBuyer.mark})` : ''}
-                  </span>
-                  <button
-                    type="button"
-                    disabled={!!editingBidId}
-                    onClick={() => { setSelectedBuyer(null); lastScribbleSegmentRef.current = ''; setScribbleMark(''); setScribblePadResetTrigger(t => t + 1); }}
-                    className="p-1 rounded-md bg-destructive/10 text-destructive hover:bg-destructive/20 disabled:opacity-40 disabled:cursor-not-allowed"
-                    aria-label="Clear selection"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                  </button>
-                </>
-              ) : (
-                <>
-                  <span className="text-[9px] font-semibold text-muted-foreground uppercase">Mark:</span>
-                  <span className="px-2 py-1 rounded-lg bg-violet-500/15 text-violet-600 dark:text-violet-400 text-[11px] font-bold border border-violet-400/30">
-                    {scribbleMark}
-                  </span>
-                  <button
-                    type="button"
-                    disabled={!!editingBidId}
-                    onClick={() => { lastScribbleSegmentRef.current = ''; setScribbleMark(''); setScribblePadResetTrigger(t => t + 1); }}
-                    className="p-1 rounded-md bg-destructive/10 text-destructive hover:bg-destructive/20 disabled:opacity-40 disabled:cursor-not-allowed"
-                    aria-label="Clear mark"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                  </button>
-                </>
-              )}
-            </div>
-          )}
           <div className="flex gap-1.5 mb-1 min-w-0">
+            <div className="min-w-0 flex-1">
+              <label htmlFor="sales-pad-rate-mobile" className="text-[9px] font-semibold text-muted-foreground uppercase tracking-wide mb-0.5 block truncate">
+                Rate ₹
+              </label>
+              <Input
+                id="sales-pad-rate-mobile"
+                ref={rateInputRef}
+                type="number"
+                value={rate}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setRate(v);
+                  if (editingBidId) setEditBidDraft((d) => (d ? { ...d, rate: v } : d));
+                }}
+                onFocus={(e) => {
+                  setActiveNumpadField('rate');
+                  if (!mobileKeyboardEnabled) {
+                    e.currentTarget.blur();
+                    hideNativeKeyboard();
+                  }
+                }}
+                onBlur={() => setMobileKeyboardEnabled(false)}
+                readOnly={!mobileKeyboardEnabled}
+                inputMode={!mobileKeyboardEnabled ? 'none' : 'numeric'}
+                placeholder="0"
+                aria-label="Bid rate in rupees"
+                className={cn(
+                  "h-9 rounded-lg text-center font-bold text-[11px] sm:text-sm bg-muted/20 border-primary/20 min-w-0",
+                  activeNumpadField === 'rate' && "ring-2 ring-primary border-primary shadow-[0_0_0_2px_hsl(var(--primary))]"
+                )}
+              />
+            </div>
             <div className="min-w-0 flex-[1.15]">
-              <label htmlFor="sales-pad-mark-mobile" className="text-[9px] font-semibold text-muted-foreground uppercase tracking-wide mb-0.5 block truncate">
+              <label htmlFor="sales-pad-mark-mobile" className="text-[9px] font-semibold text-muted-foreground uppercase tracking-wide mb-0.5 block truncate text-center">
                 Mark
               </label>
               <Input
@@ -2984,39 +2949,7 @@ const AuctionsPage = () => {
                 onFocus={() => { setActiveNumpadField('mark'); hideNativeKeyboard(); }}
                 placeholder="Search…"
                 aria-label="Search mark or name"
-                className="h-9 rounded-lg text-[11px] sm:text-xs font-medium bg-muted/20 border-violet-400/20 px-2 min-w-0"
-              />
-            </div>
-            <div className="min-w-0 flex-1">
-              <label htmlFor="sales-pad-rate-mobile" className="text-[9px] font-semibold text-muted-foreground uppercase tracking-wide mb-0.5 block truncate">
-                Rate ₹
-              </label>
-              <Input
-                id="sales-pad-rate-mobile"
-                ref={rateInputRef}
-                type="number"
-                value={rate}
-                onChange={(e) => {
-                  const v = e.target.value;
-                  setRate(v);
-                  if (editingBidId) setEditBidDraft((d) => (d ? { ...d, rate: v } : d));
-                }}
-                onFocus={(e) => {
-                  setActiveNumpadField('rate');
-                  if (!mobileKeyboardEnabled) {
-                    e.currentTarget.blur();
-                    hideNativeKeyboard();
-                  }
-                }}
-                onBlur={() => setMobileKeyboardEnabled(false)}
-                readOnly={!mobileKeyboardEnabled}
-                inputMode={!mobileKeyboardEnabled ? 'none' : 'numeric'}
-                placeholder="0"
-                aria-label="Bid rate in rupees"
-                className={cn(
-                  "h-9 rounded-lg text-center font-bold text-[11px] sm:text-sm bg-muted/20 border-primary/20 min-w-0",
-                  activeNumpadField === 'rate' && "ring-2 ring-primary border-primary shadow-[0_0_0_2px_hsl(var(--primary))]"
-                )}
+                className="h-9 rounded-lg text-[11px] sm:text-xs font-medium text-center bg-muted/20 border-violet-400/20 px-2 min-w-0"
               />
             </div>
             <div className="min-w-0 flex-1">

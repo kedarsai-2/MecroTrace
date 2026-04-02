@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!-- Persist buyer/broker replacement details on sales bill -->
+    <changeSet id="20260401140000-1" author="mercotrace">
+        <addColumn tableName="sales_bill">
+            <column name="buyer_contact_id" type="bigint"/>
+            <column name="buyer_phone" type="varchar(20)"/>
+            <column name="buyer_address" type="varchar(500)"/>
+            <column name="buyer_as_broker" type="boolean" defaultValueBoolean="false">
+                <constraints nullable="false"/>
+            </column>
+            <column name="broker_name" type="varchar(255)"/>
+            <column name="broker_mark" type="varchar(100)"/>
+            <column name="broker_contact_id" type="bigint"/>
+            <column name="broker_phone" type="varchar(20)"/>
+            <column name="broker_address" type="varchar(500)"/>
+        </addColumn>
+    </changeSet>
+
+</databaseChangeLog>

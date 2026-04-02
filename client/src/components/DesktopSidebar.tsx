@@ -45,8 +45,8 @@ const navSections = [
   {
     label: 'Finance',
     items: [
-      { icon: FileText, title: 'Settlement', path: '/settlement' },
       { icon: Receipt, title: 'Billing', path: '/billing' },
+      { icon: FileText, title: 'Settlement', path: '/settlement' },
       { icon: BookOpen, title: 'Chart of Accounts', path: '/accounting' },
       { icon: CreditCard, title: 'Vouchers & Payments', path: '/vouchers' },
       { icon: Printer, title: 'Print Templates', path: '/prints' },

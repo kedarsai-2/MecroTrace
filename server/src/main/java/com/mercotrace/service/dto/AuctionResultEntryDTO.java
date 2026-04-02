@@ -14,6 +14,10 @@ public class AuctionResultEntryDTO implements Serializable {
     @JsonProperty("bidNumber")
     private Integer bidNumber;
 
+    /** Primary key of {@code auction_entry}; used by Billing to sync buyer changes. */
+    @JsonProperty("auctionEntryId")
+    private Long auctionEntryId;
+
     @JsonProperty("buyerId")
     private Long buyerId;
 
@@ -44,12 +48,23 @@ public class AuctionResultEntryDTO implements Serializable {
     @JsonProperty("presetType")
     private AuctionPresetType presetType;
 
+    @JsonProperty("tokenAdvance")
+    private BigDecimal tokenAdvance;
+
     public Integer getBidNumber() {
         return bidNumber;
     }
 
     public void setBidNumber(Integer bidNumber) {
         this.bidNumber = bidNumber;
+    }
+
+    public Long getAuctionEntryId() {
+        return auctionEntryId;
+    }
+
+    public void setAuctionEntryId(Long auctionEntryId) {
+        this.auctionEntryId = auctionEntryId;
     }
 
     public Long getBuyerId() {
@@ -130,6 +145,14 @@ public class AuctionResultEntryDTO implements Serializable {
 
     public void setPresetType(AuctionPresetType presetType) {
         this.presetType = presetType;
+    }
+
+    public BigDecimal getTokenAdvance() {
+        return tokenAdvance;
+    }
+
+    public void setTokenAdvance(BigDecimal tokenAdvance) {
+        this.tokenAdvance = tokenAdvance;
     }
 }
 

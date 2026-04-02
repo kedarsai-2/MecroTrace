@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!--
+        Make sales_bill.bill_number nullable so that bill numbers
+        can be assigned at print time as per SRS (REQ-CNF-007).
+        Existing rows already have non-null values; this is a safe relaxation.
+    -->
+    <changeSet id="20260330180000-1" author="mercotrace">
+        <modifyDataType tableName="sales_bill" columnName="bill_number" newDataType="varchar(30)"/>
+        <dropNotNullConstraint tableName="sales_bill" columnName="bill_number" columnDataType="varchar(30)"/>
+    </changeSet>
+
+</databaseChangeLog>
+

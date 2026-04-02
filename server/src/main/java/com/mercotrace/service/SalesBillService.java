@@ -30,4 +30,10 @@ public interface SalesBillService {
      * Update existing bill: append version snapshot, then update.
      */
     SalesBillDTO update(Long id, SalesBillCreateOrUpdateRequest request);
+
+    /**
+     * Assign a bill number based on commodity combination and trader/commodity prefixes.
+     * If the bill already has a number, this is a no-op and returns the existing bill.
+     */
+    SalesBillDTO assignNumber(Long id);
 }

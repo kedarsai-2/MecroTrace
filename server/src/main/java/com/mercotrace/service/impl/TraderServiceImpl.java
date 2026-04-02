@@ -7,6 +7,7 @@ import com.mercotrace.service.TraderPermanentDeleteService;
 import com.mercotrace.service.TraderService;
 import com.mercotrace.service.dto.TraderDTO;
 import com.mercotrace.service.mapper.TraderMapper;
+import java.time.Instant;
 import java.util.Optional;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -44,6 +45,11 @@ public class TraderServiceImpl implements TraderService {
         LOG.debug("Request to save Trader : {}", traderDTO);
         boolean isNewTrader = traderDTO.getId() == null;
         Trader trader = traderMapper.toEntity(traderDTO);
+        Instant now = Instant.now();
+        if (trader.getCreatedAt() == null) {
+            trader.setCreatedAt(now);
+        }
+        trader.setUpdatedAt(now);
         trader = traderRepository.save(trader);
 
         if (isNewTrader && trader.getId() != null) {
@@ -61,6 +67,13 @@ public class TraderServiceImpl implements TraderService {
     public TraderDTO update(TraderDTO traderDTO) {
         LOG.debug("Request to update Trader : {}", traderDTO);
         Trader trader = traderMapper.toEntity(traderDTO);
+        Trader existing = traderRepository
+            .findById(traderDTO.getId())
+            .orElseThrow(() -> new jakarta.persistence.EntityNotFoundException("Trader not found: " + traderDTO.getId()));
+        if (trader.getCreatedAt() == null) {
+            trader.setCreatedAt(existing.getCreatedAt() != null ? existing.getCreatedAt() : Instant.now());
+        }
+        trader.setUpdatedAt(Instant.now());
         trader = traderRepository.save(trader);
         return traderMapper.toDto(trader);
     }

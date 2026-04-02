@@ -36,6 +36,17 @@ public class SalesBillLineItem implements Serializable {
     @Column(name = "lot_name", length = 150)
     private String lotName;
 
+    /** Auction lot id (string); optional for legacy rows. */
+    @Column(name = "lot_id", length = 64)
+    private String lotId;
+
+    /** {@link com.mercotrace.domain.AuctionEntry} id for billing ↔ auction sync. */
+    @Column(name = "auction_entry_id")
+    private Long auctionEntryId;
+
+    @Column(name = "self_sale_unit_id")
+    private Long selfSaleUnitId;
+
     @Column(name = "seller_name", length = 255)
     private String sellerName;
 
@@ -67,6 +78,11 @@ public class SalesBillLineItem implements Serializable {
     @Column(name = "amount", precision = 15, scale = 2, nullable = false)
     private BigDecimal amount;
 
+    /** Token advance collected at auction for this bid/lot (₹). */
+    @NotNull
+    @Column(name = "token_advance", precision = 15, scale = 2, nullable = false)
+    private BigDecimal tokenAdvance = BigDecimal.ZERO;
+
     @NotNull
     @Column(name = "sort_order", nullable = false)
     private Integer sortOrder = 0;
@@ -79,6 +95,12 @@ public class SalesBillLineItem implements Serializable {
     public void setBidNumber(Integer bidNumber) { this.bidNumber = bidNumber; }
     public String getLotName() { return lotName; }
     public void setLotName(String lotName) { this.lotName = lotName; }
+    public String getLotId() { return lotId; }
+    public void setLotId(String lotId) { this.lotId = lotId; }
+    public Long getAuctionEntryId() { return auctionEntryId; }
+    public void setAuctionEntryId(Long auctionEntryId) { this.auctionEntryId = auctionEntryId; }
+    public Long getSelfSaleUnitId() { return selfSaleUnitId; }
+    public void setSelfSaleUnitId(Long selfSaleUnitId) { this.selfSaleUnitId = selfSaleUnitId; }
     public String getSellerName() { return sellerName; }
     public void setSellerName(String sellerName) { this.sellerName = sellerName; }
     public Integer getQuantity() { return quantity; }
@@ -95,6 +117,8 @@ public class SalesBillLineItem implements Serializable {
     public void setNewRate(BigDecimal newRate) { this.newRate = newRate; }
     public BigDecimal getAmount() { return amount; }
     public void setAmount(BigDecimal amount) { this.amount = amount; }
+    public BigDecimal getTokenAdvance() { return tokenAdvance; }
+    public void setTokenAdvance(BigDecimal tokenAdvance) { this.tokenAdvance = tokenAdvance; }
     public Integer getSortOrder() { return sortOrder; }
     public void setSortOrder(Integer sortOrder) { this.sortOrder = sortOrder; }
 

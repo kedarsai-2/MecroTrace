@@ -112,7 +112,7 @@ async function parseRegistrationError(res: Response): Promise<string> {
       if (detail && isSafeMessage(detail)) return cleanMessage(detail);
       if (title && isSafeMessage(title)) return cleanMessage(title);
     }
-    if (text && text.length < 500 && !/stack|exception|at\s+\w+\./.i.test(text)) {
+    if (text && text.length < 500 && !/stack|exception|at\s+\w+\./i.test(text)) {
       return cleanMessage(text);
     }
   } catch {
@@ -223,7 +223,7 @@ export const authApi = {
           message = cleanMessage(detail);
         } else if (title.length > 0 && !/^forbidden$|^403$/i.test(title) && !title.includes('out of bounds')) {
           message = cleanMessage(title);
-        } else if (text && text.length < 500 && !/stack|exception|at\s+\w+\.|out of bounds/.i.test(text)) {
+        } else if (text && text.length < 500 && !/stack|exception|at\s+\w+\.|out of bounds/i.test(text)) {
           message = cleanMessage(text);
         }
       } catch {
@@ -305,7 +305,7 @@ export const authApi = {
           } else if (detail.length > 0 && detail.length < 300) {
             message = cleanMessage(detail);
           }
-        } else if (text && text.length < 500 && !/stack|exception|at\s+\w+\./.i.test(text)) {
+        } else if (text && text.length < 500 && !/stack|exception|at\s+\w+\./i.test(text)) {
           message = cleanMessage(text);
         }
       } catch {
@@ -364,10 +364,26 @@ export const authApi = {
         if (problem && typeof problem === 'object') {
           const detail = typeof problem.detail === 'string' ? problem.detail.trim() : '';
           const title = typeof problem.title === 'string' ? problem.title.trim() : '';
-          if (detail.length > 0) message = cleanMessage(detail);
-          else if (title.length > 0) message = cleanMessage(title);
-        } else if (text && text.length < 500 && !/stack|exception|at\s+\w+\./.i.test(text)) {
-          message = cleanMessage(text);
+          const lowerDetail = detail.toLowerCase();
+
+          // Trader OTP is login-only; guide users to registration for unknown mobile numbers.
+          if (res.status === 404 || lowerDetail.includes('no trader registered with this mobile')) {
+            message = 'This mobile number is not registered as a trader account. Please register first.';
+          } else if (detail.length > 0) {
+            message = cleanMessage(detail);
+          } else if (title.length > 0) {
+            message = cleanMessage(title);
+          }
+        } else if (text && text.length < 500 && !/stack|exception|at\s+\w+\./i.test(text)) {
+          const lowerText = text.toLowerCase();
+          if (
+            res.status === 404 ||
+            lowerText.includes('no trader registered with this mobile')
+          ) {
+            message = 'This mobile number is not registered as a trader account. Please register first.';
+          } else {
+            message = cleanMessage(text);
+          }
         }
       } catch {
         // ignore
@@ -398,7 +414,7 @@ export const authApi = {
           } else if (title.length > 0) {
             message = cleanMessage(title);
           }
-        } else if (text && text.length < 500 && !/stack|exception|at\s+\w+\./.i.test(text)) {
+        } else if (text && text.length < 500 && !/stack|exception|at\s+\w+\./i.test(text)) {
           message = cleanMessage(text);
         }
       } catch {

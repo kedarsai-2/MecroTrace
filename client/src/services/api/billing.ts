@@ -5,6 +5,10 @@ export interface BillLineItemDTO {
   id?: number;
   bidNumber: number;
   lotName?: string;
+  /** Auction lot id; stored for matching bids across bills. */
+  lotId?: string | null;
+  auctionEntryId?: number | null;
+  selfSaleUnitId?: number | null;
   sellerName?: string;
   quantity: number;
   weight: number;
@@ -13,6 +17,8 @@ export interface BillLineItemDTO {
   otherCharges?: number;
   newRate: number;
   amount: number;
+  /** Token advance from auction for this bid/lot (₹). */
+  tokenAdvance?: number;
 }
 
 /** Commodity group (backend CommodityGroupDTO). */
@@ -42,6 +48,15 @@ export interface SalesBillDTO {
   billNumber: string;
   buyerName: string;
   buyerMark: string;
+  buyerContactId?: string | null;
+  buyerPhone?: string;
+  buyerAddress?: string;
+  buyerAsBroker?: boolean;
+  brokerName?: string;
+  brokerMark?: string;
+  brokerContactId?: string | null;
+  brokerPhone?: string;
+  brokerAddress?: string;
   billingName: string;
   billDate: string;
   commodityGroups: CommodityGroupDTO[];
@@ -50,6 +65,7 @@ export interface SalesBillDTO {
   outboundVehicle?: string;
   discount: number;
   discountType: 'PERCENT' | 'AMOUNT';
+  tokenAdvance: number;
   manualRoundOff: number;
   grandTotal: number;
   brokerageType: 'PERCENT' | 'AMOUNT';
@@ -65,6 +81,15 @@ export interface SalesBillCreateOrUpdateRequest {
   billNumber?: string;
   buyerName: string;
   buyerMark: string;
+  buyerContactId?: string | null;
+  buyerPhone?: string;
+  buyerAddress?: string;
+  buyerAsBroker?: boolean;
+  brokerName?: string;
+  brokerMark?: string;
+  brokerContactId?: string | null;
+  brokerPhone?: string;
+  brokerAddress?: string;
   billingName: string;
   billDate: string;
   commodityGroups: CommodityGroupDTO[];
@@ -73,6 +98,7 @@ export interface SalesBillCreateOrUpdateRequest {
   outboundVehicle?: string;
   discount?: number;
   discountType?: 'PERCENT' | 'AMOUNT';
+  tokenAdvance?: number;
   manualRoundOff?: number;
   brokerageType?: 'PERCENT' | 'AMOUNT';
   brokerageValue?: number;
@@ -185,5 +211,16 @@ export const billingApi = {
       body: JSON.stringify(payload),
     });
     return handleResponse<SalesBillDTO>(res, 'Failed to update sales bill');
+  },
+
+  /**
+   * Assign a bill number based on commodity combination and prefixes.
+   * If the bill already has a number, this is a no-op and returns the existing bill.
+   */
+  async assignNumber(id: string | number): Promise<SalesBillDTO> {
+    const res = await apiFetch(`${BASE}/${encodeURIComponent(String(id))}/assign-number`, {
+      method: 'POST',
+    });
+    return handleResponse<SalesBillDTO>(res, 'Failed to assign bill number');
   },
 };

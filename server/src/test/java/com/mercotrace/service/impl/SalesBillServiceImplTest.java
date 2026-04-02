@@ -15,6 +15,8 @@ import com.mercotrace.repository.BillNumberSequenceRepository;
 import com.mercotrace.repository.SalesBillRepository;
 import com.mercotrace.repository.TraderRepository;
 import com.mercotrace.repository.VoucherRepository;
+import com.mercotrace.repository.CommodityRepository;
+import com.mercotrace.repository.CommodityConfigRepository;
 import com.mercotrace.service.TraderContextService;
 import com.mercotrace.service.dto.SalesBillDTOs.BillLineItemDTO;
 import com.mercotrace.service.dto.SalesBillDTOs.CommodityGroupDTO;
@@ -55,6 +57,12 @@ class SalesBillServiceImplTest {
     @Mock
     private VoucherRepository voucherRepository;
 
+    @Mock
+    private CommodityRepository commodityRepository;
+
+    @Mock
+    private CommodityConfigRepository commodityConfigRepository;
+
     private SalesBillServiceImpl service;
 
     @BeforeEach
@@ -65,6 +73,8 @@ class SalesBillServiceImplTest {
             traderRepository,
             billNumberSequenceRepository,
             voucherRepository,
+            commodityRepository,
+            commodityConfigRepository,
             new ObjectMapper()
         );
     }
@@ -76,7 +86,6 @@ class SalesBillServiceImplTest {
         req.setBillingName("Buyer One");
         req.setBillDate(Instant.parse("2026-03-16T05:41:11.352Z").toString());
         req.setGrandTotal(BigDecimal.valueOf(1000));
-        req.setBuyerCoolie(BigDecimal.valueOf(50));
         req.setOutboundFreight(BigDecimal.valueOf(75));
 
         BillLineItemDTO item = new BillLineItemDTO();

@@ -21,6 +21,10 @@ public final class SalesBillDTOs {
         private Long id;
         private Integer bidNumber;
         private String lotName;
+        @Size(max = 64)
+        private String lotId;
+        private Long auctionEntryId;
+        private Long selfSaleUnitId;
         private String sellerName;
         private Integer quantity;
         private BigDecimal weight;
@@ -29,6 +33,8 @@ public final class SalesBillDTOs {
         private BigDecimal otherCharges;
         private BigDecimal newRate;
         private BigDecimal amount;
+        /** Token advance from auction for this bid/lot (₹). */
+        private BigDecimal tokenAdvance = BigDecimal.ZERO;
 
         public Long getId() { return id; }
         public void setId(Long id) { this.id = id; }
@@ -36,6 +42,12 @@ public final class SalesBillDTOs {
         public void setBidNumber(Integer bidNumber) { this.bidNumber = bidNumber; }
         public String getLotName() { return lotName; }
         public void setLotName(String lotName) { this.lotName = lotName; }
+        public String getLotId() { return lotId; }
+        public void setLotId(String lotId) { this.lotId = lotId; }
+        public Long getAuctionEntryId() { return auctionEntryId; }
+        public void setAuctionEntryId(Long auctionEntryId) { this.auctionEntryId = auctionEntryId; }
+        public Long getSelfSaleUnitId() { return selfSaleUnitId; }
+        public void setSelfSaleUnitId(Long selfSaleUnitId) { this.selfSaleUnitId = selfSaleUnitId; }
         public String getSellerName() { return sellerName; }
         public void setSellerName(String sellerName) { this.sellerName = sellerName; }
         public Integer getQuantity() { return quantity; }
@@ -52,6 +64,8 @@ public final class SalesBillDTOs {
         public void setNewRate(BigDecimal newRate) { this.newRate = newRate; }
         public BigDecimal getAmount() { return amount; }
         public void setAmount(BigDecimal amount) { this.amount = amount; }
+        public BigDecimal getTokenAdvance() { return tokenAdvance; }
+        public void setTokenAdvance(BigDecimal tokenAdvance) { this.tokenAdvance = tokenAdvance; }
     }
 
     /** Commodity group (CommodityGroup). */
@@ -61,6 +75,13 @@ public final class SalesBillDTOs {
         private String hsnCode;
         private BigDecimal commissionPercent;
         private BigDecimal userFeePercent;
+        private BigDecimal coolieRate;
+        private BigDecimal coolieAmount;
+        private BigDecimal weighmanChargeRate;
+        private BigDecimal weighmanChargeAmount;
+        private BigDecimal discount;
+        private String discountType; // PERCENT | AMOUNT
+        private BigDecimal manualRoundOff;
         @Valid
         private List<BillLineItemDTO> items = new ArrayList<>();
         private BigDecimal subtotal;
@@ -78,6 +99,20 @@ public final class SalesBillDTOs {
         public void setCommissionPercent(BigDecimal commissionPercent) { this.commissionPercent = commissionPercent; }
         public BigDecimal getUserFeePercent() { return userFeePercent; }
         public void setUserFeePercent(BigDecimal userFeePercent) { this.userFeePercent = userFeePercent; }
+        public BigDecimal getCoolieRate() { return coolieRate; }
+        public void setCoolieRate(BigDecimal coolieRate) { this.coolieRate = coolieRate; }
+        public BigDecimal getCoolieAmount() { return coolieAmount; }
+        public void setCoolieAmount(BigDecimal coolieAmount) { this.coolieAmount = coolieAmount; }
+        public BigDecimal getWeighmanChargeRate() { return weighmanChargeRate; }
+        public void setWeighmanChargeRate(BigDecimal weighmanChargeRate) { this.weighmanChargeRate = weighmanChargeRate; }
+        public BigDecimal getWeighmanChargeAmount() { return weighmanChargeAmount; }
+        public void setWeighmanChargeAmount(BigDecimal weighmanChargeAmount) { this.weighmanChargeAmount = weighmanChargeAmount; }
+        public BigDecimal getDiscount() { return discount; }
+        public void setDiscount(BigDecimal discount) { this.discount = discount; }
+        public String getDiscountType() { return discountType; }
+        public void setDiscountType(String discountType) { this.discountType = discountType; }
+        public BigDecimal getManualRoundOff() { return manualRoundOff; }
+        public void setManualRoundOff(BigDecimal manualRoundOff) { this.manualRoundOff = manualRoundOff; }
         public List<BillLineItemDTO> getItems() { return items; }
         public void setItems(List<BillLineItemDTO> items) { this.items = items != null ? items : new ArrayList<>(); }
         public BigDecimal getSubtotal() { return subtotal; }
@@ -111,16 +146,22 @@ public final class SalesBillDTOs {
         private String billNumber;
         private String buyerName;
         private String buyerMark;
+        private String buyerContactId;
+        private String buyerPhone;
+        private String buyerAddress;
+        private Boolean buyerAsBroker;
+        private String brokerName;
+        private String brokerMark;
+        private String brokerContactId;
+        private String brokerPhone;
+        private String brokerAddress;
         private String billingName;
         private String billDate; // ISO-8601
         @Valid
         private List<CommodityGroupDTO> commodityGroups = new ArrayList<>();
-        private BigDecimal buyerCoolie;
         private BigDecimal outboundFreight;
         private String outboundVehicle;
-        private BigDecimal discount;
-        private String discountType; // PERCENT | AMOUNT
-        private BigDecimal manualRoundOff;
+        private BigDecimal tokenAdvance;
         private BigDecimal grandTotal;
         private String brokerageType; // PERCENT | AMOUNT
         private BigDecimal brokerageValue;
@@ -136,24 +177,36 @@ public final class SalesBillDTOs {
         public void setBuyerName(String buyerName) { this.buyerName = buyerName; }
         public String getBuyerMark() { return buyerMark; }
         public void setBuyerMark(String buyerMark) { this.buyerMark = buyerMark; }
+        public String getBuyerContactId() { return buyerContactId; }
+        public void setBuyerContactId(String buyerContactId) { this.buyerContactId = buyerContactId; }
+        public String getBuyerPhone() { return buyerPhone; }
+        public void setBuyerPhone(String buyerPhone) { this.buyerPhone = buyerPhone; }
+        public String getBuyerAddress() { return buyerAddress; }
+        public void setBuyerAddress(String buyerAddress) { this.buyerAddress = buyerAddress; }
+        public Boolean getBuyerAsBroker() { return buyerAsBroker; }
+        public void setBuyerAsBroker(Boolean buyerAsBroker) { this.buyerAsBroker = buyerAsBroker; }
+        public String getBrokerName() { return brokerName; }
+        public void setBrokerName(String brokerName) { this.brokerName = brokerName; }
+        public String getBrokerMark() { return brokerMark; }
+        public void setBrokerMark(String brokerMark) { this.brokerMark = brokerMark; }
+        public String getBrokerContactId() { return brokerContactId; }
+        public void setBrokerContactId(String brokerContactId) { this.brokerContactId = brokerContactId; }
+        public String getBrokerPhone() { return brokerPhone; }
+        public void setBrokerPhone(String brokerPhone) { this.brokerPhone = brokerPhone; }
+        public String getBrokerAddress() { return brokerAddress; }
+        public void setBrokerAddress(String brokerAddress) { this.brokerAddress = brokerAddress; }
         public String getBillingName() { return billingName; }
         public void setBillingName(String billingName) { this.billingName = billingName; }
         public String getBillDate() { return billDate; }
         public void setBillDate(String billDate) { this.billDate = billDate; }
         public List<CommodityGroupDTO> getCommodityGroups() { return commodityGroups; }
         public void setCommodityGroups(List<CommodityGroupDTO> commodityGroups) { this.commodityGroups = commodityGroups != null ? commodityGroups : new ArrayList<>(); }
-        public BigDecimal getBuyerCoolie() { return buyerCoolie; }
-        public void setBuyerCoolie(BigDecimal buyerCoolie) { this.buyerCoolie = buyerCoolie; }
         public BigDecimal getOutboundFreight() { return outboundFreight; }
         public void setOutboundFreight(BigDecimal outboundFreight) { this.outboundFreight = outboundFreight; }
         public String getOutboundVehicle() { return outboundVehicle; }
         public void setOutboundVehicle(String outboundVehicle) { this.outboundVehicle = outboundVehicle; }
-        public BigDecimal getDiscount() { return discount; }
-        public void setDiscount(BigDecimal discount) { this.discount = discount; }
-        public String getDiscountType() { return discountType; }
-        public void setDiscountType(String discountType) { this.discountType = discountType; }
-        public BigDecimal getManualRoundOff() { return manualRoundOff; }
-        public void setManualRoundOff(BigDecimal manualRoundOff) { this.manualRoundOff = manualRoundOff; }
+        public BigDecimal getTokenAdvance() { return tokenAdvance; }
+        public void setTokenAdvance(BigDecimal tokenAdvance) { this.tokenAdvance = tokenAdvance; }
         public BigDecimal getGrandTotal() { return grandTotal; }
         public void setGrandTotal(BigDecimal grandTotal) { this.grandTotal = grandTotal; }
         public String getBrokerageType() { return brokerageType; }
@@ -178,6 +231,21 @@ public final class SalesBillDTOs {
         @NotBlank(message = "buyerMark is required")
         @Size(max = 100)
         private String buyerMark;
+        private String buyerContactId;
+        @Size(max = 20)
+        private String buyerPhone;
+        @Size(max = 500)
+        private String buyerAddress;
+        private Boolean buyerAsBroker = false;
+        @Size(max = 255)
+        private String brokerName;
+        @Size(max = 100)
+        private String brokerMark;
+        private String brokerContactId;
+        @Size(max = 20)
+        private String brokerPhone;
+        @Size(max = 500)
+        private String brokerAddress;
         @NotBlank(message = "billingName is required")
         @Size(max = 255)
         private String billingName;
@@ -186,14 +254,10 @@ public final class SalesBillDTOs {
         @Valid
         @NotEmpty(message = "at least one commodity group required")
         private List<CommodityGroupDTO> commodityGroups = new ArrayList<>();
-        private BigDecimal buyerCoolie = BigDecimal.ZERO;
         private BigDecimal outboundFreight = BigDecimal.ZERO;
         @Size(max = 50)
         private String outboundVehicle;
-        private BigDecimal discount = BigDecimal.ZERO;
-        @Pattern(regexp = "PERCENT|AMOUNT", message = "discountType must be PERCENT or AMOUNT")
-        private String discountType = "AMOUNT";
-        private BigDecimal manualRoundOff = BigDecimal.ZERO;
+        private BigDecimal tokenAdvance = BigDecimal.ZERO;
         @NotNull(message = "grandTotal is required")
         private BigDecimal grandTotal;
         @Pattern(regexp = "PERCENT|AMOUNT", message = "brokerageType must be PERCENT or AMOUNT")
@@ -210,24 +274,36 @@ public final class SalesBillDTOs {
         public void setBuyerName(String buyerName) { this.buyerName = buyerName; }
         public String getBuyerMark() { return buyerMark; }
         public void setBuyerMark(String buyerMark) { this.buyerMark = buyerMark; }
+        public String getBuyerContactId() { return buyerContactId; }
+        public void setBuyerContactId(String buyerContactId) { this.buyerContactId = buyerContactId; }
+        public String getBuyerPhone() { return buyerPhone; }
+        public void setBuyerPhone(String buyerPhone) { this.buyerPhone = buyerPhone; }
+        public String getBuyerAddress() { return buyerAddress; }
+        public void setBuyerAddress(String buyerAddress) { this.buyerAddress = buyerAddress; }
+        public Boolean getBuyerAsBroker() { return buyerAsBroker; }
+        public void setBuyerAsBroker(Boolean buyerAsBroker) { this.buyerAsBroker = buyerAsBroker; }
+        public String getBrokerName() { return brokerName; }
+        public void setBrokerName(String brokerName) { this.brokerName = brokerName; }
+        public String getBrokerMark() { return brokerMark; }
+        public void setBrokerMark(String brokerMark) { this.brokerMark = brokerMark; }
+        public String getBrokerContactId() { return brokerContactId; }
+        public void setBrokerContactId(String brokerContactId) { this.brokerContactId = brokerContactId; }
+        public String getBrokerPhone() { return brokerPhone; }
+        public void setBrokerPhone(String brokerPhone) { this.brokerPhone = brokerPhone; }
+        public String getBrokerAddress() { return brokerAddress; }
+        public void setBrokerAddress(String brokerAddress) { this.brokerAddress = brokerAddress; }
         public String getBillingName() { return billingName; }
         public void setBillingName(String billingName) { this.billingName = billingName; }
         public String getBillDate() { return billDate; }
         public void setBillDate(String billDate) { this.billDate = billDate; }
         public List<CommodityGroupDTO> getCommodityGroups() { return commodityGroups; }
         public void setCommodityGroups(List<CommodityGroupDTO> commodityGroups) { this.commodityGroups = commodityGroups != null ? commodityGroups : new ArrayList<>(); }
-        public BigDecimal getBuyerCoolie() { return buyerCoolie; }
-        public void setBuyerCoolie(BigDecimal buyerCoolie) { this.buyerCoolie = buyerCoolie; }
         public BigDecimal getOutboundFreight() { return outboundFreight; }
         public void setOutboundFreight(BigDecimal outboundFreight) { this.outboundFreight = outboundFreight; }
         public String getOutboundVehicle() { return outboundVehicle; }
         public void setOutboundVehicle(String outboundVehicle) { this.outboundVehicle = outboundVehicle; }
-        public BigDecimal getDiscount() { return discount; }
-        public void setDiscount(BigDecimal discount) { this.discount = discount; }
-        public String getDiscountType() { return discountType; }
-        public void setDiscountType(String discountType) { this.discountType = discountType; }
-        public BigDecimal getManualRoundOff() { return manualRoundOff; }
-        public void setManualRoundOff(BigDecimal manualRoundOff) { this.manualRoundOff = manualRoundOff; }
+        public BigDecimal getTokenAdvance() { return tokenAdvance; }
+        public void setTokenAdvance(BigDecimal tokenAdvance) { this.tokenAdvance = tokenAdvance; }
         public BigDecimal getGrandTotal() { return grandTotal; }
         public void setGrandTotal(BigDecimal grandTotal) { this.grandTotal = grandTotal; }
         public String getBrokerageType() { return brokerageType; }
