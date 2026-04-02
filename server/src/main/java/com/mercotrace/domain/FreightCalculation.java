@@ -34,6 +34,9 @@ public class FreightCalculation extends AbstractAuditingEntity<Long> implements 
     @Column(name = "rate", nullable = false)
     private Double rate;
 
+    @Column(name = "freight_kgs", nullable = false)
+    private Double freightKgs;
+
     @Column(name = "total_amount", nullable = false)
     private Double totalAmount;
 
@@ -77,6 +80,14 @@ public class FreightCalculation extends AbstractAuditingEntity<Long> implements 
 
     public void setRate(Double rate) {
         this.rate = rate;
+    }
+
+    public Double getFreightKgs() {
+        return freightKgs;
+    }
+
+    public void setFreightKgs(Double freightKgs) {
+        this.freightKgs = freightKgs;
     }
 
     public Double getTotalAmount() {
@@ -134,6 +145,7 @@ public class FreightCalculation extends AbstractAuditingEntity<Long> implements 
             ", vehicleId=" + getVehicleId() +
             ", method=" + getMethod() +
             ", rate=" + getRate() +
+            ", freightKgs=" + getFreightKgs() +
             ", totalAmount=" + getTotalAmount() +
             ", noRental=" + getNoRental() +
             ", advancePaid=" + getAdvancePaid() +

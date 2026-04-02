@@ -1,8 +1,10 @@
-import { Package, Printer, RotateCcw } from 'lucide-react';
+import { ChevronDown, ChevronUp, Package, Printer, RotateCcw } from 'lucide-react';
+import { useEffect, useState } from 'react';
 
 interface SellerInfoCardProps {
   sellers: Array<{
     sellerName: string;
+    sellerSerialNumber?: number | null;
     sellerMark?: string;
     sellerPhone?: string;
     lots: Array<{
@@ -21,6 +23,12 @@ interface SellerInfoCardProps {
 
 const SellerInfoCard = ({ sellers, onPrint, onRefresh, hidePrint }: SellerInfoCardProps) => {
   if (!sellers || sellers.length === 0) return null;
+  const [expandedSellerIdx, setExpandedSellerIdx] = useState<number | null>(null);
+
+  // Reset accordion whenever seller list changes; default remains all-collapsed.
+  useEffect(() => {
+    setExpandedSellerIdx(null);
+  }, [sellers]);
 
   return (
     <div className="rounded-xl border border-border/30 p-3.5 space-y-3">
@@ -58,50 +66,81 @@ const SellerInfoCard = ({ sellers, onPrint, onRefresh, hidePrint }: SellerInfoCa
         </div>
       </div>
 
-      {sellers.map((seller, si) => (
-        <div key={si} className="space-y-2">
-          <div className="flex items-center gap-2.5">
-            <div className="w-7 h-7 rounded-md bg-gradient-to-br from-emerald-500 to-teal-500 flex items-center justify-center flex-shrink-0">
-              <span className="text-white text-[10px] font-bold">{seller.sellerMark || seller.sellerName?.charAt(0) || '?'}</span>
-            </div>
-            <div>
-              <p className="text-sm font-semibold text-foreground leading-none">{seller.sellerName}</p>
-              {seller.sellerMark && <p className="text-[11px] text-muted-foreground mt-0.5">Alias: {seller.sellerMark}</p>}
-            </div>
-          </div>
+      {sellers.map((seller, si) => {
+        const isExpanded = expandedSellerIdx === si;
+        const hasLots = Boolean(seller.lots && seller.lots.length > 0);
+        const serialLabel =
+          seller.sellerSerialNumber != null && seller.sellerSerialNumber > 0
+            ? String(seller.sellerSerialNumber)
+            : null;
 
-          {seller.lots && seller.lots.length > 0 && (
-            <div className="overflow-x-auto -mx-1">
-              <table className="w-full text-xs min-w-[320px]">
-                <thead>
-                  <tr className="border-b border-border/20">
-                    <th className="text-left py-1.5 px-1.5 text-muted-foreground font-semibold">Lot</th>
-                    <th className="text-left py-1.5 px-1.5 text-muted-foreground font-semibold">Commodity</th>
-                    <th className="text-left py-1.5 px-1.5 text-muted-foreground font-semibold">Package</th>
-                    <th className="text-right py-1.5 px-1.5 text-muted-foreground font-semibold">Qty</th>
-                    <th className="text-left py-1.5 px-1.5 text-muted-foreground font-semibold">Variant</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {seller.lots.map((lot, li) => (
-                    <tr key={lot.id ?? li} className="border-b border-border/10">
-                      <td className="py-1.5 px-1.5 font-medium text-foreground">
-                        <span className="px-1.5 py-0.5 rounded bg-blue-100 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300 text-[11px] font-bold">
-                          {lot.lotName || `LOT-${li + 1}`}
-                        </span>
-                      </td>
-                      <td className="py-1.5 px-1.5 text-foreground">{lot.commodityName ?? '—'}</td>
-                      <td className="py-1.5 px-1.5 text-muted-foreground">Bags</td>
-                      <td className="py-1.5 px-1.5 text-right font-medium text-foreground">{lot.bagCount ?? 0}</td>
-                      <td className="py-1.5 px-1.5 text-muted-foreground">{lot.variant ?? '—'}</td>
+        return (
+          <div key={si} className="space-y-2">
+            <button
+              type="button"
+              onClick={() => setExpandedSellerIdx((prev) => (prev === si ? null : si))}
+              className="w-full flex items-center justify-between gap-2 rounded-lg px-1 py-1 hover:bg-muted/30 transition-colors text-left"
+              aria-expanded={isExpanded}
+              aria-label={isExpanded ? 'Collapse seller lots' : 'Expand seller lots'}
+            >
+              <div className="flex items-center gap-2.5 min-w-0">
+                <div className="w-7 h-7 rounded-md bg-gradient-to-br from-emerald-500 to-teal-500 flex items-center justify-center flex-shrink-0">
+                  <span className="text-white text-[10px] font-bold">{seller.sellerMark || seller.sellerName?.charAt(0) || '?'}</span>
+                </div>
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold text-foreground leading-none truncate">
+                    {serialLabel ? `${serialLabel}. ` : ''}{seller.sellerName}
+                  </p>
+                  <p className="text-[11px] text-muted-foreground mt-0.5">
+                    {seller.sellerMark ? `Alias: ${seller.sellerMark} · ` : ''}{seller.lots?.length ?? 0} lot(s)
+                  </p>
+                </div>
+              </div>
+              <span className="inline-flex items-center justify-center rounded-md bg-muted/50 h-7 w-7 shrink-0">
+                {isExpanded ? (
+                  <ChevronUp className="w-3.5 h-3.5 text-muted-foreground" />
+                ) : (
+                  <ChevronDown className="w-3.5 h-3.5 text-muted-foreground" />
+                )}
+              </span>
+            </button>
+
+            {isExpanded && hasLots && (
+              <div className="overflow-x-auto -mx-1">
+                <table className="w-full text-xs min-w-[320px]">
+                  <thead>
+                    <tr className="border-b border-border/20">
+                      <th className="text-left py-1.5 px-1.5 text-muted-foreground font-semibold">Lot</th>
+                      <th className="text-left py-1.5 px-1.5 text-muted-foreground font-semibold">Commodity</th>
+                      <th className="text-left py-1.5 px-1.5 text-muted-foreground font-semibold">Package</th>
+                      <th className="text-right py-1.5 px-1.5 text-muted-foreground font-semibold">Qty</th>
+                      <th className="text-left py-1.5 px-1.5 text-muted-foreground font-semibold">Variant</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-      ))}
+                  </thead>
+                  <tbody>
+                    {seller.lots.map((lot, li) => (
+                      <tr key={lot.id ?? li} className="border-b border-border/10">
+                        <td className="py-1.5 px-1.5 font-medium text-foreground">
+                          <span className="px-1.5 py-0.5 rounded bg-blue-100 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300 text-[11px] font-bold">
+                            {lot.lotName || `LOT-${li + 1}`}
+                          </span>
+                        </td>
+                        <td className="py-1.5 px-1.5 text-foreground">{lot.commodityName ?? '—'}</td>
+                        <td className="py-1.5 px-1.5 text-muted-foreground">Bags</td>
+                        <td className="py-1.5 px-1.5 text-right font-medium text-foreground">{lot.bagCount ?? 0}</td>
+                        <td className="py-1.5 px-1.5 text-muted-foreground">{lot.variant ?? '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            {isExpanded && !hasLots && (
+              <p className="text-xs text-muted-foreground italic px-1.5 py-1">No lots available.</p>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 };

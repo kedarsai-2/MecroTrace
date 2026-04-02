@@ -40,6 +40,7 @@ export default function useUnsavedChangesGuard(options: UseUnsavedChangesGuardOp
 
   const [localResolver, setLocalResolver] = React.useState<((value: boolean) => void) | null>(null);
   const [saving, setSaving] = React.useState(false);
+  const continuingRef = React.useRef(false);
 
   const isRouteBlocked = blocker.state === "blocked";
   const isOpen = isRouteBlocked || localResolver != null;
@@ -75,27 +76,34 @@ export default function useUnsavedChangesGuard(options: UseUnsavedChangesGuardOp
   }, [isRouteBlocked, blocker, resolveLocal]);
 
   const handleContinue = React.useCallback(async () => {
+    continuingRef.current = true;
     if (onBeforeContinue) {
       setSaving(true);
       try {
         const ok = await onBeforeContinue();
         if (!ok) {
           setSaving(false);
+          continuingRef.current = false;
           return;
         }
       } catch {
         setSaving(false);
+        continuingRef.current = false;
         return;
       }
       setSaving(false);
     }
     if (isRouteBlocked) blocker.proceed();
     else resolveLocal(true);
+    // Allow close interactions again after proceed/resolve.
+    continuingRef.current = false;
   }, [isRouteBlocked, blocker, resolveLocal, onBeforeContinue]);
 
   const handleOpenChange = React.useCallback(
     (nextOpen: boolean) => {
       if (nextOpen) return;
+      // Ignore dialog close events fired by the primary action while continue/save is in progress.
+      if (continuingRef.current) return;
       handleStay();
     },
     [handleStay],

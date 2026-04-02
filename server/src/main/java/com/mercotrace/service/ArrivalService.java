@@ -177,11 +177,14 @@ public class ArrivalService {
             sellerInVehicle.setVehicleId(vehicle.getId());
             Long contactId = sellerDTO.getContactId();
             if (contactId != null) {
-                contactRepository.findById(contactId).orElseThrow(() ->
+                Contact contact = contactRepository.findById(contactId).orElseThrow(() ->
                     new IllegalArgumentException("Seller contact not found: " + contactId)
                 );
                 contactService.ensureTraderUsesPortalContact(traderId, contactId);
                 sellerInVehicle.setContactId(contactId);
+                String incomingMark = sellerDTO.getSellerMark() != null && !sellerDTO.getSellerMark().isBlank() ? sellerDTO.getSellerMark().trim() : null;
+                sellerInVehicle.setSellerMark(incomingMark);
+                propagateMarkToContact(contact, incomingMark, traderId);
             } else {
                 sellerInVehicle.setContactId(null);
                 sellerInVehicle.setSellerName(sellerDTO.getSellerName() != null ? sellerDTO.getSellerName().trim() : null);
@@ -237,13 +240,15 @@ public class ArrivalService {
 
         FreightMethod fm = request.getFreightMethod() != null ? request.getFreightMethod() : FreightMethod.BY_WEIGHT;
         double freightRate = request.getFreightRate() != null ? request.getFreightRate() : 0d;
+        double freightKgs = request.getFreightKgs() != null ? request.getFreightKgs() : 1.0d;
         double advancePaid = request.getAdvancePaid() != null ? request.getAdvancePaid() : 0d;
-        double freightTotal = computeFreightTotal(fm, freightRate, finalBillableWeight, lots, request.isNoRental());
+        double freightTotal = computeFreightTotal(fm, freightRate, freightKgs, finalBillableWeight, lots, request.isNoRental());
 
         FreightCalculation freight = new FreightCalculation();
         freight.setVehicleId(vehicle.getId());
         freight.setMethod(fm);
         freight.setRate(freightRate);
+        freight.setFreightKgs(freightKgs);
         freight.setTotalAmount(freightTotal);
         freight.setNoRental(request.isNoRental());
         freight.setAdvancePaid(advancePaid);
@@ -445,6 +450,7 @@ public class ArrivalService {
             FreightCalculation fc = freightOpt.get();
             dto.setFreightMethod(fc.getMethod());
             dto.setFreightRate(fc.getRate());
+            dto.setFreightKgs(fc.getFreightKgs());
             dto.setFreightTotal(fc.getTotalAmount());
             dto.setNoRental(Boolean.TRUE.equals(fc.getNoRental()));
             dto.setAdvancePaid(fc.getAdvancePaid());
@@ -457,7 +463,9 @@ public class ArrivalService {
             if (siv.getContactId() != null) {
                 sellerFull.setSellerName(contactNameById.getOrDefault(siv.getContactId(), ""));
                 sellerFull.setSellerPhone(contactPhoneById.getOrDefault(siv.getContactId(), ""));
-                sellerFull.setSellerMark(contactMarkById.getOrDefault(siv.getContactId(), ""));
+                // prefer per-arrival mark override stored on seller row; fall back to the contact's global mark
+                String sivMark = siv.getSellerMark();
+                sellerFull.setSellerMark(sivMark != null && !sivMark.isBlank() ? sivMark : contactMarkById.getOrDefault(siv.getContactId(), ""));
             } else {
                 sellerFull.setSellerName(siv.getSellerName() != null ? siv.getSellerName() : "");
                 sellerFull.setSellerPhone(siv.getSellerPhone() != null ? siv.getSellerPhone() : "");
@@ -596,10 +604,13 @@ public class ArrivalService {
                 siv.setVehicleId(vehicleId);
                 Long contactId = sellerDTO.getContactId();
                 if (contactId != null) {
-                    contactRepository.findById(contactId).orElseThrow(() ->
+                    Contact contact = contactRepository.findById(contactId).orElseThrow(() ->
                         new IllegalArgumentException("Seller contact not found: " + contactId));
                     contactService.ensureTraderUsesPortalContact(traderId, contactId);
                     siv.setContactId(contactId);
+                    String incomingMark = sellerDTO.getSellerMark() != null && !sellerDTO.getSellerMark().isBlank() ? sellerDTO.getSellerMark().trim() : null;
+                    siv.setSellerMark(incomingMark);
+                    propagateMarkToContact(contact, incomingMark, traderId);
                 } else {
                     String phone = sellerDTO.getSellerPhone() != null ? sellerDTO.getSellerPhone().trim() : null;
                     if (!isStillPartial && phone != null && !phone.isEmpty()) {
@@ -660,11 +671,12 @@ public class ArrivalService {
 
         Optional<FreightCalculation> freightOpt = freightCalculationRepository.findOneByVehicleId(vehicleId);
         boolean updateFreight = update.getFreightMethod() != null || update.getFreightRate() != null
-            || update.getNoRental() != null || update.getAdvancePaid() != null || sellersReplaced;
+            || update.getFreightKgs() != null || update.getNoRental() != null || update.getAdvancePaid() != null || sellersReplaced;
         if (updateFreight && freightOpt.isPresent()) {
             FreightCalculation freight = freightOpt.get();
             if (update.getFreightMethod() != null) freight.setMethod(update.getFreightMethod());
             if (update.getFreightRate() != null) freight.setRate(update.getFreightRate());
+            if (update.getFreightKgs() != null) freight.setFreightKgs(update.getFreightKgs());
             if (update.getNoRental() != null) freight.setNoRental(update.getNoRental());
             if (update.getAdvancePaid() != null) freight.setAdvancePaid(update.getAdvancePaid());
 
@@ -678,6 +690,7 @@ public class ArrivalService {
             double freightTotal = computeFreightTotal(
                 freight.getMethod() != null ? freight.getMethod() : FreightMethod.BY_WEIGHT,
                 freight.getRate() != null ? freight.getRate() : 0d,
+                freight.getFreightKgs() != null ? freight.getFreightKgs() : 1.0d,
                 finalBillable,
                 lotsForFreight,
                 Boolean.TRUE.equals(freight.getNoRental())
@@ -1029,6 +1042,14 @@ public class ArrivalService {
         if (!effectiveRequestMultiSeller(request) && sellers.size() > 1) {
             throw new IllegalArgumentException("Single-seller arrival allows only one seller");
         }
+        
+        // Validate freight_kgs for BY_WEIGHT method
+        if (request.getFreightMethod() == FreightMethod.BY_WEIGHT && request.getFreightKgs() != null) {
+            if (request.getFreightKgs() <= 0) {
+                throw new IllegalArgumentException("Freight kgs must be greater than 0 for BY_WEIGHT method");
+            }
+        }
+        
         for (ArrivalSellerDTO seller : sellers) {
             if (seller.getContactId() == null && seller.getSellerPhone() != null && !seller.getSellerPhone().isBlank()) {
                 String phone = seller.getSellerPhone().trim();
@@ -1066,6 +1087,49 @@ public class ArrivalService {
                 }
             }
         }
+    }
+
+    /**
+     * Propagate per-arrival mark override to Contact.mark for global use.
+     * Throws IllegalArgumentException if mark cannot be saved (conflict, length).
+     */
+    private void propagateMarkToContact(Contact contact, String mark, Long traderId) {
+        if (mark == null || mark.isBlank()) return;
+        String trimmed = mark.trim();
+        
+        // Validate length against Contact.mark column (varchar 20)
+        if (trimmed.length() > 20) {
+            throw new IllegalArgumentException(
+                "Mark/alias must be 20 characters or less to save globally. Current: " + trimmed.length() + " chars"
+            );
+        }
+        
+        // Skip if already set to same value (case-insensitive)
+        String current = contact.getMark() != null ? contact.getMark().trim() : "";
+        if (trimmed.equalsIgnoreCase(current)) return;
+        
+        // Check conflicts with other trader contacts
+        boolean conflictsTrader = contactRepository
+            .findOneByTraderIdAndMarkIgnoreCaseAndIdNot(traderId, trimmed, contact.getId())
+            .isPresent();
+        if (conflictsTrader) {
+            throw new IllegalArgumentException(
+                "This mark is already in use by another contact. Please choose a unique mark."
+            );
+        }
+        
+        // Check conflicts with global self-registered contacts
+        boolean conflictsGlobal = contactRepository
+            .findOneByMarkAndTraderIdIsNull(trimmed)
+            .isPresent();
+        if (conflictsGlobal) {
+            throw new IllegalArgumentException(
+                "This mark is already in use by a registered contact. Please choose a unique mark."
+            );
+        }
+        
+        contact.setMark(trimmed);
+        contactRepository.save(contact);
     }
 
     private Long resolveTraderId() {
@@ -1228,6 +1292,7 @@ public class ArrivalService {
     private double computeFreightTotal(
         FreightMethod method,
         Double rate,
+        Double freightKgs,
         double finalBillableWeight,
         List<Lot> lots,
         boolean noRental
@@ -1236,9 +1301,11 @@ public class ArrivalService {
             return 0d;
         }
         double safeRate = rate != null ? rate : 0d;
+        double safeKgs = freightKgs != null ? freightKgs : 1.0d;
         switch (method) {
             case BY_WEIGHT:
-                return finalBillableWeight * safeRate;
+                if (safeKgs <= 0d) return 0d;
+                return (finalBillableWeight * safeRate) / safeKgs;
             case BY_COUNT:
                 int totalBags = lots.stream().mapToInt(l -> l.getBagCount() != null ? l.getBagCount() : 0).sum();
                 return totalBags * safeRate;

@@ -1,6 +1,7 @@
 import { useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback, Fragment, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
+import { Capacitor } from '@capacitor/core';
 import BottomNav from '@/components/BottomNav';
 import {
   ArrowLeft, Plus, Truck, Scale, ChevronDown, ChevronUp, ChevronRight, ChevronsUpDown, Trash2,
@@ -8,11 +9,12 @@ import {
 } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { useNavigate } from 'react-router-dom';
 import { cn } from '@/lib/utils';
 import { contactApi, arrivalsApi, commodityApi } from '@/services/api';
 import type { ArrivalSummary, ArrivalCreatePayload, ArrivalFullDetail, ArrivalDetail } from '@/services/api/arrivals';
-import ArrivalStatusBadge, { getArrivalStatus, ALL_STATUSES, type ArrivalStatus } from '@/components/arrivals/ArrivalStatusBadge';
+import ArrivalStatusBadge, { getArrivalStatus, type ArrivalStatus } from '@/components/arrivals/ArrivalStatusBadge';
 import FreightDetailsCard from '@/components/arrivals/FreightDetailsCard';
 import SellerInfoCard from '@/components/arrivals/SellerInfoCard';
 import BuyerMarkSection from '@/components/arrivals/BuyerMarkSection';
@@ -207,13 +209,18 @@ function ArrivalSummaryVehicleSellerQty({
   const seller = primarySellerName ?? '-';
   const qty = totalBags ?? 0;
   return (
-    <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-1 min-w-0">
-      <span className={ARRIVAL_SUMMARY_PRIMARY_PILL_CLASS}>{vehicleNumber?.trim() ? vehicleNumber : '—'}</span>
+    <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-1 min-w-0 max-w-full">
+      <span
+        className={cn(ARRIVAL_SUMMARY_PRIMARY_PILL_CLASS, 'max-w-[min(100%,10rem)] truncate')}
+        title={vehicleNumber?.trim() ? vehicleNumber : undefined}
+      >
+        {vehicleNumber?.trim() ? vehicleNumber : '—'}
+      </span>
       <span className="text-muted-foreground text-xs shrink-0" aria-hidden>
         |
       </span>
       <span
-        className="min-w-0 max-w-[min(12rem,40vw)] sm:max-w-xs truncate text-foreground text-xs font-medium"
+        className="min-w-0 max-w-[min(100%,14rem)] sm:max-w-[min(100%,18rem)] truncate text-foreground text-xs font-medium"
         title={seller}
       >
         {seller}
@@ -266,7 +273,6 @@ function LotsScrollPanel({
   scrollAffordanceHint?: string;
 }) {
   const outerRef = useRef<HTMLDivElement | null>(null);
-  const measureRef = useRef<HTMLDivElement | null>(null);
   const [hintBottom, setHintBottom] = useState(false);
   const [hintRight, setHintRight] = useState(false);
   const [thumbMetrics, setThumbMetrics] = useState<{ visible: boolean; top: number; height: number }>({
@@ -275,6 +281,12 @@ function LotsScrollPanel({
     height: 0,
   });
   const [thumbPressed, setThumbPressed] = useState(false);
+  const [horizontalThumbMetrics, setHorizontalThumbMetrics] = useState<{ visible: boolean; left: number; width: number }>({
+    visible: false,
+    left: 0,
+    width: 0,
+  });
+  const [horizontalThumbPressed, setHorizontalThumbPressed] = useState(false);
 
   const mergedRef = useCallback(
     (el: HTMLDivElement | null) => {
@@ -286,21 +298,16 @@ function LotsScrollPanel({
 
   const applyVerticalThumbPadding = useCallback(() => {
     const outer = outerRef.current;
-    const inner = measureRef.current;
-    if (!inner) return;
-    if (!ensureVerticalScrollThumbWhenShort) {
-      inner.style.minHeight = '';
-      return;
-    }
     if (!outer) return;
-    inner.style.minHeight = '';
+    if (!ensureVerticalScrollThumbWhenShort) return;
+    
     const och = outer.clientHeight;
     const osh = outer.scrollHeight;
     if (och <= 0) return;
     if (osh <= och + LOTS_SCROLL_EPS) {
       const bump = och + LOTS_SCROLL_MIN_OVERFLOW - osh;
       if (bump > 0) {
-        inner.style.minHeight = `${inner.scrollHeight + bump}px`;
+        outer.style.minHeight = `${outer.scrollHeight + bump}px`;
       }
     }
   }, [ensureVerticalScrollThumbWhenShort]);
@@ -337,6 +344,31 @@ function LotsScrollPanel({
     setThumbMetrics({ visible: true, top, height: thumbHeight });
   }, [ensureVerticalScrollThumbWhenShort]);
 
+  const updateHorizontalThumbMetrics = useCallback(() => {
+    const outer = outerRef.current;
+    if (!outer) return;
+
+    const clientW = outer.clientWidth;
+    if (clientW <= 0) return;
+
+    const totalScrollableX = Math.max(0, outer.scrollWidth - outer.clientWidth);
+    if (totalScrollableX <= LOTS_SCROLL_EPS) {
+      setHorizontalThumbMetrics({ visible: false, left: 0, width: 0 });
+      return;
+    }
+
+    const insetPx = 10;
+    const available = Math.max(0, clientW - insetPx * 2);
+    if (available <= 0) return;
+
+    const thumbWidth = Math.max(32, Math.min(available, Math.round(clientW * 0.18)));
+    const maxLeft = Math.max(0, available - thumbWidth);
+    const ratio = outer.scrollLeft / totalScrollableX;
+    const left = insetPx + maxLeft * Math.max(0, Math.min(1, ratio));
+
+    setHorizontalThumbMetrics({ visible: true, left, width: thumbWidth });
+  }, []);
+
   const updateHints = useCallback(() => {
     const el = outerRef.current;
     if (!el || !showEdgeHints) {
@@ -356,7 +388,8 @@ function LotsScrollPanel({
     applyVerticalThumbPadding();
     updateHints();
     updateThumbMetrics();
-  }, [applyVerticalThumbPadding, updateHints, updateThumbMetrics]);
+    updateHorizontalThumbMetrics();
+  }, [applyVerticalThumbPadding, updateHints, updateThumbMetrics, updateHorizontalThumbMetrics]);
 
   const scrollByStep = useCallback((dir: 'up' | 'down') => {
     const el = outerRef.current;
@@ -371,22 +404,22 @@ function LotsScrollPanel({
 
   useEffect(() => {
     const outer = outerRef.current;
-    const inner = measureRef.current;
-    if (!outer || !inner) return;
+    if (!outer) return;
     runScrollMetrics();
     const ro = new ResizeObserver(() => runScrollMetrics());
-    ro.observe(inner);
     ro.observe(outer);
     outer.addEventListener('scroll', updateThumbMetrics, { passive: true });
+    outer.addEventListener('scroll', updateHorizontalThumbMetrics, { passive: true });
     if (showEdgeHints) {
       outer.addEventListener('scroll', updateHints, { passive: true });
     }
     return () => {
       ro.disconnect();
       outer.removeEventListener('scroll', updateThumbMetrics);
+      outer.removeEventListener('scroll', updateHorizontalThumbMetrics);
       outer.removeEventListener('scroll', updateHints);
     };
-  }, [runScrollMetrics, updateHints, updateThumbMetrics, showEdgeHints, sellerId]);
+  }, [runScrollMetrics, updateHints, updateThumbMetrics, updateHorizontalThumbMetrics, showEdgeHints, sellerId]);
 
   const setScrollTopFromPointerY = useCallback((clientY: number) => {
     const outer = outerRef.current;
@@ -430,21 +463,59 @@ function LotsScrollPanel({
     window.addEventListener('pointercancel', onUp, { passive: true });
   }, [setScrollTopFromPointerY]);
 
+  const setScrollLeftFromPointerX = useCallback((clientX: number) => {
+    const outer = outerRef.current;
+    if (!outer) return;
+
+    const totalScrollableX = Math.max(0, outer.scrollWidth - outer.clientWidth);
+    if (totalScrollableX <= LOTS_SCROLL_EPS) return;
+
+    const insetPx = 10;
+    const rect = outer.getBoundingClientRect();
+    const xInPanel = clientX - rect.left;
+    const available = Math.max(0, outer.clientWidth - insetPx * 2);
+    if (available <= 0) return;
+
+    const ratio = Math.max(0, Math.min(1, (xInPanel - insetPx) / available));
+    outer.scrollLeft = ratio * totalScrollableX;
+  }, []);
+
+  const onHorizontalThumbPointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    const outer = outerRef.current;
+    if (!outer) return;
+
+    e.preventDefault();
+    e.stopPropagation();
+
+    setHorizontalThumbPressed(true);
+    setScrollLeftFromPointerX(e.clientX);
+
+    const onMove = (ev: PointerEvent) => setScrollLeftFromPointerX(ev.clientX);
+    const onUp = () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
+      setHorizontalThumbPressed(false);
+    };
+
+    window.addEventListener('pointermove', onMove, { passive: true });
+    window.addEventListener('pointerup', onUp, { passive: true });
+    window.addEventListener('pointercancel', onUp, { passive: true });
+  }, [setScrollLeftFromPointerX]);
+
   return (
     <>
       <div className="relative">
         <div
           ref={mergedRef}
-          className={cn('lots-scroll-panel', 'no-scrollbar', className)}
+          className={cn('lots-scroll-panel', 'lg:no-scrollbar', className)}
           style={
             showEdgeHints
               ? { WebkitOverflowScrolling: 'touch', scrollbarWidth: 'none', msOverflowStyle: 'none' }
               : { scrollbarWidth: 'none', msOverflowStyle: 'none' }
           }
         >
-          <div ref={measureRef} className="space-y-2">
-            {children}
-          </div>
+          {children}
         </div>
         {thumbMetrics.visible && (
           <div
@@ -463,17 +534,17 @@ function LotsScrollPanel({
 
             {/* Thumb capsule */}
             <div
-              className="absolute left-0 right-0 rounded-full border-2 cursor-ns-resize select-none touch-none z-[6] transition-[box-shadow,transform] duration-150 active:scale-[0.99]"
+              className="absolute left-1/2 w-[32px] -translate-x-1/2 rounded-full border-2 cursor-ns-resize select-none touch-none z-[6] transition-[box-shadow,transform] duration-150 active:scale-[0.99]"
               style={{
                 top: thumbMetrics.top,
                 height: thumbMetrics.height,
-                borderColor: thumbPressed ? 'hsl(var(--foreground) / 0.75)' : 'hsl(var(--foreground) / 0.45)',
-                backgroundColor: thumbPressed ? 'hsl(var(--foreground) / 0.22)' : 'hsl(var(--foreground) / 0.14)',
+                borderColor: thumbPressed ? 'hsl(229 76% 61%)' : 'hsl(229 100% 69%)',
+                backgroundColor: thumbPressed ? 'hsl(229 76% 61%)' : 'hsl(229 100% 69%)',
                 // "Gooey/glow" look: crisp inner border + soft outer glow
                 boxShadow:
                   thumbPressed
-                    ? 'inset 0 0 0 1px hsl(var(--foreground) / 0.75), 0 0 26px hsl(var(--foreground) / 0.26)'
-                    : 'inset 0 0 0 1px hsl(var(--foreground) / 0.55), 0 0 18px hsl(var(--foreground) / 0.18)',
+                    ? 'inset 0 0 0 1px hsl(0 0% 100% / 0.4), 0 0 26px hsl(229 100% 69% / 0.35)'
+                    : 'inset 0 0 0 1px hsl(0 0% 100% / 0.3), 0 0 18px hsl(229 100% 69% / 0.25)',
               }}
               onPointerDown={onThumbPointerDown}
               role="slider"
@@ -481,6 +552,29 @@ function LotsScrollPanel({
               aria-valuemin={0}
               aria-valuemax={1}
             >
+              {/* Visual-only motif to mirror the requested icon style. */}
+              <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-1.5">
+                <span
+                  className="block h-[8px] w-[8px] rotate-45 border-t-2 border-l-2"
+                  style={{ borderColor: 'hsl(0 0% 100% / 0.92)' }}
+                  aria-hidden
+                />
+                <span
+                  className="grid h-[10px] w-[10px] place-items-center rounded-full"
+                  style={{ backgroundColor: 'hsl(0 0% 100% / 0.92)' }}
+                  aria-hidden
+                >
+                  <span
+                    className="block h-[2px] w-[2px] rounded-full"
+                    style={{ backgroundColor: 'hsl(229 100% 69%)' }}
+                  />
+                </span>
+                <span
+                  className="block h-[8px] w-[8px] rotate-[225deg] border-t-2 border-l-2"
+                  style={{ borderColor: 'hsl(0 0% 100% / 0.92)' }}
+                  aria-hidden
+                />
+              </div>
             </div>
           </div>
         )}
@@ -500,8 +594,60 @@ function LotsScrollPanel({
             <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/80" strokeWidth={2.5} />
           </div>
         )}
+        {horizontalThumbMetrics.visible && (
+          <div className="pointer-events-none absolute left-0 right-0 bottom-0 h-[18px] z-[4]">
+            <div
+              className="pointer-events-auto absolute left-2 right-2 bottom-0 h-[14px] rounded-full"
+              style={{
+                backgroundColor: 'hsl(var(--card))',
+                boxShadow: 'inset 0 0 0 1px hsl(var(--foreground) / 0.28)',
+              }}
+            />
+            <div
+              className="pointer-events-auto absolute bottom-0 h-[14px] rounded-full border-2 cursor-ew-resize select-none touch-none z-[6] transition-[box-shadow,transform] duration-150 active:scale-[0.99]"
+              style={{
+                left: horizontalThumbMetrics.left,
+                width: horizontalThumbMetrics.width,
+                borderColor: horizontalThumbPressed ? 'hsl(229 76% 61%)' : 'hsl(229 100% 69%)',
+                backgroundColor: horizontalThumbPressed ? 'hsl(229 76% 61%)' : 'hsl(229 100% 69%)',
+                boxShadow:
+                  horizontalThumbPressed
+                    ? 'inset 0 0 0 1px hsl(0 0% 100% / 0.4), 0 0 26px hsl(229 100% 69% / 0.35)'
+                    : 'inset 0 0 0 1px hsl(0 0% 100% / 0.3), 0 0 18px hsl(229 100% 69% / 0.25)',
+              }}
+              onPointerDown={onHorizontalThumbPointerDown}
+              role="slider"
+              aria-label="Drag to scroll lots horizontally"
+              aria-valuemin={0}
+              aria-valuemax={1}
+            >
+              <div className="pointer-events-none absolute inset-0 flex items-center justify-center gap-1.5">
+                <span
+                  className="block h-[8px] w-[8px] -rotate-45 border-t-2 border-l-2"
+                  style={{ borderColor: 'hsl(0 0% 100% / 0.92)' }}
+                  aria-hidden
+                />
+                <span
+                  className="grid h-[10px] w-[10px] place-items-center rounded-full"
+                  style={{ backgroundColor: 'hsl(0 0% 100% / 0.92)' }}
+                  aria-hidden
+                >
+                  <span
+                    className="block h-[2px] w-[2px] rounded-full"
+                    style={{ backgroundColor: 'hsl(229 100% 69%)' }}
+                  />
+                </span>
+                <span
+                  className="block h-[8px] w-[8px] rotate-[135deg] border-t-2 border-l-2"
+                  style={{ borderColor: 'hsl(0 0% 100% / 0.92)' }}
+                  aria-hidden
+                />
+              </div>
+            </div>
+          </div>
+        )}
       </div>
-      {showScrollAffordanceFooter && (
+      {showScrollAffordanceFooter && (hintBottom || hintRight || thumbMetrics.visible) && (
         <div
           className="flex items-center justify-center gap-1.5 border-t border-border/40 bg-muted/25 py-2 px-2 dark:bg-muted/15"
           role="note"
@@ -516,100 +662,86 @@ function LotsScrollPanel({
   );
 }
 
-/** Per-lot 4-column row: horizontal scroll lives here (not the outer lots panel), so we surface a visible bar + edge hint. */
+/**
+ * Keep this wrapper so markup call-sites stay unchanged.
+ * Horizontal + vertical scrolling is handled by the outer LotsScrollPanel
+ * to ensure sticky lot headers remain truly fixed while entries scroll.
+ */
 function LotFieldsHorizontalScroll({ children }: { children: ReactNode }) {
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const contentRef = useRef<HTMLDivElement>(null);
+  return <>{children}</>;
+}
+
+function AddLotHorizontalScrollPanel({ children }: { children: ReactNode }) {
+  const outerRef = useRef<HTMLDivElement | null>(null);
   const [hintRight, setHintRight] = useState(false);
-  const [thumbPressed, setThumbPressed] = useState(false);
   const [thumbMetrics, setThumbMetrics] = useState<{ visible: boolean; left: number; width: number }>({
     visible: false,
     left: 0,
     width: 0,
   });
-  const trackRef = useRef<HTMLDivElement>(null);
+  const [thumbPressed, setThumbPressed] = useState(false);
 
-  const setScrollLeftFromPointerX = useCallback((clientX: number) => {
-    const el = scrollRef.current;
-    const trackEl = trackRef.current;
-    if (!el || !trackEl) return;
+  const runMetrics = useCallback(() => {
+    const outer = outerRef.current;
+    if (!outer) return;
 
-    const totalScrollableX = Math.max(0, el.scrollWidth - el.clientWidth);
-    if (totalScrollableX <= LOTS_SCROLL_EPS) return;
+    const totalScrollableX = Math.max(0, outer.scrollWidth - outer.clientWidth);
+    const hasOverflow = totalScrollableX > LOTS_SCROLL_EPS;
 
-    const insetPx = 4;
-    const available = Math.max(0, trackEl.clientWidth - insetPx * 2);
-    if (available <= 0) return;
-
-    const rect = trackEl.getBoundingClientRect();
-    const xInTrack = clientX - rect.left;
-    const ratio = Math.max(0, Math.min(1, (xInTrack - insetPx) / available));
-    el.scrollLeft = ratio * totalScrollableX;
-  }, []);
-
-  const update = useCallback(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    const hOverflow = el.scrollWidth > el.clientWidth + LOTS_SCROLL_EPS;
-    const notAtRight = el.scrollLeft < el.scrollWidth - el.clientWidth - LOTS_SCROLL_EPS;
-    setHintRight(hOverflow && notAtRight);
-
-    const trackEl = trackRef.current;
-    if (!trackEl) return;
-
-    if (!hOverflow) {
+    setHintRight(hasOverflow && outer.scrollLeft < totalScrollableX - LOTS_SCROLL_EPS);
+    if (!hasOverflow) {
       setThumbMetrics({ visible: false, left: 0, width: 0 });
       return;
     }
 
-    const totalScrollableX = Math.max(0, el.scrollWidth - el.clientWidth);
-    if (totalScrollableX <= LOTS_SCROLL_EPS) {
-      setThumbMetrics({ visible: false, left: 0, width: 0 });
-      return;
-    }
-
-    const insetPx = 4;
-    const available = Math.max(0, trackEl.clientWidth - insetPx * 2);
+    const insetPx = 10;
+    const available = Math.max(0, outer.clientWidth - insetPx * 2);
     if (available <= 0) return;
 
-    const knobWidthPx = 18;
-    const thumbWidth = Math.min(available, knobWidthPx);
-
-    const ratio = el.scrollLeft / totalScrollableX;
+    const thumbWidth = Math.max(32, Math.min(available, Math.round(outer.clientWidth * 0.18)));
     const maxLeft = Math.max(0, available - thumbWidth);
-    const clampedRatio = Math.max(0, Math.min(1, ratio));
-    const left = insetPx + maxLeft * clampedRatio;
+    const ratio = outer.scrollLeft / totalScrollableX;
+    const left = insetPx + maxLeft * Math.max(0, Math.min(1, ratio));
 
     setThumbMetrics({ visible: true, left, width: thumbWidth });
   }, []);
 
   useLayoutEffect(() => {
-    update();
-  }, [update]);
+    runMetrics();
+  }, [children, runMetrics]);
 
   useEffect(() => {
-    const el = scrollRef.current;
-    const inner = contentRef.current;
-    if (!el || !inner) return;
-    update();
-    const ro = new ResizeObserver(() => update());
-    ro.observe(inner);
-    ro.observe(el);
-    el.addEventListener('scroll', update, { passive: true });
+    const outer = outerRef.current;
+    if (!outer) return;
+    runMetrics();
+    const ro = new ResizeObserver(() => runMetrics());
+    ro.observe(outer);
+    outer.addEventListener('scroll', runMetrics, { passive: true });
     return () => {
       ro.disconnect();
-      el.removeEventListener('scroll', update);
+      outer.removeEventListener('scroll', runMetrics);
     };
-  }, [update]);
+  }, [runMetrics]);
+
+  const setScrollLeftFromPointerX = useCallback((clientX: number) => {
+    const outer = outerRef.current;
+    if (!outer) return;
+    const totalScrollableX = Math.max(0, outer.scrollWidth - outer.clientWidth);
+    if (totalScrollableX <= LOTS_SCROLL_EPS) return;
+
+    const insetPx = 10;
+    const rect = outer.getBoundingClientRect();
+    const xInPanel = clientX - rect.left;
+    const available = Math.max(0, outer.clientWidth - insetPx * 2);
+    if (available <= 0) return;
+
+    const ratio = Math.max(0, Math.min(1, (xInPanel - insetPx) / available));
+    outer.scrollLeft = ratio * totalScrollableX;
+  }, []);
 
   const onThumbPointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
-    const el = scrollRef.current;
-    const trackEl = trackRef.current;
-    if (!el || !trackEl) return;
-
     e.preventDefault();
     e.stopPropagation();
-
     setThumbPressed(true);
     setScrollLeftFromPointerX(e.clientX);
 
@@ -627,56 +759,71 @@ function LotFieldsHorizontalScroll({ children }: { children: ReactNode }) {
   }, [setScrollLeftFromPointerX]);
 
   return (
-    <div className="relative -mx-1 px-1 pb-[16px]">
+    <div className="relative">
       <div
-        ref={scrollRef}
-        className="lot-fields-x-scroll overflow-x-scroll overflow-y-visible overscroll-x-contain no-scrollbar"
-        onScroll={update}
+        ref={outerRef}
+        className="overflow-x-auto lot-fields-x-scroll [-webkit-overflow-scrolling:touch] touch-auto pb-5"
       >
-        <div ref={contentRef}>{children}</div>
+        {children}
       </div>
-
-      {/* Horizontal thumb (volume-like) for the lot fields scroller */}
-      <div
-        ref={trackRef}
-        className="pointer-events-none absolute left-1 right-1 bottom-0 z-[2] h-[18px] flex items-center"
-        aria-hidden
-      >
-        <div
-          className="relative w-full h-[6px] rounded-full"
-          style={{
-            backgroundColor: 'hsl(var(--card))',
-            boxShadow: 'inset 0 0 0 1px hsl(var(--foreground) / 0.22)',
-          }}
-        >
-          {thumbMetrics.visible && (
-            <div
-              className="absolute top-1/2 -translate-y-1/2 rounded-full cursor-ew-resize select-none touch-none pointer-events-auto transition-[box-shadow,transform] duration-150 active:scale-[0.98]"
-              style={{
-                left: thumbMetrics.left,
-                width: thumbMetrics.width,
-                height: 12,
-                backgroundColor: thumbPressed ? 'hsl(var(--foreground) / 0.22)' : 'hsl(var(--foreground) / 0.14)',
-                boxShadow: thumbPressed
-                  ? 'inset 0 0 0 1px hsl(var(--foreground) / 0.75), 0 0 26px hsl(var(--foreground) / 0.26)'
-                  : 'inset 0 0 0 1px hsl(var(--foreground) / 0.45), 0 0 18px hsl(var(--foreground) / 0.18)',
-              }}
-              onPointerDown={onThumbPointerDown}
-              role="slider"
-              aria-label="Drag to scroll lots horizontally"
-              aria-valuemin={0}
-              aria-valuemax={1}
-            />
-          )}
-        </div>
-      </div>
-
       {hintRight && (
         <div
-          className="pointer-events-none absolute inset-y-0 right-0 z-[1] flex w-9 items-center justify-end bg-gradient-to-l from-background from-25% via-background/80 to-transparent pr-0.5"
+          className="pointer-events-none absolute inset-y-0 right-0 z-[1] flex w-10 items-center justify-end bg-gradient-to-l from-background from-35% via-background/75 to-transparent pr-1"
           aria-hidden
         >
-          <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground/80" strokeWidth={2.5} />
+          <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/80" strokeWidth={2.5} />
+        </div>
+      )}
+      {thumbMetrics.visible && (
+        <div className="pointer-events-none absolute left-0 right-0 bottom-0 h-[18px] z-[4]">
+          <div
+            className="pointer-events-auto absolute left-2 right-2 bottom-0 h-[14px] rounded-full"
+            style={{
+              backgroundColor: 'hsl(var(--card))',
+              boxShadow: 'inset 0 0 0 1px hsl(var(--foreground) / 0.28)',
+            }}
+          />
+          <div
+            className="pointer-events-auto absolute bottom-0 h-[14px] rounded-full border-2 cursor-ew-resize select-none touch-none z-[6] transition-[box-shadow,transform] duration-150 active:scale-[0.99]"
+            style={{
+              left: thumbMetrics.left,
+              width: thumbMetrics.width,
+              borderColor: thumbPressed ? 'hsl(229 76% 61%)' : 'hsl(229 100% 69%)',
+              backgroundColor: thumbPressed ? 'hsl(229 76% 61%)' : 'hsl(229 100% 69%)',
+              boxShadow:
+                thumbPressed
+                  ? 'inset 0 0 0 1px hsl(0 0% 100% / 0.4), 0 0 26px hsl(229 100% 69% / 0.35)'
+                  : 'inset 0 0 0 1px hsl(0 0% 100% / 0.3), 0 0 18px hsl(229 100% 69% / 0.25)',
+            }}
+            onPointerDown={onThumbPointerDown}
+            role="slider"
+            aria-label="Drag to scroll new lot fields horizontally"
+            aria-valuemin={0}
+            aria-valuemax={1}
+          >
+            <div className="pointer-events-none absolute inset-0 flex items-center justify-center gap-1.5">
+              <span
+                className="block h-[8px] w-[8px] -rotate-45 border-t-2 border-l-2"
+                style={{ borderColor: 'hsl(0 0% 100% / 0.92)' }}
+                aria-hidden
+              />
+              <span
+                className="grid h-[10px] w-[10px] place-items-center rounded-full"
+                style={{ backgroundColor: 'hsl(0 0% 100% / 0.92)' }}
+                aria-hidden
+              >
+                <span
+                  className="block h-[2px] w-[2px] rounded-full"
+                  style={{ backgroundColor: 'hsl(229 100% 69%)' }}
+                />
+              </span>
+              <span
+                className="block h-[8px] w-[8px] rotate-[135deg] border-t-2 border-l-2"
+                style={{ borderColor: 'hsl(0 0% 100% / 0.92)' }}
+                aria-hidden
+              />
+            </div>
+          </div>
         </div>
       )}
     </div>
@@ -707,7 +854,13 @@ const ArrivalsPage = () => {
   const [emptyWeight, setEmptyWeight] = useState('');
   const [deductedWeight, setDeductedWeight] = useState('');
   const [freightMethod, setFreightMethod] = useState<FreightMethod>('BY_WEIGHT');
+  const handleFreightMethodChange = useCallback((value: string) => {
+    const selected = FREIGHT_METHODS.find(method => method.value === value)?.value;
+    setFreightMethod(selected ?? 'BY_WEIGHT');
+  }, []);
+
   const [freightRate, setFreightRate] = useState('');
+  const [freightKgs, setFreightKgs] = useState('1');
   const [noRental, setNoRental] = useState(false);
   const [advancePaid, setAdvancePaid] = useState('');
   const [brokerName, setBrokerName] = useState('');
@@ -722,8 +875,10 @@ const ArrivalsPage = () => {
   const [expandedDetail, setExpandedDetail] = useState<ArrivalFullDetail | null>(null);
   const [expandedDetailLoading, setExpandedDetailLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
-  const [summaryMode, setSummaryMode] = useState<'arrivals' | 'sellers' | 'lots'>('arrivals');
-  const [statusFilter, setStatusFilter] = useState<ArrivalStatus | 'COMPLETED'>('COMPLETED');
+  let summaryMode: 'arrivals' | 'sellers' | 'lots' = 'arrivals';
+  type StatusFilter = 'ALL' | ArrivalStatus;
+  const SUMMARY_STATUS_FILTERS: StatusFilter[] = ['ALL', 'PENDING', 'WEIGHED', 'AUCTIONED', 'SETTLED', 'PARTIALLY_COMPLETED'];
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('ALL');
   const [partialArrivals, setPartialArrivals] = useState<ArrivalSummary[]>([]);
   const [partialArrivalsLoading, setPartialArrivalsLoading] = useState(false);
   const [arrivalDetails, setArrivalDetails] = useState<ArrivalDetail[]>([]);
@@ -747,10 +902,53 @@ const ArrivalsPage = () => {
   const lotsScrollRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const pendingLotsScrollToEndSellerIdRef = useRef<string | null>(null);
   const newArrivalPanelScrollRef = useRef<HTMLDivElement | null>(null);
-  const [sellerSearch, setSellerSearch] = useState('');
+  const sellerNameInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
+  const pendingSellerFocusIdRef = useRef<string | null>(null);
+  const [sellerFocusNonce, setSellerFocusNonce] = useState(0);
+  // Rapid-click safety helpers (avoid stale closures around `sellers.length` / `isMultiSeller`).
+  const isMultiSellerRef = useRef(isMultiSeller);
+  const sellerCountRef = useRef(0);
+
+  // Seller row dropdown suggestions (bound to active inline seller row).
   const [sellerDropdown, setSellerDropdown] = useState(false);
-  const sellerSearchWrapRef = useRef<HTMLDivElement>(null);
-  const [dropdownPos, setDropdownPos] = useState({ top: 0, left: 0, width: 0 });
+  const sellerNameInputWrapRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const [activeSellerSearch, setActiveSellerSearch] = useState<{ sellerId: string; query: string } | null>(null);
+  const [sellerDropdownPos, setSellerDropdownPos] = useState({ top: 0, left: 0, width: 0 });
+
+  // Add Lot inline form state
+  type AddLotFormState = {
+    sellerId: string;
+    lotName: string;
+    bags: string;
+    commodityName: string;
+    variant: string;
+    errors: { lotName?: string; bags?: string; commodity?: string };
+    editingLotId?: string;
+    editingLotIdx?: number;
+  };
+  const [addLotForm, setAddLotForm] = useState<AddLotFormState | null>(null);
+  const prevSellerExpandedRef = useRef<Record<string, boolean>>({});
+
+  useEffect(() => {
+    const prevExpanded = prevSellerExpandedRef.current;
+    const newlyExpandedSeller = sellers.find((s) => {
+      const isNowExpanded = !!sellerExpanded[s.seller_vehicle_id];
+      const wasExpanded = !!prevExpanded[s.seller_vehicle_id];
+      return isNowExpanded && !wasExpanded;
+    });
+
+    prevSellerExpandedRef.current = sellerExpanded;
+    if (!newlyExpandedSeller || addLotForm) return;
+
+    setAddLotForm({
+      sellerId: newlyExpandedSeller.seller_vehicle_id,
+      lotName: "",
+      bags: "",
+      commodityName: commodities[0]?.commodity_name || "",
+      variant: "",
+      errors: {},
+    });
+  }, [addLotForm, sellers, sellerExpanded, commodities]);
 
   // Inline autofocus targets for the "New Arrival" panel/sheet.
   // We keep one ref per target because only one layout branch renders at a time.
@@ -760,6 +958,106 @@ const ArrivalsPage = () => {
   const setLotsScrollRef = useCallback((sellerId: string) => (el: HTMLDivElement | null) => {
     lotsScrollRefs.current[sellerId] = el;
   }, []);
+
+  const scrollSellerLotsToLatest = useCallback((sellerId: string) => {
+    const tryScroll = (attempt: number) => {
+      const el = lotsScrollRefs.current[sellerId];
+      if (!el) {
+        if (attempt < 5) {
+          requestAnimationFrame(() => tryScroll(attempt + 1));
+        }
+        return;
+      }
+
+      el.scrollTop = el.scrollHeight;
+      const lastRow = el.querySelector('tbody tr:last-child') as HTMLElement | null;
+      lastRow?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      // Keep the lots panel itself in viewport so users can immediately see
+      // the newly added row instead of only scrolling internally.
+      el.scrollIntoView({ block: 'nearest', behavior: 'auto' });
+
+      const panel = newArrivalPanelScrollRef.current;
+      if (panel && panel.contains(el)) {
+        const panelRect = panel.getBoundingClientRect();
+        const elRect = el.getBoundingClientRect();
+        const nextTop = panel.scrollTop + (elRect.top - panelRect.top) - 12;
+        panel.scrollTo({ top: Math.max(0, nextTop), behavior: 'auto' });
+      }
+    };
+
+    tryScroll(0);
+  }, []);
+
+  const ensureLastThreeLotsVisible = useCallback((sellerId: string) => {
+    const tryEnsure = (attempt: number) => {
+      const el = lotsScrollRefs.current[sellerId];
+      if (!el) {
+        if (attempt < 6) requestAnimationFrame(() => tryEnsure(attempt + 1));
+        return;
+      }
+
+      const vp = window.visualViewport;
+      const isKeyboardLikelyOpen = !!vp && (window.innerHeight - vp.height) > 50;
+      if (!isKeyboardLikelyOpen) {
+        if (attempt < 6) window.setTimeout(() => tryEnsure(attempt + 1), 100);
+        return;
+      }
+
+      const rows = Array.from(el.querySelectorAll('tbody tr')) as HTMLElement[];
+      if (rows.length === 0) return;
+
+      const formPanel = el.closest('.overflow-hidden')?.previousElementSibling;
+      const addLotFormDiv = formPanel?.querySelector('[key="add-lot-form"]') || 
+                            document.querySelector(`[class*="overflow-hidden"] .bg-muted\\/10`);
+
+      const panel = newArrivalPanelScrollRef.current;
+      if (!panel || !vp) return;
+
+      const availableHeight = vp.height;
+      const formHeight = addLotFormDiv?.getBoundingClientRect().height || 120;
+      const rowHeight = rows[0]?.getBoundingClientRect().height || 40;
+      const headerHeight = el.querySelector('thead')?.getBoundingClientRect().height || 40;
+      const threeRowsHeight = rowHeight * 3 + headerHeight;
+
+      const targetScrollTop = Math.max(0, el.scrollHeight - threeRowsHeight);
+      el.scrollTop = targetScrollTop;
+
+      requestAnimationFrame(() => {
+        if (addLotFormDiv instanceof HTMLElement) {
+          addLotFormDiv.scrollIntoView({ block: 'start', behavior: 'smooth' });
+          
+          window.setTimeout(() => {
+            const formRect = addLotFormDiv.getBoundingClientRect();
+            const adjustment = Math.min(0, availableHeight - (formRect.bottom + threeRowsHeight + 20));
+            if (adjustment < 0) {
+              panel.scrollBy({ top: -adjustment, behavior: 'smooth' });
+            }
+          }, 150);
+        }
+      });
+    };
+
+    tryEnsure(0);
+  }, []);
+
+  const handleLotEntryFieldFocus = useCallback((sellerId: string) => {
+    ensureLastThreeLotsVisible(sellerId);
+    requestAnimationFrame(() => ensureLastThreeLotsVisible(sellerId));
+    window.setTimeout(() => ensureLastThreeLotsVisible(sellerId), 120);
+    window.setTimeout(() => ensureLastThreeLotsVisible(sellerId), 280);
+    window.setTimeout(() => ensureLastThreeLotsVisible(sellerId), 520);
+    window.setTimeout(() => ensureLastThreeLotsVisible(sellerId), 900);
+    window.setTimeout(() => ensureLastThreeLotsVisible(sellerId), 1300);
+  }, [ensureLastThreeLotsVisible]);
+
+  const expandOnlySeller = useCallback((sellerId: string) => {
+    setSellerExpanded(
+      sellers.reduce<Record<string, boolean>>((acc, entry) => {
+        acc[entry.seller_vehicle_id] = entry.seller_vehicle_id === sellerId;
+        return acc;
+      }, {})
+    );
+  }, [sellers]);
 
   const isStep1PanelOpen =
     step === 1 &&
@@ -801,6 +1099,36 @@ const ArrivalsPage = () => {
     return String(sellerSerialNumber);
   }, []);
 
+  const mapSellerInfoRows = useCallback((detailSellers: ArrivalFullDetail['sellers']) => {
+    return detailSellers
+      .map((seller, index) => ({ seller, index }))
+      .sort((a, b) => {
+        const aSerial =
+          a.seller.sellerSerialNumber != null && a.seller.sellerSerialNumber > 0
+            ? a.seller.sellerSerialNumber
+            : Number.MAX_SAFE_INTEGER;
+        const bSerial =
+          b.seller.sellerSerialNumber != null && b.seller.sellerSerialNumber > 0
+            ? b.seller.sellerSerialNumber
+            : Number.MAX_SAFE_INTEGER;
+        if (aSerial !== bSerial) return aSerial - bSerial;
+        return a.index - b.index;
+      })
+      .map(({ seller }) => ({
+        sellerSerialNumber: seller.sellerSerialNumber,
+        sellerName: seller.sellerName,
+        sellerMark: seller.sellerMark,
+        lots: seller.lots.map((lot) => ({
+          id: lot.id,
+          lotName: lot.lotName,
+          commodityName: lot.commodityName,
+          bagCount: lot.bagCount,
+          brokerTag: lot.brokerTag,
+          variant: lot.variant,
+        })),
+      }));
+  }, []);
+
   const isArrivalDirty = useMemo(() => {
     if (!isArrivalPanelOpen) return false;
     if (editLoading) return false;
@@ -817,6 +1145,7 @@ const ArrivalsPage = () => {
         deductedWeight,
         freightMethod,
         freightRate,
+        freightKgs,
         noRental,
         advancePaid,
         brokerName,
@@ -843,6 +1172,7 @@ const ArrivalsPage = () => {
       deductedWeight.trim(),
       freightMethod !== 'BY_WEIGHT' ? 'changedFreightMethod' : '',
       freightRate.trim(),
+      freightKgs.trim() !== '1' ? freightKgs.trim() : '',
       noRental ? 'noRental' : '',
       advancePaid.trim(),
       brokerName.trim(),
@@ -866,6 +1196,7 @@ const ArrivalsPage = () => {
     deductedWeight,
     freightMethod,
     freightRate,
+    freightKgs,
     noRental,
     advancePaid,
     brokerName,
@@ -885,7 +1216,9 @@ const ArrivalsPage = () => {
     empty_weight: parseFloat(emptyWeight) || 0,
     deducted_weight: parseFloat(deductedWeight) || 0,
     freight_method: freightMethod,
+    freight_mode: freightMethod,
     freight_rate: parseFloat(freightRate) || 0,
+    freight_kgs: freightMethod === 'BY_WEIGHT' ? (parseFloat(freightKgs) || 1) : undefined,
     no_rental: noRental,
     advance_paid: parseFloat(advancePaid) || 0,
     broker_name: brokerName || undefined,
@@ -911,7 +1244,7 @@ const ArrivalsPage = () => {
         })),
       };
     }),
-  }), [isMultiSeller, vehicleNumber, loadedWeight, emptyWeight, deductedWeight, freightMethod, freightRate, noRental, advancePaid, brokerName, brokerContactId, narration, godown, gatepassNumber, origin, sellers]);
+  }), [isMultiSeller, vehicleNumber, loadedWeight, emptyWeight, deductedWeight, freightMethod, freightRate, freightKgs, noRental, advancePaid, brokerName, brokerContactId, narration, godown, gatepassNumber, origin, sellers]);
 
   const handlePartialSave = useCallback(async (): Promise<boolean> => {
     try {
@@ -930,6 +1263,7 @@ const ArrivalsPage = () => {
           deducted_weight: payload.deducted_weight,
           freight_method: payload.freight_method,
           freight_rate: payload.freight_rate,
+          freight_kgs: payload.freight_kgs,
           no_rental: payload.no_rental,
           advance_paid: payload.advance_paid,
           multi_seller: payload.is_multi_seller,
@@ -940,6 +1274,7 @@ const ArrivalsPage = () => {
         await arrivalsApi.create(buildPartialPayload());
       }
       await loadArrivalsFromApi();
+      await loadContactsFromApi();
       resetForm();
       toast.success('Partial arrival saved');
       return true;
@@ -977,17 +1312,19 @@ const ArrivalsPage = () => {
   }, [confirmIfDirty]);
 
   const refreshBrokerDropdownPos = useCallback(() => {
-    if (brokerSearchWrapRef.current) {
-      const rect = brokerSearchWrapRef.current.getBoundingClientRect();
-      setBrokerDropdownPos({ top: rect.bottom + 4, left: rect.left, width: rect.width });
-    }
-  }, []);
-
-  const refreshDropdownPos = useCallback(() => {
-    if (sellerSearchWrapRef.current) {
-      const rect = sellerSearchWrapRef.current.getBoundingClientRect();
-      setDropdownPos({ top: rect.bottom + 4, left: rect.left, width: rect.width });
-    }
+    const el = brokerSearchWrapRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const vw = typeof window !== 'undefined' ? window.innerWidth : rect.width;
+    const pad = 12;
+    const maxW = Math.max(0, vw - pad * 2);
+    const minReadableW = Math.min(320, maxW);
+    let width = Math.max(rect.width, minReadableW);
+    width = Math.min(width, maxW);
+    let left = rect.left;
+    if (left + width > vw - pad) left = Math.max(pad, vw - pad - width);
+    if (left < pad) left = pad;
+    setBrokerDropdownPos({ top: rect.bottom + 4, left, width });
   }, []);
 
   // ── Validation (raghav branch: field-level checks; no UI wiring — validation only) ──────────────────
@@ -1049,6 +1386,14 @@ const ArrivalsPage = () => {
     return fr < 0 || fr > 100000;
   }, [noRental, freightRate]);
 
+  const isFreightKgsInvalid = useMemo(() => {
+    if (noRental || freightMethod !== 'BY_WEIGHT') return false;
+    if (!freightKgs || !freightKgs.trim()) return false;
+    const kgs = parseFloat(freightKgs);
+    if (Number.isNaN(kgs)) return true;
+    return kgs <= 0 || kgs > 100000;
+  }, [noRental, freightMethod, freightKgs]);
+
   const isAdvancePaidInvalid = useMemo(() => {
     if (!advancePaid || !advancePaid.trim()) return false;
     const ap = parseFloat(advancePaid) || 0;
@@ -1074,6 +1419,15 @@ const ArrivalsPage = () => {
     if (isDynamic && contacts.some(c => c.mark && c.mark.toLowerCase() === markLower)) return 'This mark is already in use by a contact';
     return null;
   };
+  const hasIncompleteSellerDetails = useMemo(() => {
+    return sellers.some((s, sellerIdx) => {
+      const sellerName = (s.seller_name ?? '').trim();
+      if (!sellerName) return true;
+      if (isSellerNameInvalid(s)) return true;
+      if (isSellerMarkInvalid(s, sellerIdx)) return true;
+      return false;
+    });
+  }, [sellers, contacts]);
   const isLotNameInvalid = (l: LotEntry) => {
     const ln = (l.lot_name ?? '').trim();
     if (!ln) return false;
@@ -1126,7 +1480,7 @@ const ArrivalsPage = () => {
 
   const isFormInvalid = useMemo(() => {
     if (isVehicleNumberInvalid || isLoadedWeightInvalid || isEmptyWeightInvalid || isDeductedWeightInvalid ||
-        isGodownInvalid || isGatepassNumberInvalid || isBrokerNameInvalid || isFreightRateInvalid || isAdvancePaidInvalid) return true;
+        isGodownInvalid || isGatepassNumberInvalid || isBrokerNameInvalid || isFreightRateInvalid || isFreightKgsInvalid || isAdvancePaidInvalid) return true;
     for (let i = 0; i < sellers.length; i++) {
       const s = sellers[i];
       if (isSellerNameInvalid(s) || isSellerMarkInvalid(s, i)) return true;
@@ -1136,7 +1490,7 @@ const ArrivalsPage = () => {
       }
     }
     return false;
-  }, [isVehicleNumberInvalid, isLoadedWeightInvalid, isEmptyWeightInvalid, isDeductedWeightInvalid, isGodownInvalid, isGatepassNumberInvalid, isBrokerNameInvalid, isFreightRateInvalid, isAdvancePaidInvalid, sellers, contacts, lotNameCountsBySellerId, isLotNameDuplicateInvalid, isSellerMarkInvalid]);
+  }, [isVehicleNumberInvalid, isLoadedWeightInvalid, isEmptyWeightInvalid, isDeductedWeightInvalid, isGodownInvalid, isGatepassNumberInvalid, isBrokerNameInvalid, isFreightRateInvalid, isFreightKgsInvalid, isAdvancePaidInvalid, sellers, contacts, lotNameCountsBySellerId, isLotNameDuplicateInvalid, isSellerMarkInvalid]);
 
   // Summary stats for four cards (mobile-first, same as raghav-style UI)
   const totalVehicles = useMemo(() => apiArrivals.length, [apiArrivals]);
@@ -1146,7 +1500,12 @@ const ArrivalsPage = () => {
   const totalNetWeightTons = useMemo(() => (totalNetWeightKg > 0 ? totalNetWeightKg / 1000 : 0), [totalNetWeightKg]);
 
   const filteredArrivals = useMemo(() => {
-    const source = statusFilter === 'PARTIALLY_COMPLETED' ? partialArrivals : apiArrivals;
+    const source =
+      statusFilter === 'PARTIALLY_COMPLETED'
+        ? partialArrivals
+        : statusFilter === 'ALL'
+          ? [...apiArrivals, ...partialArrivals]
+          : apiArrivals;
     let result = source;
     const q = searchQuery.trim().toLowerCase();
     if (q) {
@@ -1157,15 +1516,15 @@ const ArrivalsPage = () => {
         return false;
       });
     }
-    if (statusFilter !== 'COMPLETED' && statusFilter !== 'PARTIALLY_COMPLETED') {
+    if (statusFilter === 'PENDING' || statusFilter === 'WEIGHED' || statusFilter === 'AUCTIONED' || statusFilter === 'SETTLED') {
       result = result.filter(a => getArrivalStatus(a) === statusFilter);
     }
     return result;
   }, [apiArrivals, partialArrivals, searchQuery, statusFilter, arrivalDetails]);
 
   const statusCounts = useMemo(() => {
-    const counts: Record<ArrivalStatus | 'COMPLETED', number> = {
-      COMPLETED: apiArrivals.length,
+    const counts: Record<StatusFilter, number> = {
+      ALL: apiArrivals.length + partialArrivals.length,
       PENDING: 0, WEIGHED: 0, AUCTIONED: 0, SETTLED: 0, PARTIALLY_COMPLETED: partialArrivals.length,
     };
     apiArrivals.forEach(a => {
@@ -1179,14 +1538,19 @@ const ArrivalsPage = () => {
     if (s === 'PARTIALLY_COMPLETED') return 'Partially Completed';
     return s.charAt(0) + s.slice(1).toLowerCase();
   };
-  const activeArrivalsLoading = statusFilter === 'PARTIALLY_COMPLETED' ? partialArrivalsLoading : apiArrivalsLoading;
+  const activeArrivalsLoading =
+    statusFilter === 'ALL'
+      ? apiArrivalsLoading || partialArrivalsLoading
+      : statusFilter === 'PARTIALLY_COMPLETED'
+        ? partialArrivalsLoading
+        : apiArrivalsLoading;
 
-  const loadArrivalsFromApi = async () => {
+  const loadArrivalsFromApi = useCallback(async () => {
     setApiArrivalsLoading(true);
     setPartialArrivalsLoading(true);
     try {
-      const statusParam = (statusFilter !== 'COMPLETED' && statusFilter !== 'PARTIALLY_COMPLETED') ? statusFilter : undefined;
-      const list = await arrivalsApi.list(0, 100, statusParam, false);
+      // Always load full arrivals list so summary counts stay stable across filter changes.
+      const list = await arrivalsApi.list(0, 100, undefined, false);
       setApiArrivals(list);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to load arrivals';
@@ -1197,7 +1561,16 @@ const ArrivalsPage = () => {
     }
     arrivalsApi.list(0, 100, undefined, true).then(setPartialArrivals).catch(() => setPartialArrivals([])).finally(() => setPartialArrivalsLoading(false));
     arrivalsApi.listDetail(0, 500).then(setArrivalDetails).catch(() => setArrivalDetails([]));
-  };
+  }, []);
+
+  const loadContactsFromApi = useCallback(async () => {
+    try {
+      const loaded = await contactApi.list({ scope: 'participants' });
+      setContacts(loaded);
+    } catch (err) {
+      console.error('Failed to reload contacts:', err);
+    }
+  }, []);
 
   useEffect(() => {
     contactApi.list({ scope: 'participants' }).then(setContacts);
@@ -1207,19 +1580,7 @@ const ArrivalsPage = () => {
 
   useEffect(() => {
     loadArrivalsFromApi();
-  }, [statusFilter]);
-
-  // Close seller dropdown on scroll or resize (portal is fixed-position; use document so any scrollable container closes it)
-  useEffect(() => {
-    if (!sellerDropdown) return;
-    const close = () => setSellerDropdown(false);
-    document.addEventListener('scroll', close, true);
-    window.addEventListener('resize', close);
-    return () => {
-      document.removeEventListener('scroll', close, true);
-      window.removeEventListener('resize', close);
-    };
-  }, [sellerDropdown]);
+  }, [loadArrivalsFromApi]);
 
   // Close broker dropdown on scroll or resize (same: close when any scroll happens so it doesn't stay stuck)
   useEffect(() => {
@@ -1232,6 +1593,26 @@ const ArrivalsPage = () => {
       window.removeEventListener('resize', close);
     };
   }, [brokerDropdown]);
+
+  // Close seller dropdown on scroll/resize (portal is fixed-position)
+  useEffect(() => {
+    if (!sellerDropdown) return;
+    const close = () => setSellerDropdown(false);
+    document.addEventListener('scroll', close, true);
+    window.addEventListener('resize', close);
+    return () => {
+      document.removeEventListener('scroll', close, true);
+      window.removeEventListener('resize', close);
+    };
+  }, [sellerDropdown]);
+
+  // Keep refs in sync for rapid-click append-only safety.
+  useEffect(() => {
+    isMultiSellerRef.current = isMultiSeller;
+  }, [isMultiSeller]);
+  useEffect(() => {
+    sellerCountRef.current = sellers.length;
+  }, [sellers.length]);
 
   // REQ-ARR-001: Tonnage Calculation
   const netWeight = useMemo(() => {
@@ -1265,7 +1646,11 @@ const ArrivalsPage = () => {
     if (noRental) return 0;
     const rate = parseFloat(freightRate) || 0;
     switch (freightMethod) {
-      case 'BY_WEIGHT': return finalBillableWeight * rate;
+      case 'BY_WEIGHT': {
+        const kgs = parseFloat(freightKgs) || 0;
+        if (kgs <= 0) return 0;
+        return (finalBillableWeight * rate) / kgs;
+      }
       case 'BY_COUNT': {
         const totalBags = sellers.reduce((s, sel) => s + sel.lots.reduce((ls, l) => ls + l.quantity, 0), 0);
         return totalBags * rate;
@@ -1274,7 +1659,7 @@ const ArrivalsPage = () => {
       case 'DIVIDE_BY_WEIGHT': return rate; // Distributed proportionally later (REQ-ARR-002)
       default: return 0;
     }
-  }, [freightMethod, freightRate, noRental, finalBillableWeight, sellers]);
+  }, [freightMethod, freightRate, freightKgs, noRental, finalBillableWeight, sellers]);
 
   // Broker: filter contacts by name, phone, or mark (same as seller search)
   const filteredBrokers = useMemo(() => {
@@ -1287,64 +1672,125 @@ const ArrivalsPage = () => {
     ).slice(0, 8);
   }, [brokerName, contacts]);
 
-  // REQ-CON-004 / REQ-ARR-007: Unified contact search via mark or phone
+  // Seller suggestions for "Name" input in the add panel.
   const filteredContacts = useMemo(() => {
-    if (!sellerSearch) return [];
-    const q = sellerSearch.toLowerCase();
+    const query = activeSellerSearch?.query?.trim();
+    if (!query) return [];
+    const q = query.toLowerCase();
     return contacts.filter(c =>
       (c.name?.toLowerCase()?.includes(q)) ||
       (c.phone?.includes(q)) ||
       (c.mark?.toLowerCase()?.includes(q))
     ).slice(0, 5);
-  }, [sellerSearch, contacts]);
+  }, [activeSellerSearch, contacts]);
 
-  const addSeller = (contact: Contact) => {
-    if (!isMultiSeller && sellers.length >= 1) {
+  const refreshSellerDropdownPos = useCallback((sellerId: string) => {
+    const el = sellerNameInputWrapRefs.current[sellerId];
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const vw = typeof window !== 'undefined' ? window.innerWidth : rect.width;
+    const pad = 12;
+    const maxW = Math.max(0, vw - pad * 2);
+    // Prefer at least ~min(320px, viewport) so suggestion rows aren’t crushed beside the Add Seller button.
+    const minReadableW = Math.min(320, maxW);
+    let width = Math.max(rect.width, minReadableW);
+    width = Math.min(width, maxW);
+    let left = rect.left;
+    if (left + width > vw - pad) left = Math.max(pad, vw - pad - width);
+    if (left < pad) left = pad;
+    setSellerDropdownPos({ top: rect.bottom + 4, left, width });
+  }, []);
+
+  /** Append an empty seller card immediately (free-text seller). */
+  const addSellerInstant = (sellerName?: string, sellerMark?: string) => {
+    if (!isMultiSellerRef.current && sellerCountRef.current >= 1) {
       toast.error('Single-seller arrival allows only one seller');
       return;
     }
-    if (sellers.some(s => s.contact_id === contact.contact_id)) {
+    if (hasIncompleteSellerDetails) {
+      toast.error('Complete existing seller details before adding a new seller');
+      return;
+    }
+
+    const newSellerId = crypto.randomUUID();
+    const newSeller: SellerEntry = {
+      seller_vehicle_id: newSellerId,
+      contact_id: '',
+      seller_serial_number: null,
+      seller_name: sellerName ?? '',
+      seller_phone: '',
+      seller_mark: sellerMark ?? '',
+      lots: [],
+    };
+
+    sellerCountRef.current += 1;
+    setSellers(prev => [...prev, newSeller]);
+    setSellerExpanded(prev => ({ ...prev, [newSellerId]: false }));
+
+    pendingSellerFocusIdRef.current = newSellerId;
+    setSellerFocusNonce(n => n + 1);
+  };
+
+  const fillSellerRowFromContact = (sellerId: string, contact: Contact) => {
+    const contactId = contact.contact_id != null ? String(contact.contact_id) : '';
+    if (sellers.some(s => s.seller_vehicle_id !== sellerId && s.contact_id === contactId)) {
       toast.error('Seller already added to this vehicle');
       return;
     }
-    const newSeller: SellerEntry = {
-      seller_vehicle_id: crypto.randomUUID(),
-      contact_id: contact.contact_id,
-      seller_serial_number: null,
-      seller_name: contact.name,
-      seller_phone: contact.phone,
-      seller_mark: contact.mark || '',
-      lots: [],
-    };
-    setSellers(prev => [...prev, newSeller]);
-    setSellerExpanded(prev => ({ ...prev, [newSeller.seller_vehicle_id]: true }));
-    setSellerSearch('');
+    setSellers(prev => prev.map((s) => (
+      s.seller_vehicle_id !== sellerId
+        ? s
+        : {
+            ...s,
+            contact_id: contactId,
+            seller_name: contact.name ?? '',
+            seller_phone: contact.phone ?? '',
+            seller_mark: contact.mark ?? '',
+          }
+    )));
+    setActiveSellerSearch(null);
     setSellerDropdown(false);
   };
 
-  /** Add a seller by name/phone only (no contact). Prefills name from the search box. */
-  const addSellerByName = () => {
-    if (!isMultiSeller && sellers.length >= 1) {
-      toast.error('Single-seller arrival allows only one seller');
+  const collapseOpenSellerSectionsBeforeAdd = () => {
+    setSellerExpanded(
+      sellers.reduce<Record<string, boolean>>((acc, entry) => {
+        acc[entry.seller_vehicle_id] = false;
+        return acc;
+      }, {})
+    );
+    setAddLotForm(null);
+    setActiveSellerSearch(null);
+    setSellerDropdown(false);
+  };
+
+  const openSellerSearchPanel = () => {
+    if (hasIncompleteSellerDetails) {
+      toast.error('Complete existing seller details before adding a new seller');
       return;
     }
-    const nameFromSearch = sellerSearch.trim();
-    const newSeller: SellerEntry = {
-      seller_vehicle_id: crypto.randomUUID(),
-      contact_id: '',
-      seller_serial_number: null,
-      seller_name: nameFromSearch,
-      seller_phone: '',
-      seller_mark: '',
-      lots: [],
-    };
-    setSellers(prev => [...prev, newSeller]);
-    setSellerExpanded(prev => ({ ...prev, [newSeller.seller_vehicle_id]: true }));
-    setSellerSearch('');
-    setSellerDropdown(false);
+    collapseOpenSellerSectionsBeforeAdd();
+    addSellerInstant('', '');
   };
 
-  const updateSeller = (sellerIdx: number, updates: Partial<Pick<SellerEntry, 'seller_name' | 'seller_phone' | 'seller_mark'>>) => {
+  const updateSellerNameWithSuggestions = (
+    sellerIdx: number,
+    sellerId: string,
+    sellerName: string
+  ) => {
+    updateSeller(sellerIdx, { seller_name: sellerName, contact_id: '', seller_phone: '' });
+    const trimmed = sellerName.trim();
+    if (!trimmed) {
+      setActiveSellerSearch(null);
+      setSellerDropdown(false);
+      return;
+    }
+    setActiveSellerSearch({ sellerId, query: sellerName });
+    refreshSellerDropdownPos(sellerId);
+    setSellerDropdown(true);
+  };
+
+  const updateSeller = (sellerIdx: number, updates: Partial<Pick<SellerEntry, 'contact_id' | 'seller_name' | 'seller_phone' | 'seller_mark'>>) => {
     setSellers(prev => prev.map((s, i) => (i !== sellerIdx ? s : { ...s, ...updates })));
   };
 
@@ -1352,6 +1798,10 @@ const ArrivalsPage = () => {
     const sellerToRemove = sellers[idx];
     setSellers(prev => prev.filter((_, i) => i !== idx));
     if (sellerToRemove?.seller_vehicle_id) {
+      if (activeSellerSearch?.sellerId === sellerToRemove.seller_vehicle_id) {
+        setActiveSellerSearch(null);
+        setSellerDropdown(false);
+      }
       setSellerExpanded(prev => {
         const next = { ...prev };
         delete next[sellerToRemove.seller_vehicle_id];
@@ -1367,7 +1817,7 @@ const ArrivalsPage = () => {
     if (!canAddAnotherLot(seller)) return;
 
     pendingLotsScrollToEndSellerIdRef.current = seller.seller_vehicle_id;
-    setSellerExpanded(prev => ({ ...prev, [seller.seller_vehicle_id]: true }));
+    expandOnlySeller(seller.seller_vehicle_id);
 
     setSellers(prev => {
       const existingLotSerials = new Set(
@@ -1406,6 +1856,114 @@ const ArrivalsPage = () => {
     });
   };
 
+  const saveFormLot = (sellerIdx: number) => {
+    if (!addLotForm) return;
+    const sellerId = addLotForm.sellerId;
+
+    // Validate
+    const errors: AddLotFormState['errors'] = {};
+    const trimmedName = addLotForm.lotName.trim();
+    const bagsNum = parseInt(addLotForm.bags, 10);
+
+    if (!trimmedName) errors.lotName = 'Lot name is required';
+    if (!addLotForm.bags || isNaN(bagsNum) || bagsNum <= 0)
+      errors.bags = 'Enter a valid bag count (> 0)';
+    if (!addLotForm.commodityName.trim()) errors.commodity = 'Select a commodity';
+
+    // Duplicate name check (excluding current lot in edit mode)
+    const isDuplicate = sellers[sellerIdx]?.lots.some(
+      (l) => l.lot_id !== addLotForm.editingLotId &&
+             l.lot_name.trim().toLowerCase() === trimmedName.toLowerCase()
+    );
+    if (isDuplicate) errors.lotName = 'Lot name already exists for this seller';
+
+    if (Object.keys(errors).length > 0) {
+      setAddLotForm(prev => prev ? { ...prev, errors } : null);
+      return;
+    }
+
+    // Edit mode: update existing lot
+    if (addLotForm.editingLotId !== undefined && addLotForm.editingLotIdx !== undefined) {
+      updateLot(sellerIdx, addLotForm.editingLotIdx, {
+        lot_name: trimmedName,
+        quantity: bagsNum,
+        commodity_name: addLotForm.commodityName,
+        variant: addLotForm.variant,
+      });
+      toast.success(`Lot "${trimmedName}" updated successfully`);
+      setAddLotForm({
+        sellerId,
+        lotName: "",
+        bags: "",
+        commodityName: commodities[0]?.commodity_name || "",
+        variant: "",
+        errors: {},
+      });
+      return;
+    }
+
+    // Create mode: reuse serial-number logic from addLot
+    setSellers(prev => {
+      const existingLotSerials = new Set(
+        prev.flatMap(e => e.lots)
+          .map(l => l.lot_serial_number)
+          .filter((n): n is number => n != null && n >= 1)
+      );
+      let candidate = existingLotSerials.size > 0 ? Math.max(...existingLotSerials) : 0;
+      let nextSerial: number | null = null;
+      for (let attempt = 0; attempt < 9999; attempt++) {
+        candidate = candidate >= 9999 ? 1 : candidate + 1;
+        if (!existingLotSerials.has(candidate)) { nextSerial = candidate; break; }
+      }
+      if (nextSerial == null) return prev;
+
+      return prev.map((s, i) => {
+        if (i !== sellerIdx) return s;
+        return {
+          ...s,
+          lots: [...s.lots, {
+            lot_id: crypto.randomUUID(),
+            lot_name: trimmedName,
+            lot_serial_number: nextSerial,
+            quantity: bagsNum,
+            commodity_name: addLotForm.commodityName,
+            broker_tag: '',
+            variant: addLotForm.variant,
+          }],
+        };
+      });
+    });
+
+    // Expand seller panel and close form
+    expandOnlySeller(sellerId);
+    pendingLotsScrollToEndSellerIdRef.current = sellerId;
+    toast.success(`Lot "${trimmedName}" added successfully`);
+    setAddLotForm({
+      sellerId,
+      lotName: "",
+      bags: "",
+      commodityName: commodities[0]?.commodity_name || "",
+      variant: "",
+      errors: {},
+    });
+  };
+
+  const editFormLot = (si: number, li: number) => {
+    const seller = sellers[si];
+    const lot = seller?.lots[li];
+    if (!seller || !lot) return;
+    setAddLotForm({
+      sellerId: seller.seller_vehicle_id,
+      lotName: lot.lot_name,
+      bags: String(lot.quantity),
+      commodityName: lot.commodity_name,
+      variant: lot.variant ?? "",
+      errors: {},
+      editingLotId: lot.lot_id,
+      editingLotIdx: li,
+    });
+  };
+
   // Scroll the seller's lots panel to the newly added lot (internal scroll only).
   // useLayoutEffect runs synchronously after React commits the DOM (before the browser
   // paints and before MutationObserver microtasks fire), so KeyboardAvoidance's
@@ -1413,9 +1971,7 @@ const ArrivalsPage = () => {
   useLayoutEffect(() => {
     const sellerId = pendingLotsScrollToEndSellerIdRef.current;
     if (!sellerId) return;
-    const el = lotsScrollRefs.current[sellerId];
-    if (!el) return;
-    el.scrollTop = el.scrollHeight;
+    scrollSellerLotsToLatest(sellerId);
     pendingLotsScrollToEndSellerIdRef.current = null;
 
     // Mobile fix: when "+ Add Lot" auto-focuses the new input, focus is applied
@@ -1424,9 +1980,7 @@ const ArrivalsPage = () => {
     // panel to the end, also nudge the outer "New Arrival" panel scroller to
     // reveal the currently focused input.
     const panel = newArrivalPanelScrollRef.current;
-    const vp = window.visualViewport;
-    const isKeyboardLikelyOpen = !!vp && (window.innerHeight - vp.height) > 50;
-    if (!panel || !isKeyboardLikelyOpen) return;
+    if (!panel) return;
 
     const tryBringActiveIntoView = () => {
       const active = document.activeElement;
@@ -1435,13 +1989,88 @@ const ArrivalsPage = () => {
       active.scrollIntoView({ block: 'center' });
     };
 
+    // Retry at multiple intervals. The keyboard may not be open immediately,
+    // but will open shortly after focus. Longer delays ensure we catch both
+    // the initial scroll and the keyboard appearance timing.
     requestAnimationFrame(tryBringActiveIntoView);
     window.setTimeout(tryBringActiveIntoView, 120);
     window.setTimeout(tryBringActiveIntoView, 280);
     window.setTimeout(tryBringActiveIntoView, 520);
     window.setTimeout(tryBringActiveIntoView, 900);
     window.setTimeout(tryBringActiveIntoView, 1300);
-  }, [sellers, sellerExpanded]);
+    window.setTimeout(tryBringActiveIntoView, 2000);
+    window.setTimeout(tryBringActiveIntoView, 2500);
+    window.setTimeout(tryBringActiveIntoView, 3500);
+  }, [sellers, sellerExpanded, scrollSellerLotsToLatest]);
+
+  // Scroll + focus the seller card input created by the “Add Seller” button.
+  useLayoutEffect(() => {
+    const sellerId = pendingSellerFocusIdRef.current;
+    if (!sellerId) return;
+
+    const ensureSellerInputVisible = () => {
+      const input = sellerNameInputRefs.current[sellerId];
+      if (!input) return;
+
+      pendingSellerFocusIdRef.current = null;
+
+      input.scrollIntoView({ block: 'center', behavior: 'auto' });
+      
+      // Focus the input and ensure keyboard opens on mobile.
+      // On iOS, programmatic focus() alone may not trigger the keyboard
+      // when called asynchronously (via setTimeout/requestAnimationFrame).
+      input.focus({ preventScroll: false });
+      
+      // Additional trigger: simulate a click to ensure keyboard opens.
+      // This makes the browser treat it as a user-initiated action.
+      if (Capacitor.isNativePlatform()) {
+        // Use a microtask delay to ensure the input is fully rendered and focusable
+        requestAnimationFrame(() => {
+          input.click();
+        });
+      }
+
+      // Mobile keyboard: keep nudging the active element into view after focus.
+      // The keyboard may not be open immediately when focus is applied, but will
+      // open shortly after. Continue retrying to handle both the initial scroll
+      // and the keyboard appearance timing. KeyboardAvoidance will also help, but
+      // these retries ensure the scroll happens even if timing is off.
+      const panel = newArrivalPanelScrollRef.current;
+      if (!panel) return;
+
+      const tryBringActiveIntoView = () => {
+        const active = document.activeElement;
+        if (!(active instanceof HTMLElement)) return;
+        if (!panel.contains(active)) return;
+        active.scrollIntoView({ block: 'center' });
+      };
+
+      // Retry at multiple intervals to cover both pre-keyboard and post-keyboard
+      // scroll needs. Longer delays (up to 3500ms) ensure we catch the keyboard
+      // opening and any layout shifts that follow.
+      requestAnimationFrame(tryBringActiveIntoView);
+      window.setTimeout(tryBringActiveIntoView, 120);
+      window.setTimeout(tryBringActiveIntoView, 280);
+      window.setTimeout(tryBringActiveIntoView, 520);
+      window.setTimeout(tryBringActiveIntoView, 900);
+      window.setTimeout(tryBringActiveIntoView, 1300);
+      window.setTimeout(tryBringActiveIntoView, 2000);
+      window.setTimeout(tryBringActiveIntoView, 2500);
+      window.setTimeout(tryBringActiveIntoView, 3500);
+    };
+
+    // The newly added seller card can mount a little later on mobile due to
+    // render + animation timing. Retry to avoid missing the first focus cycle.
+    requestAnimationFrame(ensureSellerInputVisible);
+    window.setTimeout(ensureSellerInputVisible, 80);
+    window.setTimeout(ensureSellerInputVisible, 180);
+    window.setTimeout(ensureSellerInputVisible, 320);
+    window.setTimeout(ensureSellerInputVisible, 520);
+    window.setTimeout(ensureSellerInputVisible, 900);
+    window.setTimeout(ensureSellerInputVisible, 1300);
+    window.setTimeout(ensureSellerInputVisible, 2000);
+    window.setTimeout(ensureSellerInputVisible, 2500);
+  }, [sellerFocusNonce, sellers]);
 
   const updateLot = (sellerIdx: number, lotIdx: number, updates: Partial<LotEntry>) => {
     setSellers(prev => prev.map((s, i) => {
@@ -1509,6 +2138,7 @@ const ArrivalsPage = () => {
         partially_completed: !shouldComplete,
       });
       await loadArrivalsFromApi();
+      await loadContactsFromApi();
       resetForm();
       setShowAdd(false);
       setDesktopTab('summary');
@@ -1532,6 +2162,7 @@ const ArrivalsPage = () => {
     setDeductedWeight('');
     setFreightMethod('BY_WEIGHT');
     setFreightRate('');
+    setFreightKgs('1');
     setNoRental(false);
     setAdvancePaid('');
     setBrokerName('');
@@ -1542,7 +2173,8 @@ const ArrivalsPage = () => {
     setOrigin('');
     setSellers([]);
     setSellerExpanded({});
-    setSellerSearch('');
+    setActiveSellerSearch(null);
+    setSellerDropdown(false);
     setIsMultiSeller(true);
     setEditingVehicleId(null);
     editBaselineSnapshotRef.current = null;
@@ -1581,6 +2213,9 @@ const ArrivalsPage = () => {
   };
 
   const handleEditArrival = async (a: Pick<ArrivalSummary, 'vehicleId'>) => {
+    setActiveSellerSearch(null);
+    setSellerDropdown(false);
+    setAddLotForm(null);
     setEditingVehicleId(a.vehicleId);
     editBaselineSnapshotRef.current = null;
     setShowAdd(true);
@@ -1595,6 +2230,7 @@ const ArrivalsPage = () => {
       setDeductedWeight(detail?.deductedWeight != null ? String(detail.deductedWeight) : '');
       setFreightMethod((detail?.freightMethod as FreightMethod) ?? 'BY_WEIGHT');
       setFreightRate(detail?.freightRate != null ? String(detail.freightRate) : '');
+      setFreightKgs(detail?.freightKgs != null ? String(detail.freightKgs) : '1');
       setNoRental(Boolean(detail?.noRental));
       setAdvancePaid(detail?.advancePaid != null ? String(detail.advancePaid) : '');
       setGodown(detail?.godown ?? '');
@@ -1624,7 +2260,7 @@ const ArrivalsPage = () => {
       setSellers(mappedSellers);
       setSellerExpanded(
         mappedSellers.reduce<Record<string, boolean>>((acc, s) => {
-          acc[s.seller_vehicle_id] = true; // default expanded in edit flow too
+          acc[s.seller_vehicle_id] = false; // keep seller cards collapsed on edit open
           return acc;
         }, {})
       );
@@ -1642,6 +2278,7 @@ const ArrivalsPage = () => {
         deductedWeight: detail?.deductedWeight != null ? String(detail.deductedWeight) : '',
         freightMethod: (detail?.freightMethod as FreightMethod) ?? 'BY_WEIGHT',
         freightRate: detail?.freightRate != null ? String(detail.freightRate) : '',
+        freightKgs: detail?.freightKgs != null ? String(detail.freightKgs) : '1',
         noRental: Boolean(detail?.noRental),
         advancePaid: detail?.advancePaid != null ? String(detail.advancePaid) : '',
         brokerName: detail?.brokerName ?? '',
@@ -1691,7 +2328,9 @@ const ArrivalsPage = () => {
         empty_weight: emptyWeight ? parseFloat(emptyWeight) : undefined,
         deducted_weight: deductedWeight ? parseFloat(deductedWeight) : undefined,
         freight_method: freightMethod,
+        freight_mode: freightMethod,
         freight_rate: freightRate ? parseFloat(freightRate) : undefined,
+        freight_kgs: freightMethod === 'BY_WEIGHT' && freightKgs ? parseFloat(freightKgs) : undefined,
         no_rental: noRental,
         advance_paid: advancePaid ? parseFloat(advancePaid) : undefined,
         partially_completed: false,
@@ -1715,6 +2354,7 @@ const ArrivalsPage = () => {
         }) : undefined,
       });
       await loadArrivalsFromApi();
+      await loadContactsFromApi();
       setEditingVehicleId(null);
       resetForm();
       setShowAdd(false);
@@ -1760,15 +2400,42 @@ const ArrivalsPage = () => {
                 <Plus className="w-5 h-5 text-white" />
               </button>
             </div>
+            <div className="mt-4 grid grid-cols-2 gap-2 rounded-xl bg-white/15 p-1 backdrop-blur">
+              <button
+                type="button"
+                onClick={() => {
+                  void tryCloseArrivalPanel(() => setShowAdd(false));
+                }}
+                className={cn(
+                  "h-9 rounded-lg text-xs font-semibold transition-colors",
+                  !showAdd ? "bg-white text-[#6075FF]" : "text-white/85 hover:text-white",
+                )}
+              >
+                Summary
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  resetForm();
+                  setShowAdd(true);
+                }}
+                className={cn(
+                  "h-9 rounded-lg text-xs font-semibold transition-colors",
+                  showAdd ? "bg-white text-[#6075FF]" : "text-white/85 hover:text-white",
+                )}
+              >
+                New Arrival
+              </button>
+            </div>
           </div>
         </div>
       )}
 
       {/* ═══ DESKTOP: TAB LAYOUT ═══ */}
       {isDesktop && (
-        <div className="px-8 pb-6">
+        <div className="px-4 sm:px-6 lg:px-8 pb-6 max-w-[100vw] overflow-x-hidden">
           {/* Tab Bar */}
-          <div className="flex items-center gap-1 mb-6 border-b border-border/40">
+          <div className="flex min-w-0 flex-wrap items-center gap-1 border-b border-border/40 pb-px mb-6 overflow-x-auto [-webkit-overflow-scrolling:touch]">
             <button
               onClick={() => {
                 void tryCloseArrivalPanel(() => setDesktopTab('summary'));
@@ -1819,7 +2486,7 @@ const ArrivalsPage = () => {
                 ) : (
                   <>
                     {/* Four summary cards — raghav: all blue icon #6075FF */}
-                    <div className="grid grid-cols-4 gap-4 mb-6">
+                    <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4 mb-4">
                       <div className="bg-white dark:bg-card border border-border/40 shadow-sm rounded-2xl p-4 flex items-center gap-3">
                         <div className="w-10 h-10 rounded-xl bg-[#6075FF] flex items-center justify-center shadow-sm shadow-[#6075FF]/20">
                           <Truck className="w-5 h-5 text-white" />
@@ -1857,42 +2524,49 @@ const ArrivalsPage = () => {
                         </div>
                       </div>
                     </div>
-                    {/* Search + sub-categories (Arrivals / Sellers / Lots) — blue active raghav */}
-                    <div className="flex items-center gap-4 mb-4">
-                      <div className="relative w-[300px]">
-                        <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                    {/* Search + sub-categories (Arrivals) */}
+                    <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:gap-4 mb-4 min-w-0">
+                      <div className="relative w-full min-w-0 sm:max-w-sm md:max-w-md">
+                        <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
                         <input
                           type="search"
                           placeholder="Search seller, vehicle, origin..."
                           value={searchQuery}
                           onChange={e => setSearchQuery(e.target.value)}
-                          className="w-full h-9 pl-9 pr-4 rounded-xl text-xs bg-white dark:bg-card border border-border/40 shadow-sm focus:outline-none focus-visible:ring-1 focus-visible:ring-[#6075FF]"
+                          className="w-full min-w-0 h-9 pl-9 pr-4 rounded-xl text-xs bg-white dark:bg-card border border-border/40 shadow-sm focus:outline-none focus-visible:ring-1 focus-visible:ring-[#6075FF]"
                         />
-                      </div>
-                      <div className="flex items-center gap-1.5 text-xs">
-                        <button type="button" onClick={() => setSummaryMode('arrivals')} className={cn('px-4 py-1.5 rounded-full font-medium transition-colors', summaryMode === 'arrivals' ? 'bg-[#6075FF] text-white shadow-sm' : 'bg-transparent text-muted-foreground hover:bg-muted/50')}>Arrivals ({totalVehicles})</button>
-                        <button type="button" onClick={() => setSummaryMode('sellers')} className={cn('px-4 py-1.5 rounded-full font-medium transition-colors', summaryMode === 'sellers' ? 'bg-[#6075FF] text-white shadow-sm' : 'bg-transparent text-muted-foreground hover:bg-muted/50')}>Sellers ({totalSellers})</button>
-                        <button type="button" onClick={() => setSummaryMode('lots')} className={cn('px-4 py-1.5 rounded-full font-medium transition-colors', summaryMode === 'lots' ? 'bg-[#6075FF] text-white shadow-sm' : 'bg-transparent text-muted-foreground hover:bg-muted/50')}>Lots ({totalLots})</button>
                       </div>
                     </div>
                     {summaryMode === 'arrivals' && (
-                      <div className="flex items-center gap-2 mb-4 text-[11px]">
-                        <button type="button" onClick={() => setStatusFilter('COMPLETED')} className={cn('px-4 py-1 rounded-full font-medium transition-colors', statusFilter === 'COMPLETED' ? 'bg-[#6075FF] text-white shadow-sm' : 'bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400 hover:bg-zinc-200 dark:hover:bg-zinc-700')}>Completed ({statusCounts.COMPLETED})</button>
-                        {ALL_STATUSES.map(s => (
-                          <button key={s} type="button" onClick={() => setStatusFilter(s)} className={cn('px-4 py-1 rounded-full font-medium transition-colors', statusFilter === s ? 'bg-[#6075FF] text-white shadow-sm' : 'bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400 hover:bg-zinc-200 dark:hover:bg-zinc-700')}>{statusLabel(s)} ({statusCounts[s]})</button>
+                      <div className="flex flex-wrap items-center gap-2 mb-4 text-[11px] sm:overflow-x-auto sm:flex-nowrap sm:pb-1 sm:-mx-0.5 sm:px-0.5 [-webkit-overflow-scrolling:touch]">
+                        {SUMMARY_STATUS_FILTERS.map(s => (
+                          <button
+                            key={s}
+                            type="button"
+                            onClick={() => setStatusFilter(s)}
+                            className={cn(
+                              'shrink-0 px-4 py-1.5 sm:py-1 rounded-full font-medium transition-colors min-h-[44px] sm:min-h-0',
+                              statusFilter === s
+                                ? s === 'PARTIALLY_COMPLETED'
+                                  ? 'bg-orange-500 text-white shadow-sm'
+                                  : 'bg-[#6075FF] text-white shadow-sm'
+                                : 'bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400 hover:bg-zinc-200 dark:hover:bg-zinc-700',
+                            )}
+                          >
+                            {s === 'ALL' ? 'All' : statusLabel(s)} ({statusCounts[s]})
+                          </button>
                         ))}
-                        <button type="button" onClick={() => setStatusFilter('PARTIALLY_COMPLETED')} className={cn('px-4 py-1 rounded-full font-medium transition-colors', statusFilter === 'PARTIALLY_COMPLETED' ? 'bg-orange-500 text-white shadow-sm' : 'bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400 hover:bg-zinc-200 dark:hover:bg-zinc-700')}>Partially Completed ({statusCounts.PARTIALLY_COMPLETED})</button>
                       </div>
                     )}
                     {summaryMode === 'arrivals' && (
                       filteredArrivals.length === 0 ? (
-                        statusFilter !== 'COMPLETED' ? (
+                        statusFilter !== 'ALL' ? (
                           <div className="glass-card p-12 rounded-2xl text-center">
                             <Filter className="w-12 h-12 text-muted-foreground/50 mx-auto mb-4" />
                             <h3 className="text-lg font-bold text-foreground mb-1">No {statusLabel(statusFilter)} arrivals</h3>
                             <p className="text-sm text-muted-foreground mb-4">No arrivals match the &quot;{statusLabel(statusFilter)}&quot; filter. Show all to see the full list.</p>
-                            <Button onClick={() => setStatusFilter('COMPLETED')} variant="outline" className="rounded-xl">
-                              Show completed arrivals
+                            <Button onClick={() => setStatusFilter('ALL')} variant="outline" className="rounded-xl">
+                              Show all arrivals
                             </Button>
                           </div>
                         ) : (
@@ -1911,7 +2585,7 @@ const ArrivalsPage = () => {
                           </div>
                         )
                       ) : (
-                    <div className="glass-card rounded-2xl overflow-x-auto max-w-full">
+                    <div className="glass-card rounded-2xl overflow-x-auto max-w-full [-webkit-overflow-scrolling:touch] touch-pan-x">
                       <table className="w-full min-w-[56rem] text-sm">
                         <thead>
                           <tr className="border-b border-border/40 bg-muted/30">
@@ -1974,8 +2648,8 @@ const ArrivalsPage = () => {
                                         {expandedDetailLoading ? (
                                           <p className="text-sm text-muted-foreground">Loading…</p>
                                         ) : expandedDetail ? (
-                                          <div className="overflow-x-auto -mx-1 px-1">
-                                          <div className="grid grid-cols-2 gap-4 text-sm min-w-[36rem]">
+                                          <div className="overflow-x-auto -mx-1 px-1 max-w-full [-webkit-overflow-scrolling:touch] touch-pan-x">
+                                          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 text-sm min-w-0 w-full">
                                             <div className="space-y-3">
                                               <FreightDetailsCard
                                                 freightRate={expandedDetail.freightRate ?? 0}
@@ -1988,18 +2662,7 @@ const ArrivalsPage = () => {
                                             </div>
                                             <div className="space-y-3">
                                               <SellerInfoCard
-                                                sellers={expandedDetail.sellers.map(s => ({
-                                                  sellerName: s.sellerName,
-                                                  sellerMark: s.sellerMark,
-                                                  lots: s.lots.map(l => ({
-                                                    id: l.id,
-                                                    lotName: l.lotName,
-                                                    commodityName: l.commodityName,
-                                                    bagCount: l.bagCount,
-                                                    brokerTag: l.brokerTag,
-                                                    variant: l.variant,
-                                                  })),
-                                                }))}
+                                                sellers={mapSellerInfoRows(expandedDetail.sellers)}
                                                 hidePrint
                                                 onRefresh={() => loadExpandedDetail(expandedDetail.vehicleId)}
                                               />
@@ -2026,7 +2689,7 @@ const ArrivalsPage = () => {
                     </div>
                       )
                     )}
-                    {summaryMode === 'sellers' && (
+                    {false && (
                       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
                         {filteredArrivals.flatMap(a => {
                           const detail = arrivalDetails.find(d => String(d.vehicleId) === String(a.vehicleId));
@@ -2070,7 +2733,7 @@ const ArrivalsPage = () => {
                         })}
                       </div>
                     )}
-                    {summaryMode === 'lots' && (
+                    {false && (
                       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
                         {filteredArrivals.flatMap(a => {
                           const detail = arrivalDetails.find(d => String(d.vehicleId) === String(a.vehicleId));
@@ -2120,11 +2783,11 @@ const ArrivalsPage = () => {
             {desktopTab === 'new-arrival' && (
               <motion.div key="new-arrival" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} transition={{ duration: 0.2 }}>
                 {/* Sub-tabs: Multi-Seller / Single Seller */}
-                <div className="flex items-center gap-2 mb-5">
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-2 mb-5 min-w-0">
                   <button
                     onClick={() => { setIsMultiSeller(true); resetForm(); setIsMultiSeller(true); }}
                     className={cn(
-                      "px-4 py-2.5 rounded-xl text-sm font-semibold transition-all",
+                      "px-4 py-2.5 rounded-xl text-sm font-semibold transition-all shrink-0",
                       isMultiSeller
                         ? 'bg-gradient-to-r from-blue-500 to-violet-500 text-white shadow-md'
                         : 'bg-muted/50 text-muted-foreground hover:bg-muted'
@@ -2136,7 +2799,7 @@ const ArrivalsPage = () => {
                   <button
                     onClick={() => { setIsMultiSeller(false); resetForm(); setIsMultiSeller(false); }}
                     className={cn(
-                      "px-4 py-2.5 rounded-xl text-sm font-semibold transition-all",
+                      "px-4 py-2.5 rounded-xl text-sm font-semibold transition-all shrink-0",
                       !isMultiSeller
                         ? 'bg-gradient-to-r from-blue-500 to-violet-500 text-white shadow-md'
                         : 'bg-muted/50 text-muted-foreground hover:bg-muted'
@@ -2145,19 +2808,19 @@ const ArrivalsPage = () => {
                     <Users className="w-4 h-4 inline mr-1.5" />
                     Single Seller
                   </button>
-                  <p className="ml-3 text-xs text-muted-foreground">
+                  <p className="w-full min-w-0 text-xs text-muted-foreground xl:ml-3 xl:w-auto xl:flex-1">
                     {isMultiSeller ? 'Multi-seller vehicle arrival (e.g., Bangalore APMC)' : 'Single seller arrival (e.g., Gadag, Byadagi APMC)'}
                   </p>
                 </div>
 
                 {/* Desktop form: two-column layout */}
                 {editingVehicleId != null && editLoading ? (
-                  <div className="glass-card rounded-2xl p-12 text-center">
+                <div className="glass-card rounded-2xl p-12 text-center">
                     <p className="text-muted-foreground font-medium">Loading arrival details…</p>
                     <p className="text-xs text-muted-foreground mt-1">Fetching vehicle, sellers and lots</p>
                   </div>
                 ) : (
-                <div className="grid grid-cols-2 gap-6">
+                <div className="grid grid-cols-1 gap-6">
                   {/* LEFT: Vehicle & Tonnage */}
                   <div className="space-y-4">
                     <div className="flex items-center gap-2 mb-1">
@@ -2223,18 +2886,24 @@ const ArrivalsPage = () => {
                     </div>
 
                     <div className="glass-card rounded-2xl p-4">
-                      <div className="grid grid-cols-2 gap-3">
-                        <div>
-                          <label className={cn("text-xs font-bold uppercase tracking-wider mb-2 block", isGodownInvalid ? "text-red-500" : "text-muted-foreground")}>
+                      <div className="grid grid-cols-1 gap-3 min-w-0 sm:grid-cols-2 sm:gap-3 sm:items-start">
+                        <div className="min-w-0">
+                          <label className={cn(
+                            "text-xs font-bold uppercase tracking-wider mb-2 block leading-snug sm:mb-2 sm:flex sm:min-h-[2.85rem] sm:items-end sm:pb-0.5",
+                            isGodownInvalid ? "text-red-500" : "text-muted-foreground",
+                          )}>
                             Godown (optional) {isGodownInvalid && '⚠ 2–50, letters only'}
                           </label>
-                          <Input placeholder="Godown name (optional)" value={godown} onChange={e => setGodown(e.target.value)} className={cn("h-11 rounded-xl text-sm", isGodownInvalid && "border-red-500 ring-2 ring-red-500/30 bg-red-50 dark:bg-red-950/20")} maxLength={50} />
+                          <Input placeholder="Godown name (optional)" value={godown} onChange={e => setGodown(e.target.value)} className={cn("h-11 w-full min-w-0 rounded-xl text-sm", isGodownInvalid && "border-red-500 ring-2 ring-red-500/30 bg-red-50 dark:bg-red-950/20")} maxLength={50} />
                         </div>
-                        <div>
-                          <label className={cn("text-xs font-bold uppercase tracking-wider mb-2 block", isGatepassNumberInvalid ? "text-red-500" : "text-muted-foreground")}>
+                        <div className="min-w-0">
+                          <label className={cn(
+                            "text-xs font-bold uppercase tracking-wider mb-2 block leading-snug sm:mb-2 sm:flex sm:min-h-[2.85rem] sm:items-end sm:pb-0.5",
+                            isGatepassNumberInvalid ? "text-red-500" : "text-muted-foreground",
+                          )}>
                             Gatepass (optional) {isGatepassNumberInvalid && '⚠ 1–30, alphanumeric'}
                           </label>
-                          <Input placeholder="Gatepass no. (optional)" value={gatepassNumber} onChange={e => setGatepassNumber(e.target.value.length <= 30 ? e.target.value : gatepassNumber)} className={cn("h-11 rounded-xl text-sm", isGatepassNumberInvalid && "border-red-500 ring-2 ring-red-500/30 bg-red-50 dark:bg-red-950/20")} maxLength={30} />
+                          <Input placeholder="Gatepass no. (optional)" value={gatepassNumber} onChange={e => setGatepassNumber(e.target.value.length <= 30 ? e.target.value : gatepassNumber)} className={cn("h-11 w-full min-w-0 rounded-xl text-sm", isGatepassNumberInvalid && "border-red-500 ring-2 ring-red-500/30 bg-red-50 dark:bg-red-950/20")} maxLength={30} />
                         </div>
                       </div>
                     </div>
@@ -2265,35 +2934,75 @@ const ArrivalsPage = () => {
                       <label className="text-xs font-bold text-amber-600 dark:text-amber-400 uppercase tracking-wider mb-3 block flex items-center gap-1.5">
                         <Banknote className="w-3.5 h-3.5" /> Freight Calculator
                       </label>
-                      <div className="grid grid-cols-2 gap-2 mb-3">
-                        {FREIGHT_METHODS.map(m => (
-                          <button key={m.value} onClick={() => setFreightMethod(m.value)}
-                            className={cn("py-2 rounded-xl text-xs font-semibold transition-all",
-                              freightMethod === m.value ? 'bg-gradient-to-r from-amber-500 to-orange-500 text-white shadow-md' : 'bg-muted/40 text-muted-foreground')}>
-                            {m.label}
-                          </button>
-                        ))}
-                      </div>
-                      <div className="flex items-center gap-3 mb-3">
+                      <RadioGroup
+                        value={freightMethod}
+                        onValueChange={handleFreightMethodChange}
+                        className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-2 mb-3"
+                      >
+                        {FREIGHT_METHODS.map(m => {
+                          const isSelected = freightMethod === m.value;
+                          const optionId = `freight-method-desktop-${m.value.toLowerCase()}`;
+                          return (
+                            <label
+                              key={m.value}
+                              htmlFor={optionId}
+                              className={cn(
+                                'flex items-center gap-2 rounded-xl border px-3 py-2.5 text-xs font-semibold transition-all cursor-pointer min-h-11',
+                                isSelected
+                                  ? 'bg-gradient-to-r from-amber-500 to-orange-500 text-white border-orange-500 shadow-md'
+                                  : 'bg-muted/40 text-muted-foreground border-border',
+                              )}
+                            >
+                              <RadioGroupItem
+                                id={optionId}
+                                value={m.value}
+                                className={cn(
+                                  'h-4 w-4 shrink-0',
+                                  isSelected
+                                    ? 'border-white text-white'
+                                    : 'border-muted-foreground/60 text-muted-foreground',
+                                )}
+                              />
+                              <span>{m.label}</span>
+                            </label>
+                          );
+                        })}
+                      </RadioGroup>
+                      <div className="flex items-center justify-between gap-3 mb-3">
+                        <div className="flex items-center gap-2 sm:gap-3">
                         <button onClick={() => setNoRental(!noRental)}
-                          className={cn("w-14 h-8 rounded-full transition-all relative shadow-inner",
+                          className={cn("w-14 h-8 rounded-full transition-all relative shadow-inner flex-shrink-0",
                             noRental ? 'bg-gradient-to-r from-red-500 to-rose-500 shadow-red-500/30' : 'bg-slate-300 dark:bg-slate-600')}>
                           <motion.div className="w-6 h-6 rounded-full bg-white shadow-md absolute top-1" animate={{ x: noRental ? 28 : 4 }} transition={{ type: 'spring', stiffness: 500, damping: 30 }} />
                         </button>
-                        <span className="text-sm text-foreground font-medium">No Rental</span>
+                        <span className="text-xs sm:text-sm text-foreground font-medium">No Rental</span>
+                        </div>
+                        <div className="rounded-xl bg-blue-50 dark:bg-blue-950/20 px-3 py-2 text-right border border-blue-200/50 dark:border-blue-800/30">
+                          <p className="text-[9px] sm:text-[10px] text-blue-600 dark:text-blue-400 font-semibold">Net Weight</p>
+                          <p className="text-sm sm:text-base font-bold text-foreground">{finalBillableWeight}<span className="ml-1 text-[10px] sm:text-xs font-normal text-muted-foreground">kg</span></p>
+                        </div>
                       </div>
                       {!noRental && (
                         <>
-                          <div className="grid grid-cols-2 gap-3 mb-3">
-                            <div>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 sm:gap-3 mb-3">
+                            <div className={cn(freightMethod === 'BY_WEIGHT' ? '' : 'sm:col-span-2')}>
                               <label className={cn("text-[10px] mb-1 block", isFreightRateInvalid ? "text-red-500 font-bold" : "text-muted-foreground")}>
                                 Rate {isFreightRateInvalid && '⚠ 0–100,000'}
                               </label>
                               <Input type="number" placeholder="0" value={freightRate} onChange={e => setFreightRate(e.target.value)}
                                 className={cn("h-11 rounded-xl text-sm font-medium", isFreightRateInvalid && "border-red-500 ring-2 ring-red-500/30 bg-red-50 dark:bg-red-950/20")} min={0} max={100000} step="0.01" />
                             </div>
-                            <div className="rounded-xl bg-amber-50 dark:bg-amber-950/20 p-3 text-center border border-amber-200/50 dark:border-amber-800/30 flex flex-col justify-center">
-                              <p className="text-[10px] text-amber-600 dark:text-amber-400 font-semibold">Total Rental</p>
+                            {freightMethod === 'BY_WEIGHT' && (
+                              <div>
+                                <label className={cn("text-[10px] mb-1 block", isFreightKgsInvalid ? "text-red-500 font-bold" : "text-muted-foreground")}>
+                                  Kgs {isFreightKgsInvalid && '⚠ > 0'}
+                                </label>
+                                <Input type="number" placeholder="1" value={freightKgs} onChange={e => setFreightKgs(e.target.value)}
+                                  className={cn("h-11 rounded-xl text-sm font-medium", isFreightKgsInvalid && "border-red-500 ring-2 ring-red-500/30 bg-red-50 dark:bg-red-950/20")} min={0.01} max={100000} step="0.01" />
+                              </div>
+                            )}
+                            <div className="rounded-xl bg-amber-50 dark:bg-amber-950/20 p-2 sm:p-3 text-center border border-amber-200/50 dark:border-amber-800/30 flex flex-col justify-center">
+                              <p className="text-[9px] sm:text-[10px] text-amber-600 dark:text-amber-400 font-semibold">Total Rental</p>
                               <p className="text-lg font-bold text-foreground">₹{freightTotal.toLocaleString()}</p>
                             </div>
                           </div>
@@ -2325,41 +3034,13 @@ const ArrivalsPage = () => {
 
                   {/* RIGHT: Sellers & Lots */}
                   <div className="space-y-4">
-                    <div className="flex items-center gap-2 mb-1">
-                      <div className="w-6 h-6 rounded-lg bg-gradient-to-br from-emerald-500 to-teal-500 flex items-center justify-center">
-                        <Users className="w-3 h-3 text-white" />
-                      </div>
-                      <h3 className="text-sm font-bold text-foreground">Sellers & Lots</h3>
-                      <div className="flex-1 h-px bg-border/30" />
-                    </div>
-
-                    <div className={cn("glass-card rounded-2xl p-5", !isMultiSeller && sellers.length >= 1 && "opacity-60 pointer-events-none")}>
-                      <label className="text-xs font-bold text-emerald-600 dark:text-emerald-400 uppercase tracking-wider mb-2 block flex items-center gap-1.5">
-                        <Search className="w-3.5 h-3.5" /> Add Seller
-                        {!isMultiSeller && sellers.length >= 1 && <span className="text-muted-foreground font-normal normal-case">(single-seller: one only)</span>}
-                      </label>
-                        <div className="flex gap-3">
-                        <div ref={sellerSearchWrapRef} className="relative flex-1 min-w-0">
-                          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
-                          <Input
-                            placeholder="Search by name, phone, or mark…"
-                            value={sellerSearch}
-                            onChange={e => { setSellerSearch(e.target.value); refreshDropdownPos(); setSellerDropdown(true); }}
-                            onFocus={() => { if (sellerSearch) { refreshDropdownPos(); setSellerDropdown(true); } }}
-                            onBlur={() => setTimeout(() => setSellerDropdown(false), 150)}
-                            className="h-12 rounded-xl pl-10 text-sm"
-                          />
+                    {sellers.length > 0 && (
+                      <div className="flex items-center gap-2 mb-1">
+                        <div className="w-6 h-6 rounded-lg bg-gradient-to-br from-emerald-500 to-teal-500 flex items-center justify-center">
+                          <Users className="w-3 h-3 text-white" />
                         </div>
-                        <Button type="button" variant="outline" size="sm" onClick={addSellerByName} className="h-12 rounded-xl shrink-0" disabled={!isMultiSeller && sellers.length >= 1}>
-                          Add by name
-                        </Button>
-                      </div>
-                    </div>
-
-                    {sellers.length === 0 && (
-                      <div className="glass-card rounded-2xl p-8 text-center">
-                        <Users className="w-10 h-10 text-muted-foreground/30 mx-auto mb-2" />
-                        <p className="text-muted-foreground text-sm">Search and add sellers to this arrival</p>
+                        <h3 className="text-sm font-bold text-foreground">Sellers & Lots</h3>
+                        <div className="flex-1 h-px bg-border/30" />
                       </div>
                     )}
 
@@ -2369,114 +3050,222 @@ const ArrivalsPage = () => {
                       const sellerSerialLabel = formatSellerSerialNumber(seller.seller_serial_number);
                       return (
                       <motion.div key={seller.seller_vehicle_id} initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }}
-                        className="glass-card rounded-2xl overflow-x-auto overflow-y-visible">
-                        <div className="p-4 flex items-stretch justify-between bg-gradient-to-r from-emerald-50 to-teal-50 dark:from-emerald-950/20 dark:to-teal-950/20 border-b border-border/30 min-w-0">
-                          <div className="flex items-start gap-2 min-w-0 flex-1">
-                            <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-emerald-500 to-teal-500 flex items-center justify-center shrink-0">
-                              <span className="text-white text-xs font-bold">{seller.seller_mark || seller.seller_name?.charAt(0) || '?'}</span>
+                        className="glass-card rounded-2xl overflow-x-hidden overflow-y-visible max-w-full">
+                        <div className="p-3 sm:p-4 flex items-center justify-between gap-2 sm:gap-3 bg-gradient-to-r from-emerald-50 to-teal-50 dark:from-emerald-950/20 dark:to-teal-950/20 border-b border-border/30 min-w-0">
+                          <div className="flex items-center gap-3 min-w-0 flex-1 sm:min-w-[12rem]">
+                            <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-500 flex items-center justify-center shrink-0">
+                              <span className="text-white text-xl sm:text-2xl font-extrabold tabular-nums leading-none">{sellerSerialLabel ?? '#'}</span>
                             </div>
-                            <div className="flex items-center gap-3 min-w-0 flex-1">
+                            <div className="min-w-0 flex-1 w-0">
                               {seller.contact_id !== '' ? (
-                                <div className="min-w-0 flex-1">
-                                  <p className="font-semibold text-[12px] text-foreground truncate">
-                                    {seller.seller_name}
-                                  </p>
-                                  <div className="flex items-center gap-1.5 min-w-0">
-                                    {seller.seller_mark ? (
-                                      <span className="text-[10px] text-muted-foreground truncate whitespace-nowrap">
-                                        ({seller.seller_mark})
-                                      </span>
-                                    ) : null}
-                                    {sellerSerialLabel ? (
-                                      <span className="inline-flex items-center rounded-full bg-blue-500/10 px-2 py-0.5 text-[10px] font-semibold text-blue-700 dark:text-blue-300 whitespace-nowrap ring-1 ring-blue-500/20">
-                                        SL. NO {sellerSerialLabel}
-                                      </span>
-                                    ) : null}
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 sm:gap-2 min-w-0">
+                                  <div className="min-w-0 flex items-center">
+                                    <p className="font-semibold text-lg sm:text-xl text-foreground truncate leading-tight">
+                                      {seller.seller_name}
+                                    </p>
                                   </div>
-                                  <p className="text-[10px] text-muted-foreground truncate">{seller.seller_phone}</p>
-                                  <div className="flex items-center justify-between gap-2 mt-0.5">
-                                    <p className="text-[10px] text-muted-foreground/80 truncate">{seller.lots.length} lot(s)</p>
+                                  <div className="min-w-0">
+                                    <Input
+                                      placeholder="Mark / alias (optional, 2–20)"
+                                      value={seller.seller_mark}
+                                      onChange={e => updateSeller(si, { seller_mark: e.target.value })}
+                                      className={cn(
+                                        "h-11 sm:h-11 w-full min-w-0 rounded-lg text-sm sm:text-base",
+                                        isSellerMarkInvalid(seller, si) && "border-red-500 ring-2 ring-red-500/30 bg-red-50 dark:bg-red-950/20"
+                                      )}
+                                      maxLength={20}
+                                    />
+                                    {isSellerMarkInvalid(seller, si) && <p className="text-[9px] text-red-500 mt-0.5">{getSellerMarkError(seller, si) ?? '2–20 if set'}</p>}
                                   </div>
                                 </div>
                               ) : (
-                                <div className="grid grid-cols-1 gap-2 min-w-0 flex-1">
-                                  <div>
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 sm:gap-2 min-w-0">
+                                  <div
+                                    className="min-w-0"
+                                    ref={el => {
+                                      sellerNameInputWrapRefs.current[seller.seller_vehicle_id] = el;
+                                    }}
+                                  >
                                     <Input
                                       placeholder="Seller name (2–100)"
                                       value={seller.seller_name}
-                                      onChange={e => updateSeller(si, { seller_name: e.target.value })}
+                                      onChange={e => updateSellerNameWithSuggestions(si, seller.seller_vehicle_id, e.target.value)}
+                                      onFocus={() => {
+                                        const query = seller.seller_name.trim();
+                                        if (!query) return;
+                                        setActiveSellerSearch({ sellerId: seller.seller_vehicle_id, query: seller.seller_name });
+                                        refreshSellerDropdownPos(seller.seller_vehicle_id);
+                                        setSellerDropdown(true);
+                                      }}
+                                      onBlur={() => setTimeout(() => setSellerDropdown(false), 150)}
+                                      ref={el => {
+                                        sellerNameInputRefs.current[seller.seller_vehicle_id] = el;
+                                      }}
+                                      inputMode="text"
                                       className={cn(
-                                        "h-9 rounded-lg text-xs",
+                                        "h-11 sm:h-11 w-full min-w-0 rounded-lg text-sm sm:text-base",
                                         isSellerNameInvalid(seller) && "border-red-500 ring-2 ring-red-500/30 bg-red-50 dark:bg-red-950/20"
                                       )}
                                       maxLength={100}
                                     />
                                     {isSellerNameInvalid(seller) && <p className="text-[9px] text-red-500 mt-0.5">2–100 characters</p>}
                                   </div>
-                                  <div>
+                                  <div className="min-w-0">
                                     <Input
-                                      placeholder="Mark / alias (optional, 2–50)"
+                                      placeholder="Mark / alias (optional, 2–20)"
                                       value={seller.seller_mark}
                                       onChange={e => updateSeller(si, { seller_mark: e.target.value })}
                                       className={cn(
-                                        "h-9 rounded-lg text-xs",
+                                        "h-11 sm:h-11 w-full min-w-0 rounded-lg text-sm sm:text-base",
                                         isSellerMarkInvalid(seller, si) && "border-red-500 ring-2 ring-red-500/30 bg-red-50 dark:bg-red-950/20"
                                       )}
-                                      maxLength={50}
+                                      maxLength={20}
                                     />
-                                    {isSellerMarkInvalid(seller, si) && <p className="text-[9px] text-red-500 mt-0.5">{getSellerMarkError(seller, si) ?? '2–50 if set'}</p>}
-                                  </div>
-                                  <div className="flex items-center justify-between gap-2">
-                                    <p className="text-[10px] text-muted-foreground/80 truncate">{seller.lots.length} lot(s)</p>
-                                    {sellerSerialLabel ? (
-                                      <span className="inline-flex items-center rounded-full bg-blue-500/10 px-2 py-0.5 text-[10px] font-semibold text-blue-700 dark:text-blue-300 whitespace-nowrap ring-1 ring-blue-500/20">
-                                        SL. NO {sellerSerialLabel}
-                                      </span>
-                                    ) : null}
+                                    {isSellerMarkInvalid(seller, si) && <p className="text-[9px] text-red-500 mt-0.5">{getSellerMarkError(seller, si) ?? '2–20 if set'}</p>}
                                   </div>
                                 </div>
                               )}
-                              {/* Prominent total bags beside seller details */}
-                              <div className="shrink-0 self-center">
-                                <div className="px-3 py-1.5 rounded-xl bg-emerald-600/10 text-emerald-700 dark:text-emerald-300 font-extrabold shadow-sm ring-1 ring-emerald-600/20">
-                                  <span className="text-xl leading-none">{sellerTotal}</span>
-                                </div>
-                              </div>
                             </div>
                           </div>
-                          <div className="flex flex-col items-end justify-center gap-2 pl-2">
-                            <div className="flex items-center gap-1.5">
-                              <button
-                                type="button"
-                                onClick={() => setSellerExpanded(prev => ({ ...prev, [seller.seller_vehicle_id]: !expanded }))}
-                                aria-label={expanded ? 'Collapse seller lots' : 'Expand seller lots'}
-                                className={cn(
-                                  "w-8 h-8 rounded-lg flex items-center justify-center transition-colors",
-                                  expanded ? "bg-muted/40 hover:bg-muted/50" : "bg-muted/20 hover:bg-muted/40"
-                                )}
-                              >
-                                {expanded ? <ChevronUp className="w-4 h-4 text-muted-foreground" /> : <ChevronDown className="w-4 h-4 text-muted-foreground" />}
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  if (!canAddAnotherLot(seller)) return;
-                                  addLot(si);
-                                }}
-                                disabled={!canAddAnotherLot(seller)}
-                                className={cn(
-                                  "w-8 h-8 rounded-lg bg-gradient-to-br from-blue-500 to-violet-500 flex items-center justify-center shadow-sm transition-opacity",
-                                  !canAddAnotherLot(seller) && "opacity-50 cursor-not-allowed"
-                                )}
-                              >
-                                <Plus className="w-3.5 h-3.5 text-white" />
-                              </button>
+                          <div className="flex items-center gap-2 shrink-0 sm:pl-2 self-center">
+                            <div className="px-2.5 sm:px-3 py-1.5 rounded-lg sm:rounded-xl bg-emerald-600/10 text-emerald-700 dark:text-emerald-300 font-extrabold shadow-sm ring-1 ring-emerald-600/20 self-center">
+                              <span className="text-xl sm:text-2xl leading-none whitespace-nowrap tabular-nums">{sellerTotal}</span>
                             </div>
-                            <button onClick={() => setPendingDelete({ kind: 'seller', idx: si, label: seller.seller_name || `Seller ${si + 1}` })} className="w-8 h-8 rounded-lg flex items-center justify-center text-red-400 hover:bg-red-50 dark:hover:bg-red-950/20 transition-colors">
-                              <Trash2 className="w-3.5 h-3.5" />
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const nextExpanded = !expanded;
+                                if (nextExpanded) {
+                                  expandOnlySeller(seller.seller_vehicle_id);
+                                } else {
+                                  setSellerExpanded(prev => ({ ...prev, [seller.seller_vehicle_id]: false }));
+                                }
+                                if (!nextExpanded) return;
+                                setAddLotForm({
+                                  sellerId: seller.seller_vehicle_id,
+                                  lotName: "",
+                                  bags: "",
+                                  commodityName: commodities[0]?.commodity_name || "",
+                                  variant: "",
+                                  errors: {},
+                                });
+                              }}
+                              aria-label={expanded ? 'Collapse seller lots' : 'Expand seller lots'}
+                              className={cn(
+                                "min-h-[44px] min-w-[44px] h-11 w-11 sm:h-10 sm:w-10 rounded-lg flex items-center justify-center transition-colors touch-manipulation",
+                                expanded ? "bg-muted/40 hover:bg-muted/50" : "bg-muted/20 hover:bg-muted/40"
+                              )}
+                            >
+                              {expanded ? <ChevronUp className="w-5 h-5 text-muted-foreground" /> : <ChevronDown className="w-5 h-5 text-muted-foreground" />}
+                            </button>
+                            <button type="button" onClick={() => setPendingDelete({ kind: 'seller', idx: si, label: seller.seller_name || `Seller ${si + 1}` })} className="min-h-[44px] min-w-[44px] h-11 w-11 sm:h-10 sm:w-10 rounded-lg flex items-center justify-center text-red-400 hover:bg-red-50 dark:hover:bg-red-950/20 transition-colors touch-manipulation">
+                              <Trash2 className="w-4 h-4" />
                             </button>
                           </div>
                         </div>
+                        <AnimatePresence initial={false}>
+                          {expanded && addLotForm?.sellerId === seller.seller_vehicle_id && (
+                            <motion.div
+                              key="add-lot-form"
+                              initial={{ opacity: 0, height: 0 }}
+                              animate={{ opacity: 1, height: "auto" }}
+                              exit={{ opacity: 0, height: 0 }}
+                              transition={{ duration: 0.15 }}
+                              className="overflow-hidden"
+                            >
+                              <div className="p-3 border-t border-border/30 space-y-2 bg-muted/10">
+                                <p className="text-[10px] font-bold text-blue-600 dark:text-blue-400 uppercase tracking-wider">{addLotForm.editingLotId ? "Edit Lot" : "New Lot"}</p>
+                                <AddLotHorizontalScrollPanel>
+                                  <div className="min-w-max flex flex-nowrap items-start gap-2">
+                                    <div className="min-w-0 flex-1">
+                                    <LotFieldsHorizontalScroll>
+                                      <div className="flex flex-nowrap items-start gap-2 overflow-x-auto overflow-y-visible lot-fields-x-scroll [-webkit-overflow-scrolling:touch] touch-auto">
+                                  {/* Lot Name */}
+                                  <div className="w-[8.5rem] sm:w-[9rem] md:w-[8.5rem] lg:w-[12rem] xl:w-[14rem] flex-none">
+                                    <Input
+                                      placeholder="Lot Name"
+                                      value={addLotForm.lotName}
+                                      onChange={e => setAddLotForm(prev => prev ? { ...prev, lotName: e.target.value, errors: { ...prev.errors, lotName: undefined } } : null)}
+                                      onFocus={() => handleLotEntryFieldFocus(seller.seller_vehicle_id)}
+                                      className={cn("h-10 sm:h-9 text-sm rounded-lg focus-visible:ring-0 focus-visible:ring-offset-0 focus-visible:border-primary focus-visible:shadow-[0_0_0_2px_hsl(var(--ring)/0.25)]", addLotForm.errors.lotName && "border-red-500 ring-2 ring-red-500/30 bg-red-50 dark:bg-red-950/20")}
+                                      maxLength={50}
+                                      autoFocus
+                                    />
+                                    {addLotForm.errors.lotName && <p className="text-[10px] text-red-500 mt-0.5">{addLotForm.errors.lotName}</p>}
+                                  </div>
+                                  {/* Bags */}
+                                  <div className="w-[5.5rem] sm:w-[6rem] md:w-[5.5rem] lg:w-[7rem] xl:w-[8rem] flex-none">
+                                    <Input
+                                      type="number"
+                                      placeholder="Bags"
+                                      value={addLotForm.bags}
+                                      onChange={e => setAddLotForm(prev => prev ? { ...prev, bags: e.target.value, errors: { ...prev.errors, bags: undefined } } : null)}
+                                      onFocus={() => handleLotEntryFieldFocus(seller.seller_vehicle_id)}
+                                      className={cn("h-10 sm:h-9 text-sm rounded-lg focus-visible:ring-0 focus-visible:ring-offset-0 focus-visible:border-primary focus-visible:shadow-[0_0_0_2px_hsl(var(--ring)/0.25)]", addLotForm.errors.bags && "border-red-500 ring-2 ring-red-500/30 bg-red-50 dark:bg-red-950/20")}
+                                      min={1}
+                                      max={100000}
+                                    />
+                                    {addLotForm.errors.bags && <p className="text-[10px] text-red-500 mt-0.5">{addLotForm.errors.bags}</p>}
+                                  </div>
+                                  {/* Commodity */}
+                                  <div className="w-[8.5rem] sm:w-[9rem] md:w-[8.5rem] lg:w-[12rem] xl:w-[14rem] flex-none">
+                                    <select
+                                      value={addLotForm.commodityName}
+                                      onChange={e => setAddLotForm(prev => prev ? { ...prev, commodityName: e.target.value, variant: '', errors: { ...prev.errors, commodity: undefined } } : null)}
+                                      onFocus={() => handleLotEntryFieldFocus(seller.seller_vehicle_id)}
+                                      className={cn("h-10 sm:h-9 w-full rounded-lg bg-background border border-input text-sm px-2 focus:outline-none focus:ring-0 focus:border-primary focus:shadow-[0_0_0_2px_hsl(var(--ring)/0.25)]", addLotForm.errors.commodity && "border-red-500 ring-2 ring-red-500/30")}
+                                    >
+                                      <option value="" disabled>Select Commodity</option>
+                                      {commodities.map((c: any) => (
+                                        <option key={c.commodity_id} value={c.commodity_name}>{c.commodity_name}</option>
+                                      ))}
+                                    </select>
+                                    {addLotForm.errors.commodity && <p className="text-[10px] text-red-500 mt-0.5">{addLotForm.errors.commodity}</p>}
+                                  </div>
+                                  {/* Variant */}
+                                  <div className="w-[7rem] sm:w-[7.5rem] md:w-[7rem] lg:w-[10rem] xl:w-[12rem] flex-none">
+                                    <select
+                                      value={addLotForm.variant}
+                                      onChange={e => setAddLotForm(prev => prev ? { ...prev, variant: e.target.value } : null)}
+                                      onFocus={() => handleLotEntryFieldFocus(seller.seller_vehicle_id)}
+                                      className="h-10 sm:h-9 w-full rounded-lg bg-background border border-input text-sm px-2 focus:outline-none focus:ring-0 focus:border-primary focus:shadow-[0_0_0_2px_hsl(var(--ring)/0.25)]"
+                                    >
+                                      {VARIANT_OPTIONS.map(opt => (
+                                        <option key={opt.value || 'none'} value={opt.value}>{opt.label}</option>
+                                      ))}
+                                    </select>
+                                  </div>
+                                      </div>
+                                    </LotFieldsHorizontalScroll>
+                                    </div>
+                                    {/* Action buttons */}
+                                    <div className="flex flex-nowrap items-center gap-2 justify-end sm:self-start pl-1">
+                                    <Button
+                                      type="button"
+                                      variant="ghost"
+                                      size="sm"
+                                      onClick={() => setAddLotForm({
+                                        sellerId: seller.seller_vehicle_id,
+                                        lotName: "",
+                                        bags: "",
+                                        commodityName: commodities[0]?.commodity_name || "",
+                                        variant: "",
+                                        errors: {},
+                                      })}
+                                      className="h-8 sm:h-9 shrink-0 whitespace-nowrap text-xs"
+                                    >
+                                      Cancel
+                                    </Button>
+                                    <Button type="button" size="sm" onClick={() => saveFormLot(si)} className="h-10 sm:h-10 px-4 shrink-0 whitespace-nowrap text-sm font-semibold bg-[#6075FF] hover:bg-[#5060e8] text-white border border-[#6075FF]">
+                                      {addLotForm.editingLotId ? "Update" : "Save Lot"}
+                                    </Button>
+                                    </div>
+                                  </div>
+                                </AddLotHorizontalScrollPanel>
+                              </div>
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
                         <AnimatePresence initial={false}>
                           {expanded && (
                             <motion.div
@@ -2492,99 +3281,78 @@ const ArrivalsPage = () => {
                                 sellerId={seller.seller_vehicle_id}
                                 registerScrollEl={setLotsScrollRef}
                                 showEdgeHints
-                                ensureVerticalScrollThumbWhenShort={seller.lots.length > 0}
                                 contentLayoutKey={seller.lots.length}
                                 showScrollAffordanceFooter={seller.lots.length > 0}
                                 scrollAffordanceHint="Scroll to see all lots"
-                                className="min-h-[12rem] max-h-[min(32rem,58dvh)] overflow-y-scroll overflow-x-auto p-3 overscroll-contain"
+                                className="min-h-[12rem] max-h-[min(32rem,58dvh)] overflow-y-auto overflow-x-auto lg:overflow-x-hidden overscroll-contain [-webkit-overflow-scrolling:touch] touch-auto border-t border-border/30"
                               >
-                                {seller.lots.length === 0 && (
-                                  <p className="text-xs text-muted-foreground text-center py-2 italic">No lots. Click + to add a lot.</p>
-                                )}
-                                {seller.lots.length > 0 && !canAddAnotherLot(seller) && (
-                                  <p className="text-xs text-amber-600 dark:text-amber-400 text-center py-1">
-                                    Complete current lot name and bags before adding another lot.
-                                  </p>
-                                )}
-                                {seller.lots.map((lot, li) => {
-                                  const vehicleTotal = vehicleTotalBags;
-                                  const lotDuplicateError = !isLotNameInvalid(lot) ? getLotNameDuplicateError(si, li) : null;
-                                  const lotSerialLabel = lot.lot_serial_number != null && lot.lot_serial_number > 0 ? String(lot.lot_serial_number) : null;
-                                  return (
-                                    <div key={lot.lot_id} className="rounded-xl border border-border/30 p-3 space-y-2">
-                                      <div className="flex items-center justify-between gap-2">
-                                        <p className="text-[10px] font-bold text-muted-foreground uppercase">
-                                          {lotSerialLabel ? `SL. NO ${lotSerialLabel}` : 'Lot'} <span className="font-normal text-foreground">— {vehicleTotal} / {sellerTotal} bags</span>
-                                        </p>
-                                        <button
-                                          onClick={() => setPendingDelete({ kind: 'lot', sellerIdx: si, lotIdx: li, label: lot.lot_name || `Lot ${li + 1}` })}
-                                          className="w-7 h-7 rounded-lg flex items-center justify-center text-red-400 hover:bg-red-50 dark:hover:bg-red-950/20 transition-colors shrink-0"
-                                        >
-                                          <Trash2 className="w-3.5 h-3.5" />
-                                        </button>
-                                      </div>
-                                      <LotFieldsHorizontalScroll>
-                                        <div className="grid grid-cols-4 gap-2 items-end min-w-[34rem]">
-                                        <div>
-                                          <Input
-                                            aria-label="Lot Name"
-                                            placeholder="Lot Name"
-                                            value={lot.lot_name}
-                                            onChange={e => updateLot(si, li, { lot_name: e.target.value })}
-                                            className={cn(
-                                              "h-9 w-full rounded-lg text-sm",
-                                              (isLotNameInvalid(lot) || lotDuplicateError) && "border-red-500 ring-2 ring-red-500/30 bg-red-50 dark:bg-red-950/20"
-                                            )}
-                                            inputMode="text"
-                                            maxLength={50}
-                                          />
-                                          {lotDuplicateError && <p className="text-[9px] text-red-500 mt-0.5">{lotDuplicateError}</p>}
-                                        </div>
-                                        <div>
-                                          <Input
-                                            aria-label="Bags Quantity"
-                                            type="number"
-                                            placeholder="Bags"
-                                            value={lot.quantity || ''}
-                                            onChange={e => updateLot(si, li, { quantity: parseInt(e.target.value) || 0 })}
-                                            className={cn(
-                                              "h-9 w-full rounded-lg text-sm",
-                                              isLotQuantityInvalid(lot) && "border-red-500 ring-2 ring-red-500/30 bg-red-50 dark:bg-red-950/20"
-                                            )}
-                                            min={1}
-                                            max={100000}
-                                          />
-                                        </div>
-                                        <div>
-                                          <select
-                                            aria-label="Commodity"
-                                            value={lot.commodity_name}
-                                            onChange={e => updateLot(si, li, { commodity_name: e.target.value })}
-                                            className="h-9 w-full rounded-lg bg-background border border-input text-sm px-2"
-                                          >
-                                            {commodities.map((c: any) => (
-                                              <option key={c.commodity_id} value={c.commodity_name}>{c.commodity_name}</option>
-                                            ))}
-                                            {commodities.length === 0 && <option value="">No commodities</option>}
-                                          </select>
-                                        </div>
-                                        <div>
-                                          <select
-                                            aria-label="Variant"
-                                            value={lot.variant ?? ''}
-                                            onChange={e => updateLot(si, li, { variant: e.target.value })}
-                                            className="h-9 w-full rounded-lg bg-background border border-input text-sm px-2"
-                                          >
-                                            {VARIANT_OPTIONS.map(opt => (
-                                              <option key={opt.value || 'none'} value={opt.value}>{opt.label}</option>
-                                            ))}
-                                          </select>
-                                        </div>
-                                        </div>
-                                      </LotFieldsHorizontalScroll>
-                                    </div>
-                                  );
-                                })}
+                                  {seller.lots.length === 0 ? (
+                                    <p className="text-xs text-muted-foreground text-center py-3 italic px-3">No lots added yet.</p>
+                                  ) : (
+                                    <LotFieldsHorizontalScroll>
+                                      <table className="w-[42rem] md:w-full text-sm sm:text-base table-fixed">
+                                        <thead className="sticky top-0 z-[3] bg-background">
+                                          <tr className="border-b border-border/20">
+                                            <th className="bg-muted/95 backdrop-blur text-center py-2 px-3 text-muted-foreground font-semibold w-1/6">SL. NO</th>
+                                            <th className="bg-muted/95 backdrop-blur text-center py-2 px-3 text-muted-foreground font-semibold w-1/6">Lot Name</th>
+                                            <th className="bg-muted/95 backdrop-blur text-center py-2 px-3 text-muted-foreground font-semibold w-1/6">Bags</th>
+                                            <th className="bg-muted/95 backdrop-blur text-center py-2 px-3 text-muted-foreground font-semibold w-1/6">Commodity</th>
+                                            <th className="bg-muted/95 backdrop-blur text-center py-2 px-3 text-muted-foreground font-semibold hidden md:table-cell md:w-1/6">Variant</th>
+                                            <th className="bg-muted/95 backdrop-blur text-center py-2 px-3 text-muted-foreground font-semibold w-1/6">Actions</th>
+                                          </tr>
+                                        </thead>
+                                        <tbody>
+                                          {seller.lots.map((lot, li) => {
+                                            const lotSerialLabel = lot.lot_serial_number != null && lot.lot_serial_number > 0 ? String(lot.lot_serial_number) : "-";
+                                            const isBeingEdited = addLotForm?.editingLotId === lot.lot_id;
+                                            return (
+                                              <tr
+                                                key={lot.lot_id}
+                                                onClick={() => editFormLot(si, li)}
+                                                className={cn(
+                                                  "border-b border-border/10 transition-colors cursor-pointer",
+                                                  isBeingEdited ? "bg-blue-50 dark:bg-blue-950/20" : "hover:bg-muted/20"
+                                                )}
+                                              >
+                                                <td className="py-1 px-2.5 align-middle text-center">
+                                                  {lotSerialLabel !== "-" ? (
+                                                    <span className="inline-flex items-center rounded-full bg-blue-500/10 px-1.5 py-0.5 text-[9px] sm:text-[10px] font-semibold leading-none text-blue-700 dark:text-blue-300 whitespace-nowrap ring-1 ring-blue-500/20">
+                                                      {lotSerialLabel} — {vehicleTotalBags} / {sellerTotal}
+                                                    </span>
+                                                  ) : (
+                                                    <span className="text-muted-foreground font-mono text-[9px] sm:text-[10px]">—</span>
+                                                  )}
+                                                </td>
+                                                <td className="py-1 px-2.5 align-middle text-center">
+                                                  <span className="inline-flex max-w-none whitespace-nowrap px-1.5 py-0.5 rounded bg-blue-100 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300 text-[10px] sm:text-xs font-bold leading-none">
+                                                    {lot.lot_name || "-"}
+                                                  </span>
+                                                </td>
+                                                <td className="py-2 px-3 align-middle text-center font-medium text-foreground">{lot.quantity}</td>
+                                                <td className="py-2 px-3 align-middle text-center text-foreground truncate">{lot.commodity_name || "-"}</td>
+                                                <td className="py-2 px-3 align-middle text-center text-muted-foreground hidden md:table-cell">{lot.variant || "None"}</td>
+                                                <td className="py-2 px-3 align-middle text-center">
+                                                  <div className="flex justify-center gap-1">
+                                                    <button
+                                                      type="button"
+                                                      onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        setPendingDelete({ kind: "lot", sellerIdx: si, lotIdx: li, label: lot.lot_name || "Lot " + (li + 1) });
+                                                      }}
+                                                      className="w-9 h-9 sm:w-8 sm:h-8 rounded-md flex items-center justify-center text-red-400 hover:bg-red-50 dark:hover:bg-red-950/20 transition-colors flex-shrink-0"
+                                                      aria-label="Delete lot"
+                                                    >
+                                                      <Trash2 className="w-4 h-4 sm:w-4 sm:h-4" />
+                                                    </button>
+                                                  </div>
+                                                </td>
+                                              </tr>
+                                            );
+                                          })}
+                                        </tbody>
+                                      </table>
+                                    </LotFieldsHorizontalScroll>
+                                  )}
                               </LotsScrollPanel>
                             </motion.div>
                           )}
@@ -2592,12 +3360,27 @@ const ArrivalsPage = () => {
                       </motion.div>
                     ); })}
 
-                    {/* Submit */}
-                    <Button onClick={handleSubmitArrival}
-                      disabled={isFormInvalid}
-                      className="w-full h-12 rounded-xl font-bold text-sm bg-gradient-to-r from-emerald-500 to-teal-500 text-white shadow-lg shadow-emerald-500/20 disabled:opacity-60">
-                      <FileText className="w-4 h-4 mr-2" /> {editingVehicleId != null ? 'Update Arrival' : 'Submit Arrival'}
-                    </Button>
+                    {/* Add Seller + Submit (reduced submit width to make room) */}
+                    <div className="flex items-stretch gap-0 rounded-2xl bg-white dark:bg-card p-1.5 shadow-sm border border-border/30">
+                      <Button
+                        type="button"
+                        size="sm"
+                        onClick={openSellerSearchPanel}
+                        disabled={(!isMultiSeller && sellers.length >= 1) || hasIncompleteSellerDetails}
+                        className="h-11 sm:h-12 rounded-xl flex-1 text-xs sm:text-sm font-semibold flex items-center justify-center bg-[#6075FF] hover:bg-[#5060e8] text-white border border-[#6075FF] shadow-md shadow-[#6075FF]/25 active:shadow-lg active:shadow-[#6075FF]/35 active:scale-[0.99] transition-all disabled:opacity-60 disabled:bg-[#6075FF] disabled:text-white"
+                      >
+                        <Users className="w-4 h-4 sm:w-5 sm:h-5" />
+                        <span className="ml-1.5 sm:ml-2">Add Seller</span>
+                      </Button>
+                      <div className="w-2 shrink-0 bg-white dark:bg-card" aria-hidden />
+                      <Button
+                        onClick={handleSubmitArrival}
+                        className="flex-1 h-11 sm:h-12 rounded-xl font-bold text-xs sm:text-sm bg-gradient-to-r from-emerald-500 to-teal-500 text-white shadow-lg shadow-emerald-500/20 active:shadow-xl active:shadow-emerald-500/35 active:scale-[0.99] transition-all disabled:opacity-60 flex items-center justify-center"
+                      >
+                        <FileText className="w-4 h-4 sm:w-5 sm:h-5" />
+                        <span className="ml-1.5 sm:ml-2">{editingVehicleId != null ? 'Update Arrival' : 'Submit Arrival'}</span>
+                      </Button>
+                    </div>
                   </div>
                 </div>
                 )}
@@ -2653,7 +3436,7 @@ const ArrivalsPage = () => {
               </div>
             </div>
           )}
-          <div className="px-4 mb-3 space-y-2">
+          <div className="px-4 mb-4 space-y-4">
             <div className="relative">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
               <input
@@ -2664,35 +3447,41 @@ const ArrivalsPage = () => {
                 className="w-full h-10 pl-10 pr-4 rounded-xl text-sm bg-white dark:bg-card border border-border/40 shadow-sm focus:outline-none focus-visible:ring-1 focus-visible:ring-[#6075FF] text-foreground placeholder:text-muted-foreground"
               />
             </div>
-            {/* Sub-categories: Arrivals / Sellers / Lots — blue active (raghav) */}
-            <div className="flex items-center gap-1.5 overflow-x-auto pb-1 -mx-1 px-1 text-xs">
-              <button type="button" onClick={() => setSummaryMode('arrivals')} className={cn('flex-shrink-0 px-4 py-1.5 rounded-full font-medium transition-colors', summaryMode === 'arrivals' ? 'bg-[#6075FF] text-white shadow-sm' : 'bg-transparent text-muted-foreground hover:bg-muted/50')}>Arrivals ({totalVehicles})</button>
-              <button type="button" onClick={() => setSummaryMode('sellers')} className={cn('flex-shrink-0 px-4 py-1.5 rounded-full font-medium transition-colors', summaryMode === 'sellers' ? 'bg-[#6075FF] text-white shadow-sm' : 'bg-transparent text-muted-foreground hover:bg-muted/50')}>Sellers ({totalSellers})</button>
-              <button type="button" onClick={() => setSummaryMode('lots')} className={cn('flex-shrink-0 px-4 py-1.5 rounded-full font-medium transition-colors', summaryMode === 'lots' ? 'bg-[#6075FF] text-white shadow-sm' : 'bg-transparent text-muted-foreground hover:bg-muted/50')}>Lots ({totalLots})</button>
-            </div>
             {summaryMode === 'arrivals' && (
               <div className="flex gap-2 overflow-x-auto pb-1 -mx-1 px-1 text-[11px]">
-                <button type="button" onClick={() => setStatusFilter('COMPLETED')} className={cn('flex-shrink-0 px-4 py-1 rounded-full font-medium transition-colors', statusFilter === 'COMPLETED' ? 'bg-[#6075FF] text-white shadow-sm' : 'bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400 hover:bg-zinc-200 dark:hover:bg-zinc-700')}>Completed ({statusCounts.COMPLETED})</button>
-                {ALL_STATUSES.map(s => (
-                  <button key={s} type="button" onClick={() => setStatusFilter(s)} className={cn('flex-shrink-0 px-4 py-1 rounded-full font-medium transition-colors', statusFilter === s ? 'bg-[#6075FF] text-white shadow-sm' : 'bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400 hover:bg-zinc-200 dark:hover:bg-zinc-700')}>{statusLabel(s)} ({statusCounts[s]})</button>
+                {SUMMARY_STATUS_FILTERS.map(s => (
+                  <button
+                    key={s}
+                    type="button"
+                    onClick={() => setStatusFilter(s)}
+                    className={cn(
+                      'flex-shrink-0 px-4 py-1 rounded-full font-medium transition-colors',
+                      statusFilter === s
+                        ? s === 'PARTIALLY_COMPLETED'
+                          ? 'bg-orange-500 text-white shadow-sm'
+                          : 'bg-[#6075FF] text-white shadow-sm'
+                        : 'bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400 hover:bg-zinc-200 dark:hover:bg-zinc-700',
+                    )}
+                  >
+                    {s === 'ALL' ? 'All' : statusLabel(s)} ({statusCounts[s]})
+                  </button>
                 ))}
-                <button type="button" onClick={() => setStatusFilter('PARTIALLY_COMPLETED')} className={cn('flex-shrink-0 px-4 py-1 rounded-full font-medium transition-colors', statusFilter === 'PARTIALLY_COMPLETED' ? 'bg-orange-500 text-white shadow-sm' : 'bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400 hover:bg-zinc-200 dark:hover:bg-zinc-700')}>Partially Completed ({statusCounts.PARTIALLY_COMPLETED})</button>
               </div>
             )}
           </div>
           <div className="px-4 space-y-2.5">
-            {(statusFilter === 'PARTIALLY_COMPLETED' ? partialArrivalsLoading : apiArrivalsLoading) ? (
+            {activeArrivalsLoading ? (
               <div className="glass-card p-8 rounded-2xl text-center">
                 <p className="text-muted-foreground">Loading arrivals…</p>
               </div>
             ) : filteredArrivals.length === 0 ? (
-              statusFilter !== 'COMPLETED' ? (
+              statusFilter !== 'ALL' ? (
                 <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="glass-card p-8 rounded-2xl text-center">
                   <Filter className="w-12 h-12 text-muted-foreground/50 mx-auto mb-4" />
                   <h3 className="text-lg font-bold text-foreground mb-1">No {statusLabel(statusFilter)} arrivals</h3>
-                  <p className="text-sm text-muted-foreground mb-4">No arrivals match this filter. Tap below to show completed.</p>
-                  <Button onClick={() => setStatusFilter('COMPLETED')} variant="outline" className="rounded-xl">
-                    Show completed arrivals
+                  <p className="text-sm text-muted-foreground mb-4">No arrivals match this filter. Tap below to show all arrivals.</p>
+                  <Button onClick={() => setStatusFilter('ALL')} variant="outline" className="rounded-xl">
+                    Show all arrivals
                   </Button>
                 </motion.div>
               ) : (
@@ -2710,7 +3499,7 @@ const ArrivalsPage = () => {
                 </Button>
               </motion.div>
               )
-            ) : summaryMode === 'sellers' ? (
+            ) : false ? (
               <div className="grid grid-cols-1 gap-3">
                 {filteredArrivals.flatMap(a => {
                   const detail = arrivalDetails.find(d => String(d.vehicleId) === String(a.vehicleId));
@@ -2729,7 +3518,7 @@ const ArrivalsPage = () => {
                   </motion.div>
                 ))}
               </div>
-            ) : summaryMode === 'lots' ? (
+            ) : false ? (
               <div className="grid grid-cols-1 gap-3">
                 {filteredArrivals.flatMap(a => {
                   const detail = arrivalDetails.find(d => String(d.vehicleId) === String(a.vehicleId));
@@ -2765,51 +3554,46 @@ const ArrivalsPage = () => {
                 const isExpanded = sameArrivalVehicleId(expandedDetail?.vehicleId, a.vehicleId);
                 return (
                   <motion.div key={a.vehicleId + '-' + i} initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: i * 0.04 }}>
-                    <div className="glass-card rounded-2xl overflow-x-auto overflow-y-visible max-w-full">
-                      <div className="w-full p-3.5 flex items-center justify-between gap-2 min-w-0">
-                        <button type="button" onClick={() => loadExpandedDetail(a.vehicleId)} className="flex-1 flex items-center justify-between text-left min-w-0">
-                          <div className="flex items-center gap-3 min-w-0">
-                            <div className="w-10 h-10 rounded-xl bg-[#6075FF] flex items-center justify-center shadow-sm shadow-[#6075FF]/20 flex-shrink-0">
+                    <div className="glass-card rounded-2xl overflow-x-hidden overflow-y-visible max-w-full">
+                      <div className="w-full p-3.5 min-w-0">
+                        <button
+                          type="button"
+                          onClick={() => loadExpandedDetail(a.vehicleId)}
+                          className="flex w-full min-w-0 flex-1 items-start gap-3 text-left touch-manipulation"
+                        >
+                          <div className="w-10 h-10 rounded-xl bg-[#6075FF] flex items-center justify-center shadow-sm shadow-[#6075FF]/20 flex-shrink-0">
                             <Truck className="w-4 h-4 text-white" />
                           </div>
-                            <div className="min-w-0">
-                              <div className="flex items-center gap-1.5 flex-wrap min-w-0">
-                                <ArrivalSummaryVehicleSellerQty
-                                  vehicleNumber={a.vehicleNumber}
-                                  primarySellerName={a.primarySellerName}
-                                  totalBags={a.totalBags}
-                                />
-                                <ArrivalStatusBadge status={status} />
-                              </div>
-                              <p className="text-xs text-muted-foreground mt-0.5">{a.sellerCount} seller(s) · {a.lotCount} lot(s) · {a.netWeight}kg · Bids: {a.bidsCount ?? 0} · Weighed: {a.weighedCount ?? 0}</p>
+                          <div className="min-w-0 flex-1">
+                            <div className="flex flex-wrap items-center gap-1.5 gap-y-1 min-w-0">
+                              <ArrivalSummaryVehicleSellerQty
+                                vehicleNumber={a.vehicleNumber}
+                                primarySellerName={a.primarySellerName}
+                                totalBags={a.totalBags}
+                              />
+                              <ArrivalStatusBadge status={status} />
                             </div>
+                            <p className="text-xs text-muted-foreground mt-1 break-words">{a.sellerCount} seller(s) · {a.lotCount} lot(s) · {a.netWeight}kg · Bids: {a.bidsCount ?? 0} · Weighed: {a.weighedCount ?? 0}</p>
                           </div>
-                          <span className="text-xs text-muted-foreground flex-shrink-0">{new Date(a.arrivalDatetime).toLocaleDateString()}</span>
-                          {isExpanded ? <ChevronUp className="w-4 h-4 text-muted-foreground flex-shrink-0" /> : <ChevronDown className="w-4 h-4 text-muted-foreground flex-shrink-0" />}
+                          <div className="flex flex-col items-end gap-1 shrink-0 pt-0.5">
+                            <span className="text-xs text-muted-foreground whitespace-nowrap">{new Date(a.arrivalDatetime).toLocaleDateString()}</span>
+                            <span className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg bg-muted/30" aria-hidden>
+                              {isExpanded ? <ChevronUp className="h-5 w-5 text-muted-foreground" /> : <ChevronDown className="h-5 w-5 text-muted-foreground" />}
+                            </span>
+                          </div>
                         </button>
                       </div>
                       <AnimatePresence>
                         {isExpanded && (
-                          <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="overflow-hidden border-t border-border/30">
+                          <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="overflow-hidden border-t border-border/30">
                             <div className="p-4 space-y-3 text-sm">
                               {expandedDetailLoading ? (
                                 <p className="text-muted-foreground">Loading…</p>
                               ) : expandedDetail ? (
                                 <>
-                                  <FreightDetailsCard freightRate={expandedDetail.freightRate ?? 0} netWeight={expandedDetail.netWeight ?? 0} freightMethod={expandedDetail.freightMethod ?? 'BY_WEIGHT'} freightTotal={expandedDetail.freightTotal ?? 0} advancePaid={expandedDetail.advancePaid ?? 0} noRental={expandedDetail.noRental ?? false} />
+                                  <FreightDetailsCard freightRate={expandedDetail.freightRate ?? 0} freightKgs={expandedDetail.freightKgs} netWeight={expandedDetail.netWeight ?? 0} freightMethod={expandedDetail.freightMethod ?? 'BY_WEIGHT'} freightTotal={expandedDetail.freightTotal ?? 0} advancePaid={expandedDetail.advancePaid ?? 0} noRental={expandedDetail.noRental ?? false} />
                                   <SellerInfoCard
-                                    sellers={expandedDetail.sellers.map(s => ({
-                                      sellerName: s.sellerName,
-                                      sellerMark: s.sellerMark,
-                                      lots: s.lots.map(l => ({
-                                        id: l.id,
-                                        lotName: l.lotName,
-                                        commodityName: l.commodityName,
-                                        bagCount: l.bagCount,
-                                        brokerTag: l.brokerTag,
-                                        variant: l.variant,
-                                      })),
-                                    }))}
+                                    sellers={mapSellerInfoRows(expandedDetail.sellers)}
                                     hidePrint
                                   />
                                   <div className="flex gap-2 pt-1">
@@ -2893,7 +3677,9 @@ const ArrivalsPage = () => {
                         </button>
                         <div>
                           <h2 className="text-lg font-bold text-white">New Arrival</h2>
-                          <p className="text-white/70 text-xs">Vehicle & Tonnage · Sellers & Lots</p>
+                          <p className="text-white/70 text-xs">
+                            {sellers.length > 0 ? 'Vehicle & Tonnage · Sellers & Lots' : 'Vehicle & Tonnage'}
+                          </p>
                         </div>
                       </div>
                     </div>
@@ -2991,18 +3777,24 @@ const ArrivalsPage = () => {
                     </div>
 
                     <div className="glass-card rounded-2xl p-4">
-                      <div className="grid grid-cols-2 gap-3">
-                        <div>
-                          <label className={cn("text-xs font-bold uppercase tracking-wider mb-2 block", isGodownInvalid ? "text-red-500" : "text-muted-foreground")}>
+                      <div className="grid grid-cols-1 gap-3 min-w-0 sm:grid-cols-2 sm:gap-3 sm:items-start">
+                        <div className="min-w-0">
+                          <label className={cn(
+                            "text-xs font-bold uppercase tracking-wider mb-2 block leading-snug sm:mb-2 sm:flex sm:min-h-[2.85rem] sm:items-end sm:pb-0.5",
+                            isGodownInvalid ? "text-red-500" : "text-muted-foreground",
+                          )}>
                             Godown (optional) {isGodownInvalid && '⚠ 2–50'}
                           </label>
-                          <Input placeholder="Godown (optional)" value={godown} onChange={e => setGodown(e.target.value)} className={cn("h-12 rounded-xl", isGodownInvalid && "border-red-500 ring-2 ring-red-500/30 bg-red-50 dark:bg-red-950/20")} maxLength={50} />
+                          <Input placeholder="Godown (optional)" value={godown} onChange={e => setGodown(e.target.value)} className={cn("h-12 w-full min-w-0 rounded-xl", isGodownInvalid && "border-red-500 ring-2 ring-red-500/30 bg-red-50 dark:bg-red-950/20")} maxLength={50} />
                         </div>
-                        <div>
-                          <label className={cn("text-xs font-bold uppercase tracking-wider mb-2 block", isGatepassNumberInvalid ? "text-red-500" : "text-muted-foreground")}>
+                        <div className="min-w-0">
+                          <label className={cn(
+                            "text-xs font-bold uppercase tracking-wider mb-2 block leading-snug sm:mb-2 sm:flex sm:min-h-[2.85rem] sm:items-end sm:pb-0.5",
+                            isGatepassNumberInvalid ? "text-red-500" : "text-muted-foreground",
+                          )}>
                             Gatepass (optional) {isGatepassNumberInvalid && '⚠ 1–30'}
                           </label>
-                          <Input placeholder="Gatepass (optional)" value={gatepassNumber} onChange={e => setGatepassNumber(e.target.value.length <= 30 ? e.target.value : gatepassNumber)} className={cn("h-12 rounded-xl", isGatepassNumberInvalid && "border-red-500 ring-2 ring-red-500/30 bg-red-50 dark:bg-red-950/20")} maxLength={30} />
+                          <Input placeholder="Gatepass (optional)" value={gatepassNumber} onChange={e => setGatepassNumber(e.target.value.length <= 30 ? e.target.value : gatepassNumber)} className={cn("h-12 w-full min-w-0 rounded-xl", isGatepassNumberInvalid && "border-red-500 ring-2 ring-red-500/30 bg-red-50 dark:bg-red-950/20")} maxLength={30} />
                         </div>
                       </div>
                     </div>
@@ -3033,31 +3825,73 @@ const ArrivalsPage = () => {
                       <label className="text-xs font-bold text-amber-600 dark:text-amber-400 uppercase tracking-wider mb-3 block flex items-center gap-1.5">
                         <Banknote className="w-3.5 h-3.5" /> Freight Calculator
                       </label>
-                      <div className="grid grid-cols-2 gap-2 mb-3">
-                        {FREIGHT_METHODS.map(m => (
-                          <button key={m.value} onClick={() => setFreightMethod(m.value)}
-                            className={cn("py-2 rounded-xl text-xs font-semibold transition-all",
-                              freightMethod === m.value ? 'bg-gradient-to-r from-amber-500 to-orange-500 text-white shadow-md' : 'bg-muted/40 text-muted-foreground')}>
-                            {m.label}
-                          </button>
-                        ))}
-                      </div>
-                      <div className="flex items-center gap-3 mb-3">
+                      <RadioGroup
+                        value={freightMethod}
+                        onValueChange={handleFreightMethodChange}
+                        className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-3"
+                      >
+                        {FREIGHT_METHODS.map(m => {
+                          const isSelected = freightMethod === m.value;
+                          const optionId = `freight-method-mobile-${m.value.toLowerCase()}`;
+                          return (
+                            <label
+                              key={m.value}
+                              htmlFor={optionId}
+                              className={cn(
+                                'flex items-center gap-2 rounded-xl border px-3 py-2.5 text-xs font-semibold transition-all cursor-pointer min-h-11',
+                                isSelected
+                                  ? 'bg-gradient-to-r from-amber-500 to-orange-500 text-white border-orange-500 shadow-md'
+                                  : 'bg-muted/40 text-muted-foreground border-border',
+                              )}
+                            >
+                              <RadioGroupItem
+                                id={optionId}
+                                value={m.value}
+                                className={cn(
+                                  'h-4 w-4 shrink-0',
+                                  isSelected
+                                    ? 'border-white text-white'
+                                    : 'border-muted-foreground/60 text-muted-foreground',
+                                )}
+                              />
+                              <span>{m.label}</span>
+                            </label>
+                          );
+                        })}
+                      </RadioGroup>
+                      <div className="flex items-center justify-between gap-3 mb-3">
+                        <div className="flex items-center gap-2 sm:gap-3">
                         <button onClick={() => setNoRental(!noRental)}
-                          className={cn("w-14 h-8 rounded-full transition-all relative shadow-inner",
+                          className={cn("w-14 h-8 rounded-full transition-all relative shadow-inner flex-shrink-0",
                             noRental ? 'bg-gradient-to-r from-red-500 to-rose-500 shadow-red-500/30' : 'bg-slate-300 dark:bg-slate-600')}>
                           <motion.div className="w-6 h-6 rounded-full bg-white shadow-md absolute top-1" animate={{ x: noRental ? 28 : 4 }} transition={{ type: 'spring', stiffness: 500, damping: 30 }} />
                         </button>
-                        <span className="text-sm text-foreground font-medium">No Rental</span>
+                        <span className="text-xs sm:text-sm text-foreground font-medium">No Rental</span>
+                        </div>
+                        <div className="rounded-xl bg-blue-50 dark:bg-blue-950/20 px-3 py-2 text-right border border-blue-200/50 dark:border-blue-800/30">
+                          <p className="text-[9px] sm:text-[10px] text-blue-600 dark:text-blue-400 font-semibold">Net Weight</p>
+                          <p className="text-sm sm:text-base font-bold text-foreground">{finalBillableWeight}<span className="ml-1 text-[10px] sm:text-xs font-normal text-muted-foreground">kg</span></p>
+                        </div>
                       </div>
                       {!noRental && (
                         <>
-                          <div className="mb-3">
-                            <label className={cn("text-[10px] mb-1 block", isFreightRateInvalid ? "text-red-500 font-bold" : "text-muted-foreground")}>
-                              Rate {isFreightRateInvalid && '⚠ 0–100k'}
-                            </label>
-                            <Input type="number" placeholder="0" value={freightRate} onChange={e => setFreightRate(e.target.value)}
-                              className={cn("h-12 rounded-xl text-base font-medium", isFreightRateInvalid && "border-red-500 ring-2 ring-red-500/30 bg-red-50 dark:bg-red-950/20")} min={0} max={100000} step="0.01" />
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 sm:gap-3 mb-3">
+                            <div className={cn(freightMethod === 'BY_WEIGHT' ? '' : 'sm:col-span-2')}>
+                              <label className={cn("text-[10px] mb-1 block", isFreightRateInvalid ? "text-red-500 font-bold" : "text-muted-foreground")}>
+                                Rate {isFreightRateInvalid && '⚠ 0–100k'}
+                              </label>
+                              <Input type="number" placeholder="0" value={freightRate} onChange={e => setFreightRate(e.target.value)}
+                                className={cn("h-12 rounded-xl text-base font-medium", isFreightRateInvalid && "border-red-500 ring-2 ring-red-500/30 bg-red-50 dark:bg-red-950/20")} min={0} max={100000} step="0.01" />
+                            </div>
+                            {freightMethod === 'BY_WEIGHT' && (
+                              <div>
+                                <label className={cn("text-[10px] mb-1 block", isFreightKgsInvalid ? "text-red-500 font-bold" : "text-muted-foreground")}>
+                                  Kgs {isFreightKgsInvalid && '⚠ > 0'}
+                                </label>
+                                <Input type="number" placeholder="1" value={freightKgs} onChange={e => setFreightKgs(e.target.value)}
+                                  className={cn("h-12 rounded-xl text-base font-medium", isFreightKgsInvalid && "border-red-500 ring-2 ring-red-500/30 bg-red-50 dark:bg-red-950/20")} min={0.01} max={100000} step="0.01" />
+                              </div>
+                            )}
                           </div>
                           <div className="rounded-xl bg-amber-50 dark:bg-amber-950/20 p-3 text-center border border-amber-200/50 dark:border-amber-800/30 mb-3">
                             <p className="text-[10px] text-amber-600 dark:text-amber-400 font-semibold">Total Rental</p>
@@ -3089,38 +3923,13 @@ const ArrivalsPage = () => {
                     </div>
 
                     {/* ── Section 2: Sellers & Lots ── */}
-                    <div className="flex items-center gap-2 pt-2">
-                      <div className="w-6 h-6 rounded-lg bg-gradient-to-br from-emerald-500 to-teal-500 flex items-center justify-center">
-                        <Users className="w-3 h-3 text-white" />
-                      </div>
-                      <h3 className="text-sm font-bold text-foreground">Sellers & Lots</h3>
-                      <div className="flex-1 h-px bg-border/30" />
-                    </div>
-
-                    <div className={cn("glass-card rounded-2xl p-5", !isMultiSeller && sellers.length >= 1 && "opacity-60 pointer-events-none")}>
-                      <label className="text-xs font-bold text-emerald-600 dark:text-emerald-400 uppercase tracking-wider mb-2 block flex items-center gap-1.5">
-                        <Users className="w-3.5 h-3.5" /> Add Seller
-                        {!isMultiSeller && sellers.length >= 1 && <span className="text-muted-foreground font-normal normal-case">(single-seller: one only)</span>}
-                      </label>
-                      <div className="flex gap-3">
-                        <div ref={sellerSearchWrapRef} className="relative flex-1 min-w-0">
-                          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
-                          <Input placeholder="Search by name, phone, or mark…" value={sellerSearch}
-                            onChange={e => { setSellerSearch(e.target.value); refreshDropdownPos(); setSellerDropdown(true); }}
-                            onFocus={() => { if (sellerSearch) { refreshDropdownPos(); setSellerDropdown(true); } }}
-                            onBlur={() => setTimeout(() => setSellerDropdown(false), 150)}
-                            className="h-12 rounded-xl pl-10" />
+                    {sellers.length > 0 && (
+                      <div className="flex items-center gap-2 pt-2">
+                        <div className="w-6 h-6 rounded-lg bg-gradient-to-br from-emerald-500 to-teal-500 flex items-center justify-center">
+                          <Users className="w-3 h-3 text-white" />
                         </div>
-                        <Button type="button" variant="outline" size="sm" onClick={addSellerByName} className="h-12 rounded-xl shrink-0" disabled={!isMultiSeller && sellers.length >= 1}>
-                          Add by name
-                        </Button>
-                      </div>
-                    </div>
-
-                    {sellers.length === 0 && (
-                      <div className="glass-card rounded-2xl p-6 text-center">
-                        <Users className="w-10 h-10 text-muted-foreground/30 mx-auto mb-2" />
-                        <p className="text-muted-foreground text-sm">Search and add sellers to this arrival</p>
+                        <h3 className="text-sm font-bold text-foreground">Sellers & Lots</h3>
+                        <div className="flex-1 h-px bg-border/30" />
                       </div>
                     )}
 
@@ -3130,103 +3939,222 @@ const ArrivalsPage = () => {
                       const sellerSerialLabel = formatSellerSerialNumber(seller.seller_serial_number);
                       return (
                       <motion.div key={seller.seller_vehicle_id} initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }}
-                        className="glass-card rounded-2xl overflow-x-auto overflow-y-visible">
-                        <div className="p-4 flex items-stretch justify-between bg-gradient-to-r from-emerald-50 to-teal-50 dark:from-emerald-950/20 dark:to-teal-950/20 border-b border-border/30 min-w-0">
-                          <div className="flex items-start gap-2 min-w-0 flex-1">
-                            <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-emerald-500 to-teal-500 flex items-center justify-center shrink-0">
-                              <span className="text-white text-xs font-bold">{seller.seller_mark || seller.seller_name?.charAt(0) || '?'}</span>
+                        className="glass-card rounded-2xl overflow-x-hidden overflow-y-visible max-w-full">
+                        <div className="p-3 sm:p-4 flex items-center justify-between gap-2 sm:gap-3 bg-gradient-to-r from-emerald-50 to-teal-50 dark:from-emerald-950/20 dark:to-teal-950/20 border-b border-border/30 min-w-0">
+                          <div className="flex items-center gap-2 min-w-0 flex-1 sm:min-w-[12rem]">
+                            <div className="w-9 h-9 sm:w-8 sm:h-8 rounded-lg bg-gradient-to-br from-emerald-500 to-teal-500 flex items-center justify-center shrink-0">
+                              <span className="text-white text-lg sm:text-xl font-extrabold tabular-nums leading-none">{sellerSerialLabel ?? '#'}</span>
                             </div>
-                            <div className="flex items-center gap-3 min-w-0 flex-1">
+                            <div className="min-w-0 flex-1 w-0">
                               {seller.contact_id !== '' ? (
-                                <div className="min-w-0 flex-1">
-                                  <p className="font-semibold text-[12px] text-foreground truncate">
-                                    {seller.seller_name}
-                                  </p>
-                                  <div className="flex items-center gap-1.5 min-w-0">
-                                    {seller.seller_mark ? (
-                                      <span className="text-[10px] text-muted-foreground truncate whitespace-nowrap">
-                                        ({seller.seller_mark})
-                                      </span>
-                                    ) : null}
-                                    {sellerSerialLabel ? (
-                                      <span className="inline-flex items-center rounded-full bg-blue-500/10 px-2 py-0.5 text-[10px] font-semibold text-blue-700 dark:text-blue-300 whitespace-nowrap ring-1 ring-blue-500/20">
-                                        SL. NO {sellerSerialLabel}
-                                      </span>
-                                    ) : null}
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 sm:gap-2 min-w-0">
+                                  <div className="min-w-0 flex items-center">
+                                    <p className="font-semibold text-xs sm:text-sm text-foreground truncate">
+                                      {seller.seller_name}
+                                    </p>
                                   </div>
-                                  <p className="text-[10px] text-muted-foreground truncate">{seller.seller_phone}</p>
-                                  <div className="flex items-center justify-between gap-2 mt-0.5">
-                                    <p className="text-[10px] text-muted-foreground/80 truncate">{seller.lots.length} lot(s)</p>
+                                  <div className="min-w-0">
+                                    <Input
+                                      placeholder="Mark / alias (optional, 2–20)"
+                                      value={seller.seller_mark}
+                                      onChange={e => updateSeller(si, { seller_mark: e.target.value })}
+                                      className={cn(
+                                        "h-11 sm:h-10 w-full min-w-0 rounded-lg text-xs md:h-9",
+                                        isSellerMarkInvalid(seller, si) && "border-red-500 ring-2 ring-red-500/30 bg-red-50 dark:bg-red-950/20"
+                                      )}
+                                      maxLength={20}
+                                    />
+                                    {isSellerMarkInvalid(seller, si) && <p className="text-[9px] text-red-500 mt-0.5">{getSellerMarkError(seller, si) ?? '2–20 if set'}</p>}
                                   </div>
                                 </div>
                               ) : (
-                                <div className="grid grid-cols-1 gap-2 min-w-0 flex-1">
-                                  <div>
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 sm:gap-2 min-w-0">
+                                  <div
+                                    className="min-w-0"
+                                    ref={el => {
+                                      sellerNameInputWrapRefs.current[seller.seller_vehicle_id] = el;
+                                    }}
+                                  >
                                     <Input
                                       placeholder="Seller name (2–100)"
                                       value={seller.seller_name}
-                                      onChange={e => updateSeller(si, { seller_name: e.target.value })}
+                                      onChange={e => updateSellerNameWithSuggestions(si, seller.seller_vehicle_id, e.target.value)}
+                                      onFocus={() => {
+                                        const query = seller.seller_name.trim();
+                                        if (!query) return;
+                                        setActiveSellerSearch({ sellerId: seller.seller_vehicle_id, query: seller.seller_name });
+                                        refreshSellerDropdownPos(seller.seller_vehicle_id);
+                                        setSellerDropdown(true);
+                                      }}
+                                      onBlur={() => setTimeout(() => setSellerDropdown(false), 150)}
+                                      ref={el => {
+                                        sellerNameInputRefs.current[seller.seller_vehicle_id] = el;
+                                      }}
+                                      inputMode="text"
                                       className={cn(
-                                        "h-9 rounded-lg text-xs",
+                                        "h-11 sm:h-10 w-full min-w-0 rounded-lg text-xs md:h-9",
                                         isSellerNameInvalid(seller) && "border-red-500 ring-2 ring-red-500/30 bg-red-50 dark:bg-red-950/20"
                                       )}
                                       maxLength={100}
                                     />
                                     {isSellerNameInvalid(seller) && <p className="text-[9px] text-red-500 mt-0.5">2–100 characters</p>}
                                   </div>
-                                  <div>
+                                  <div className="min-w-0">
                                     <Input
-                                      placeholder="Mark / alias (optional, 2–50)"
+                                      placeholder="Mark / alias (optional, 2–20)"
                                       value={seller.seller_mark}
                                       onChange={e => updateSeller(si, { seller_mark: e.target.value })}
                                       className={cn(
-                                        "h-9 rounded-lg text-xs",
+                                        "h-11 sm:h-10 w-full min-w-0 rounded-lg text-xs md:h-9",
                                         isSellerMarkInvalid(seller, si) && "border-red-500 ring-2 ring-red-500/30 bg-red-50 dark:bg-red-950/20"
                                       )}
-                                      maxLength={50}
+                                      maxLength={20}
                                     />
-                                    {isSellerMarkInvalid(seller, si) && <p className="text-[9px] text-red-500 mt-0.5">{getSellerMarkError(seller, si) ?? '2–50 if set'}</p>}
-                                  </div>
-                                  <div className="flex items-center justify-between gap-2">
-                                    <p className="text-[10px] text-muted-foreground/80 truncate">{seller.lots.length} lot(s)</p>
-                                    {sellerSerialLabel ? (
-                                      <span className="inline-flex items-center rounded-full bg-blue-500/10 px-2 py-0.5 text-[10px] font-semibold text-blue-700 dark:text-blue-300 whitespace-nowrap ring-1 ring-blue-500/20">
-                                        SL. NO {sellerSerialLabel}
-                                      </span>
-                                    ) : null}
+                                    {isSellerMarkInvalid(seller, si) && <p className="text-[9px] text-red-500 mt-0.5">{getSellerMarkError(seller, si) ?? '2–20 if set'}</p>}
                                   </div>
                                 </div>
                               )}
-                              {/* Prominent total bags beside seller details */}
-                              <div className="shrink-0 self-center">
-                                <div className="px-3 py-1.5 rounded-xl bg-emerald-600/10 text-emerald-700 dark:text-emerald-300 font-extrabold shadow-sm ring-1 ring-emerald-600/20">
-                                  <span className="text-xl leading-none">{sellerTotal}</span>
-                                </div>
-                              </div>
                             </div>
                           </div>
-                          <div className="flex flex-col items-end justify-center gap-2 pl-2">
-                            <div className="flex items-center gap-1.5">
-                              <button
-                                type="button"
-                                onClick={() => setSellerExpanded(prev => ({ ...prev, [seller.seller_vehicle_id]: !expanded }))}
-                                aria-label={expanded ? 'Collapse seller lots' : 'Expand seller lots'}
-                                className={cn(
-                                  "w-8 h-8 rounded-lg flex items-center justify-center transition-colors",
-                                  expanded ? "bg-muted/40 hover:bg-muted/50" : "bg-muted/20 hover:bg-muted/40"
-                                )}
-                              >
-                                {expanded ? <ChevronUp className="w-4 h-4 text-muted-foreground" /> : <ChevronDown className="w-4 h-4 text-muted-foreground" />}
-                              </button>
-                              <button onClick={() => addLot(si)} className="w-8 h-8 rounded-lg bg-gradient-to-br from-blue-500 to-violet-500 flex items-center justify-center shadow-sm transition-colors">
-                                <Plus className="w-3.5 h-3.5 text-white" />
-                              </button>
+                          <div className="flex items-center gap-2 shrink-0 sm:pl-2">
+                            <div className="px-2.5 sm:px-3 py-1.5 rounded-lg sm:rounded-xl bg-emerald-600/10 text-emerald-700 dark:text-emerald-300 font-extrabold shadow-sm ring-1 ring-emerald-600/20">
+                              <span className="text-lg sm:text-xl leading-none whitespace-nowrap tabular-nums">{sellerTotal}</span>
                             </div>
-                            <button onClick={() => setPendingDelete({ kind: 'seller', idx: si, label: seller.seller_name || `Seller ${si + 1}` })} className="w-8 h-8 rounded-lg flex items-center justify-center text-red-400 hover:bg-red-50 dark:hover:bg-red-950/20 transition-colors">
-                              <Trash2 className="w-3.5 h-3.5" />
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const nextExpanded = !expanded;
+                                if (nextExpanded) {
+                                  expandOnlySeller(seller.seller_vehicle_id);
+                                } else {
+                                  setSellerExpanded(prev => ({ ...prev, [seller.seller_vehicle_id]: false }));
+                                }
+                                if (!nextExpanded) return;
+                                setAddLotForm({
+                                  sellerId: seller.seller_vehicle_id,
+                                  lotName: "",
+                                  bags: "",
+                                  commodityName: commodities[0]?.commodity_name || "",
+                                  variant: "",
+                                  errors: {},
+                                });
+                              }}
+                              aria-label={expanded ? 'Collapse seller lots' : 'Expand seller lots'}
+                              className={cn(
+                                "min-h-[44px] min-w-[44px] rounded-lg flex items-center justify-center transition-colors touch-manipulation",
+                                expanded ? "bg-muted/40 hover:bg-muted/50" : "bg-muted/20 hover:bg-muted/40"
+                              )}
+                            >
+                              {expanded ? <ChevronUp className="w-5 h-5 text-muted-foreground" /> : <ChevronDown className="w-5 h-5 text-muted-foreground" />}
+                            </button>
+                            <button type="button" onClick={() => setPendingDelete({ kind: 'seller', idx: si, label: seller.seller_name || `Seller ${si + 1}` })} className="min-h-[44px] min-w-[44px] rounded-lg flex items-center justify-center text-red-400 hover:bg-red-50 dark:hover:bg-red-950/20 transition-colors touch-manipulation">
+                              <Trash2 className="w-4 h-4" />
                             </button>
                           </div>
                         </div>
+                        <AnimatePresence initial={false}>
+                          {expanded && addLotForm?.sellerId === seller.seller_vehicle_id && (
+                            <motion.div
+                              key="add-lot-form"
+                              initial={{ opacity: 0, height: 0 }}
+                              animate={{ opacity: 1, height: "auto" }}
+                              exit={{ opacity: 0, height: 0 }}
+                              transition={{ duration: 0.15 }}
+                              className="overflow-hidden"
+                            >
+                              <div className="p-3 border-t border-border/30 space-y-2 bg-muted/10">
+                                <p className="text-[10px] font-bold text-blue-600 dark:text-blue-400 uppercase tracking-wider">{addLotForm.editingLotId ? "Edit Lot" : "New Lot"}</p>
+                                <AddLotHorizontalScrollPanel>
+                                  <div className="min-w-max flex flex-nowrap items-start gap-2">
+                                    <div className="min-w-0 flex-1">
+                                    <LotFieldsHorizontalScroll>
+                                      <div className="flex flex-nowrap items-start gap-2 overflow-x-auto overflow-y-visible lot-fields-x-scroll [-webkit-overflow-scrolling:touch] touch-auto">
+                                  {/* Lot Name */}
+                                  <div className="w-[8.5rem] sm:w-[9rem] md:w-[8.5rem] lg:w-[12rem] xl:w-[14rem] flex-none">
+                                    <Input
+                                      placeholder="Lot Name"
+                                      value={addLotForm.lotName}
+                                      onChange={e => setAddLotForm(prev => prev ? { ...prev, lotName: e.target.value, errors: { ...prev.errors, lotName: undefined } } : null)}
+                                      onFocus={() => handleLotEntryFieldFocus(seller.seller_vehicle_id)}
+                                      className={cn("h-10 sm:h-9 text-sm rounded-lg focus-visible:ring-0 focus-visible:ring-offset-0 focus-visible:border-primary focus-visible:shadow-[0_0_0_2px_hsl(var(--ring)/0.25)]", addLotForm.errors.lotName && "border-red-500 ring-2 ring-red-500/30 bg-red-50 dark:bg-red-950/20")}
+                                      maxLength={50}
+                                      autoFocus
+                                    />
+                                    {addLotForm.errors.lotName && <p className="text-[10px] text-red-500 mt-0.5">{addLotForm.errors.lotName}</p>}
+                                  </div>
+                                  {/* Bags */}
+                                  <div className="w-[5.5rem] sm:w-[6rem] md:w-[5.5rem] lg:w-[7rem] xl:w-[8rem] flex-none">
+                                    <Input
+                                      type="number"
+                                      placeholder="Bags"
+                                      value={addLotForm.bags}
+                                      onChange={e => setAddLotForm(prev => prev ? { ...prev, bags: e.target.value, errors: { ...prev.errors, bags: undefined } } : null)}
+                                      onFocus={() => handleLotEntryFieldFocus(seller.seller_vehicle_id)}
+                                      className={cn("h-10 sm:h-9 text-sm rounded-lg focus-visible:ring-0 focus-visible:ring-offset-0 focus-visible:border-primary focus-visible:shadow-[0_0_0_2px_hsl(var(--ring)/0.25)]", addLotForm.errors.bags && "border-red-500 ring-2 ring-red-500/30 bg-red-50 dark:bg-red-950/20")}
+                                      min={1}
+                                      max={100000}
+                                    />
+                                    {addLotForm.errors.bags && <p className="text-[10px] text-red-500 mt-0.5">{addLotForm.errors.bags}</p>}
+                                  </div>
+                                  {/* Commodity */}
+                                  <div className="w-[8.5rem] sm:w-[9rem] md:w-[8.5rem] lg:w-[12rem] xl:w-[14rem] flex-none">
+                                    <select
+                                      value={addLotForm.commodityName}
+                                      onChange={e => setAddLotForm(prev => prev ? { ...prev, commodityName: e.target.value, variant: '', errors: { ...prev.errors, commodity: undefined } } : null)}
+                                      onFocus={() => handleLotEntryFieldFocus(seller.seller_vehicle_id)}
+                                      className={cn("h-10 sm:h-9 w-full rounded-lg bg-background border border-input text-sm px-2 focus:outline-none focus:ring-0 focus:border-primary focus:shadow-[0_0_0_2px_hsl(var(--ring)/0.25)]", addLotForm.errors.commodity && "border-red-500 ring-2 ring-red-500/30")}
+                                    >
+                                      <option value="" disabled>Select Commodity</option>
+                                      {commodities.map((c: any) => (
+                                        <option key={c.commodity_id} value={c.commodity_name}>{c.commodity_name}</option>
+                                      ))}
+                                    </select>
+                                    {addLotForm.errors.commodity && <p className="text-[10px] text-red-500 mt-0.5">{addLotForm.errors.commodity}</p>}
+                                  </div>
+                                  {/* Variant */}
+                                  <div className="w-[7rem] sm:w-[7.5rem] md:w-[7rem] lg:w-[10rem] xl:w-[12rem] flex-none">
+                                    <select
+                                      value={addLotForm.variant}
+                                      onChange={e => setAddLotForm(prev => prev ? { ...prev, variant: e.target.value } : null)}
+                                      onFocus={() => handleLotEntryFieldFocus(seller.seller_vehicle_id)}
+                                      className="h-10 sm:h-9 w-full rounded-lg bg-background border border-input text-sm px-2 focus:outline-none focus:ring-0 focus:border-primary focus:shadow-[0_0_0_2px_hsl(var(--ring)/0.25)]"
+                                    >
+                                      {VARIANT_OPTIONS.map(opt => (
+                                        <option key={opt.value || 'none'} value={opt.value}>{opt.label}</option>
+                                      ))}
+                                    </select>
+                                  </div>
+                                      </div>
+                                    </LotFieldsHorizontalScroll>
+                                    </div>
+                                    {/* Action buttons */}
+                                    <div className="flex flex-nowrap items-center gap-2 justify-end sm:self-start pl-1">
+                                    <Button
+                                      type="button"
+                                      variant="ghost"
+                                      size="sm"
+                                      onClick={() => setAddLotForm({
+                                        sellerId: seller.seller_vehicle_id,
+                                        lotName: "",
+                                        bags: "",
+                                        commodityName: commodities[0]?.commodity_name || "",
+                                        variant: "",
+                                        errors: {},
+                                      })}
+                                      className="h-8 sm:h-9 shrink-0 whitespace-nowrap text-xs"
+                                    >
+                                      Cancel
+                                    </Button>
+                                    <Button type="button" size="sm" onClick={() => saveFormLot(si)} className="h-10 sm:h-10 px-4 shrink-0 whitespace-nowrap text-sm font-semibold bg-[#6075FF] hover:bg-[#5060e8] text-white border border-[#6075FF]">
+                                      {addLotForm.editingLotId ? "Update" : "Save Lot"}
+                                    </Button>
+                                    </div>
+                                  </div>
+                                </AddLotHorizontalScrollPanel>
+                              </div>
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
                         <AnimatePresence initial={false}>
                           {expanded && (
                             <motion.div
@@ -3241,92 +4169,78 @@ const ArrivalsPage = () => {
                                 sellerId={seller.seller_vehicle_id}
                                 registerScrollEl={setLotsScrollRef}
                                 showEdgeHints
-                                ensureVerticalScrollThumbWhenShort={seller.lots.length > 0}
                                 contentLayoutKey={seller.lots.length}
                                 showScrollAffordanceFooter={seller.lots.length > 0}
                                 scrollAffordanceHint="Swipe here to scroll lots"
-                                className="min-h-[11rem] max-h-[min(28rem,52dvh)] overflow-y-scroll overflow-x-auto p-3 overscroll-contain"
+                                className="min-h-[11rem] max-h-[min(28rem,52dvh)] overflow-y-auto overflow-x-auto lg:overflow-x-hidden overscroll-contain [-webkit-overflow-scrolling:touch] touch-auto border-t border-border/30"
                               >
-                                {seller.lots.length === 0 && (
-                                  <p className="text-xs text-muted-foreground text-center py-2 italic">No lots. Tap + to add a lot.</p>
-                                )}
-                                {seller.lots.map((lot, li) => {
-                                  const vehicleTotal = vehicleTotalBags;
-                                  const lotDuplicateError = !isLotNameInvalid(lot) ? getLotNameDuplicateError(si, li) : null;
-                                  const lotSerialLabel = lot.lot_serial_number != null && lot.lot_serial_number > 0 ? String(lot.lot_serial_number) : null;
-                                  return (
-                                    <div key={lot.lot_id} className="rounded-xl border border-border/30 p-3 space-y-2">
-                                      <div className="flex items-center justify-between gap-2">
-                                        <p className="text-[10px] font-bold text-muted-foreground uppercase">{lotSerialLabel ? `SL. NO ${lotSerialLabel}` : 'Lot'} <span className="font-normal text-foreground">— {vehicleTotal} / {sellerTotal} bags</span></p>
-                                        <button
-                                          onClick={() => setPendingDelete({ kind: 'lot', sellerIdx: si, lotIdx: li, label: lot.lot_name || `Lot ${li + 1}` })}
-                                          className="w-7 h-7 rounded-lg flex items-center justify-center text-red-400 hover:bg-red-50 dark:hover:bg-red-950/20 transition-colors shrink-0"
-                                        >
-                                          <Trash2 className="w-3.5 h-3.5" />
-                                        </button>
-                                      </div>
-                                      <LotFieldsHorizontalScroll>
-                                        <div className="grid grid-cols-4 gap-2 items-end min-w-[34rem]">
-                                        <div>
-                                          <Input
-                                            aria-label="Lot Name"
-                                            placeholder="Lot Name"
-                                            value={lot.lot_name}
-                                            onChange={e => updateLot(si, li, { lot_name: e.target.value })}
-                                            className={cn(
-                                              "h-10 w-full rounded-lg text-sm",
-                                              (isLotNameInvalid(lot) || lotDuplicateError) && "border-red-500 ring-2 ring-red-500/30 bg-red-50 dark:bg-red-950/20"
-                                            )}
-                                            inputMode="text"
-                                            maxLength={50}
-                                          />
-                                          {lotDuplicateError && <p className="text-[9px] text-red-500 mt-0.5">{lotDuplicateError}</p>}
-                                        </div>
-                                        <div>
-                                          <Input
-                                            aria-label="Bags Quantity"
-                                            type="number"
-                                            placeholder="Bags"
-                                            value={lot.quantity || ''}
-                                            onChange={e => updateLot(si, li, { quantity: parseInt(e.target.value) || 0 })}
-                                            className={cn(
-                                              "h-10 w-full rounded-lg text-sm",
-                                              isLotQuantityInvalid(lot) && "border-red-500 ring-2 ring-red-500/30 bg-red-50 dark:bg-red-950/20"
-                                            )}
-                                            min={1}
-                                            max={100000}
-                                          />
-                                        </div>
-                                        <div>
-                                          <select
-                                            aria-label="Commodity"
-                                            value={lot.commodity_name}
-                                            onChange={e => updateLot(si, li, { commodity_name: e.target.value })}
-                                            className="h-10 w-full rounded-lg bg-background border border-input text-sm px-2"
-                                          >
-                                            {commodities.map((c: any) => (
-                                              <option key={c.commodity_id} value={c.commodity_name}>{c.commodity_name}</option>
-                                            ))}
-                                            {commodities.length === 0 && <option value="">No commodities</option>}
-                                          </select>
-                                        </div>
-                                        <div>
-                                          <select
-                                            aria-label="Variant"
-                                            value={lot.variant ?? ''}
-                                            onChange={e => updateLot(si, li, { variant: e.target.value })}
-                                            className="h-10 w-full rounded-lg bg-background border border-input text-sm px-2"
-                                          >
-                                            {VARIANT_OPTIONS.map(opt => (
-                                              <option key={opt.value || 'none'} value={opt.value}>{opt.label}</option>
-                                            ))}
-                                          </select>
-                                        </div>
-                                        </div>
-                                      </LotFieldsHorizontalScroll>
-                                    </div>
-                                  );
-                                })}
+                                  {seller.lots.length === 0 ? (
+                                    <p className="text-xs text-muted-foreground text-center py-3 italic px-3">No lots added yet.</p>
+                                  ) : (
+                                    <LotFieldsHorizontalScroll>
+                                      <table className="w-[42rem] md:w-full text-sm sm:text-base table-fixed">
+                                        <thead className="sticky top-0 z-[3] bg-background">
+                                          <tr className="border-b border-border/20">
+                                            <th className="bg-muted/95 backdrop-blur text-center py-2 px-3 text-muted-foreground font-semibold w-1/6">SL. NO</th>
+                                            <th className="bg-muted/95 backdrop-blur text-center py-2 px-3 text-muted-foreground font-semibold w-1/6">Lot Name</th>
+                                            <th className="bg-muted/95 backdrop-blur text-center py-2 px-3 text-muted-foreground font-semibold w-1/6">Bags</th>
+                                            <th className="bg-muted/95 backdrop-blur text-center py-2 px-3 text-muted-foreground font-semibold w-1/6">Commodity</th>
+                                            <th className="bg-muted/95 backdrop-blur text-center py-2 px-3 text-muted-foreground font-semibold hidden md:table-cell md:w-1/6">Variant</th>
+                                            <th className="bg-muted/95 backdrop-blur text-center py-2 px-3 text-muted-foreground font-semibold w-1/6">Actions</th>
+                                          </tr>
+                                        </thead>
+                                        <tbody>
+                                          {seller.lots.map((lot, li) => {
+                                            const lotSerialLabel = lot.lot_serial_number != null && lot.lot_serial_number > 0 ? String(lot.lot_serial_number) : "-";
+                                            const isBeingEdited = addLotForm?.editingLotId === lot.lot_id;
+                                            return (
+                                              <tr
+                                                key={lot.lot_id}
+                                                onClick={() => editFormLot(si, li)}
+                                                className={cn(
+                                                  "border-b border-border/10 transition-colors cursor-pointer",
+                                                  isBeingEdited ? "bg-blue-50 dark:bg-blue-950/20" : "hover:bg-muted/20"
+                                                )}
+                                              >
+                                                <td className="py-1 px-2.5 align-middle text-center">
+                                                  {lotSerialLabel !== "-" ? (
+                                                    <span className="inline-flex items-center rounded-full bg-blue-500/10 px-1.5 py-0.5 text-[9px] sm:text-[10px] font-semibold leading-none text-blue-700 dark:text-blue-300 whitespace-nowrap ring-1 ring-blue-500/20">
+                                                      {lotSerialLabel} — {vehicleTotalBags} / {sellerTotal}
+                                                    </span>
+                                                  ) : (
+                                                    <span className="text-muted-foreground font-mono text-[9px] sm:text-[10px]">—</span>
+                                                  )}
+                                                </td>
+                                                <td className="py-1 px-2.5 align-middle text-center">
+                                                  <span className="inline-flex max-w-none whitespace-nowrap px-1.5 py-0.5 rounded bg-blue-100 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300 text-[10px] sm:text-xs font-bold leading-none">
+                                                    {lot.lot_name || "-"}
+                                                  </span>
+                                                </td>
+                                                <td className="py-2 px-3 align-middle text-center font-medium text-foreground">{lot.quantity}</td>
+                                                <td className="py-2 px-3 align-middle text-center text-foreground truncate">{lot.commodity_name || "-"}</td>
+                                                <td className="py-2 px-3 align-middle text-center text-muted-foreground hidden md:table-cell">{lot.variant || "None"}</td>
+                                                <td className="py-2 px-3 align-middle text-center">
+                                                  <div className="flex justify-center gap-1">
+                                                    <button
+                                                      type="button"
+                                                      onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        setPendingDelete({ kind: "lot", sellerIdx: si, lotIdx: li, label: lot.lot_name || "Lot " + (li + 1) });
+                                                      }}
+                                                      className="w-9 h-9 sm:w-8 sm:h-8 rounded-md flex items-center justify-center text-red-400 hover:bg-red-50 dark:hover:bg-red-950/20 transition-colors flex-shrink-0"
+                                                      aria-label="Delete lot"
+                                                    >
+                                                      <Trash2 className="w-4 h-4 sm:w-4 sm:h-4" />
+                                                    </button>
+                                                  </div>
+                                                </td>
+                                              </tr>
+                                            );
+                                          })}
+                                        </tbody>
+                                      </table>
+                                    </LotFieldsHorizontalScroll>
+                                  )}
                               </LotsScrollPanel>
                             </motion.div>
                           )}
@@ -3335,18 +4249,34 @@ const ArrivalsPage = () => {
                     );})}
 
                     </> )}
+
                     {/* ── Sticky Submit Button ── */}
-                    <div className="h-4" />
+                    <div className="h-2" />
                   </div>
 
                   {/* Fixed bottom submit bar - sits above bottom nav */}
-                  <div className="fixed bottom-14 left-0 right-0 z-[60] bg-background/90 backdrop-blur-xl border-t border-border/40 px-4 py-3 md:px-6">
+                  <div className="fixed bottom-[calc(3.5rem+env(safe-area-inset-bottom,0px)-1px)] sm:bottom-[calc(3.5rem+env(safe-area-inset-bottom,0px)-1px)] md:bottom-[calc(3.5rem+env(safe-area-inset-bottom,0px)-0.75rem-1px)] lg:bottom-0 left-0 right-0 z-[60] bg-background/90 backdrop-blur-xl px-3 pt-2.5 pb-0 sm:px-4 sm:pt-3 sm:pb-0 md:px-6">
                     <div className="max-w-[480px] md:max-w-full mx-auto">
-                      <Button onClick={handleSubmitArrival}
-                        disabled={isFormInvalid}
-                        className="w-full h-14 rounded-xl font-bold text-base bg-gradient-to-r from-emerald-500 to-teal-500 text-white shadow-lg shadow-emerald-500/20 disabled:opacity-60">
-                        <FileText className="w-5 h-5 mr-2" /> {editingVehicleId != null ? 'Update Arrival' : (sellers.length > 0 ? `Submit Arrival (${sellers.length} seller${sellers.length !== 1 ? 's' : ''})` : 'Submit Arrival')}
-                      </Button>
+                      <div className="flex items-stretch gap-0 rounded-2xl bg-white dark:bg-card p-1.5 shadow-sm border border-border/30">
+                        <Button
+                          type="button"
+                          size="sm"
+                          onClick={openSellerSearchPanel}
+                          disabled={(!isMultiSeller && sellers.length >= 1) || hasIncompleteSellerDetails}
+                          className="h-12 md:h-14 rounded-xl flex-1 text-xs sm:text-sm font-semibold flex items-center justify-center bg-[#6075FF] hover:bg-[#5060e8] text-white border border-[#6075FF] shadow-md shadow-[#6075FF]/25 active:shadow-lg active:shadow-[#6075FF]/35 active:scale-[0.99] transition-all disabled:opacity-60 disabled:bg-[#6075FF] disabled:text-white"
+                        >
+                          <Users className="w-4 h-4 md:w-5 md:h-5" />
+                          <span className="ml-1.5 sm:ml-2">Add Seller</span>
+                        </Button>
+                        <div className="w-2 shrink-0 bg-white dark:bg-card" aria-hidden />
+                        <Button
+                          onClick={handleSubmitArrival}
+                          className="flex-1 h-12 md:h-14 rounded-xl font-bold text-xs sm:text-sm md:text-base bg-gradient-to-r from-emerald-500 to-teal-500 text-white shadow-lg shadow-emerald-500/20 active:shadow-xl active:shadow-emerald-500/35 active:scale-[0.99] transition-all disabled:opacity-60 flex items-center justify-center"
+                        >
+                          <FileText className="w-4 h-4 md:w-5 md:h-5" />
+                          <span className="ml-1.5 sm:ml-2 truncate">{editingVehicleId != null ? 'Update Arrival' : (sellers.length > 0 ? `Submit (${sellers.length})` : 'Submit Arrival')}</span>
+                        </Button>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -3359,8 +4289,8 @@ const ArrivalsPage = () => {
 
       {!isDesktop && <BottomNav />}
 
-      {/* ── Seller search dropdown rendered via portal so it escapes all overflow:hidden parents ── */}
-      {sellerDropdown && filteredContacts.length > 0 && createPortal(
+      {/* ── Seller search dropdown rendered via portal (escapes overflow-hidden) ── */}
+      {sellerDropdown && activeSellerSearch && filteredContacts.length > 0 && createPortal(
         <AnimatePresence>
           <motion.div
             key="seller-dropdown-portal"
@@ -3370,27 +4300,37 @@ const ArrivalsPage = () => {
             transition={{ duration: 0.15 }}
             style={{
               position: 'fixed',
-              top: dropdownPos.top,
-              left: dropdownPos.left,
-              width: dropdownPos.width,
+              top: sellerDropdownPos.top,
+              left: sellerDropdownPos.left,
+              width: sellerDropdownPos.width,
               zIndex: 9999,
             }}
-            className="bg-card border border-border/50 rounded-xl shadow-2xl max-h-52 overflow-y-auto"
+            className="bg-card border border-border/50 rounded-xl shadow-2xl max-h-60 overflow-y-auto overflow-x-hidden"
           >
             {filteredContacts.map(c => (
               <button
                 key={c.contact_id}
-                onMouseDown={e => { e.preventDefault(); addSeller(c); }}
-                className="w-full px-3 py-2.5 text-left text-sm hover:bg-muted/50 transition-colors flex items-center gap-2 border-b border-border/20 last:border-0"
+                type="button"
+                onMouseDown={e => {
+                  e.preventDefault();
+                  fillSellerRowFromContact(activeSellerSearch.sellerId, c);
+                }}
+                className="w-full px-3 py-3 text-left text-sm hover:bg-muted/50 transition-colors flex items-start gap-3 border-b border-border/20 last:border-0 touch-manipulation"
               >
-                <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-emerald-500 to-teal-500 flex items-center justify-center flex-shrink-0">
-                  <span className="text-white text-[10px] font-bold">{c.mark || c.name.charAt(0)}</span>
+                <div className="mt-0.5 w-9 h-9 rounded-lg bg-gradient-to-br from-emerald-500 to-teal-500 flex items-center justify-center shrink-0">
+                  <span className="text-white text-[10px] font-bold">{c.mark || c.name?.charAt(0) || '?'}</span>
                 </div>
-                <div className="min-w-0">
-                  <span className="text-foreground font-medium">{c.name}</span>
-                  {c.mark && <span className="text-muted-foreground text-xs ml-1">({c.mark})</span>}
+                <div className="min-w-0 flex-1 flex flex-col gap-1">
+                  <div className="min-w-0">
+                    <span className="text-foreground font-medium break-words">{c.name}</span>
+                    {c.mark ? (
+                      <span className="text-muted-foreground text-xs"> ({c.mark})</span>
+                    ) : null}
+                  </div>
+                  {c.phone ? (
+                    <span className="text-xs text-muted-foreground tabular-nums break-all">{c.phone}</span>
+                  ) : null}
                 </div>
-                <span className="ml-auto text-xs text-muted-foreground flex-shrink-0">{c.phone}</span>
               </button>
             ))}
           </motion.div>
@@ -3414,23 +4354,29 @@ const ArrivalsPage = () => {
               width: brokerDropdownPos.width,
               zIndex: 9999,
             }}
-            className="bg-card border border-border/50 rounded-xl shadow-2xl max-h-52 overflow-y-auto"
+            className="bg-card border border-border/50 rounded-xl shadow-2xl max-h-60 overflow-y-auto overflow-x-hidden"
           >
             {filteredBrokers.map(c => (
               <button
                 key={c.contact_id}
                 type="button"
                 onMouseDown={e => { e.preventDefault(); setBrokerName(c.name ?? ''); setBrokerContactId(Number(c.contact_id) || null); setBrokerDropdown(false); }}
-                className="w-full px-3 py-2.5 text-left text-sm hover:bg-muted/50 transition-colors flex items-center gap-2 border-b border-border/20 last:border-0"
+                className="w-full px-3 py-3 text-left text-sm hover:bg-muted/50 transition-colors flex items-start gap-3 border-b border-border/20 last:border-0 touch-manipulation"
               >
-                <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-amber-500 to-orange-500 flex items-center justify-center flex-shrink-0">
+                <div className="mt-0.5 w-9 h-9 rounded-lg bg-gradient-to-br from-amber-500 to-orange-500 flex items-center justify-center shrink-0">
                   <span className="text-white text-[10px] font-bold">{c.mark || c.name?.charAt(0) || '?'}</span>
                 </div>
-                <div className="min-w-0">
-                  <span className="text-foreground font-medium">{c.name}</span>
-                  {c.mark && <span className="text-muted-foreground text-xs ml-1">({c.mark})</span>}
+                <div className="min-w-0 flex-1 flex flex-col gap-1">
+                  <div className="min-w-0">
+                    <span className="text-foreground font-medium break-words">{c.name}</span>
+                    {c.mark ? (
+                      <span className="text-muted-foreground text-xs"> ({c.mark})</span>
+                    ) : null}
+                  </div>
+                  {c.phone ? (
+                    <span className="text-xs text-muted-foreground tabular-nums break-all">{c.phone}</span>
+                  ) : null}
                 </div>
-                <span className="ml-auto text-xs text-muted-foreground flex-shrink-0">{c.phone}</span>
               </button>
             ))}
           </motion.div>

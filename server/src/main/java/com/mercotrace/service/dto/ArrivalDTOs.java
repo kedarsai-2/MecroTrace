@@ -162,6 +162,8 @@ public final class ArrivalDTOs {
 
         private Double freightRate;
 
+        private Double freightKgs;
+
         private boolean noRental;
 
         private Double advancePaid;
@@ -237,6 +239,14 @@ public final class ArrivalDTOs {
 
         public void setFreightRate(Double freightRate) {
             this.freightRate = freightRate;
+        }
+
+        public Double getFreightKgs() {
+            return freightKgs;
+        }
+
+        public void setFreightKgs(Double freightKgs) {
+            this.freightKgs = freightKgs;
         }
 
         public boolean isNoRental() {
@@ -677,6 +687,7 @@ public final class ArrivalDTOs {
         private Double netWeight;
         private FreightMethod freightMethod;
         private Double freightRate;
+        private Double freightKgs;
         private Double freightTotal;
         private Boolean noRental;
         private Double advancePaid;
@@ -715,6 +726,8 @@ public final class ArrivalDTOs {
         public void setFreightMethod(FreightMethod freightMethod) { this.freightMethod = freightMethod; }
         public Double getFreightRate() { return freightRate; }
         public void setFreightRate(Double freightRate) { this.freightRate = freightRate; }
+        public Double getFreightKgs() { return freightKgs; }
+        public void setFreightKgs(Double freightKgs) { this.freightKgs = freightKgs; }
         public Double getFreightTotal() { return freightTotal; }
         public void setFreightTotal(Double freightTotal) { this.freightTotal = freightTotal; }
         public Boolean getNoRental() { return noRental; }
@@ -743,6 +756,7 @@ public final class ArrivalDTOs {
         private Double deductedWeight;
         private FreightMethod freightMethod;
         private Double freightRate;
+        private Double freightKgs;
         private Boolean noRental;
         private Double advancePaid;
         private Boolean multiSeller;
@@ -776,6 +790,8 @@ public final class ArrivalDTOs {
         public void setFreightMethod(FreightMethod freightMethod) { this.freightMethod = freightMethod; }
         public Double getFreightRate() { return freightRate; }
         public void setFreightRate(Double freightRate) { this.freightRate = freightRate; }
+        public Double getFreightKgs() { return freightKgs; }
+        public void setFreightKgs(Double freightKgs) { this.freightKgs = freightKgs; }
         public Boolean getNoRental() { return noRental; }
         public void setNoRental(Boolean noRental) { this.noRental = noRental; }
         public Double getAdvancePaid() { return advancePaid; }
