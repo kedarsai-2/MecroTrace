@@ -30,7 +30,7 @@ interface LocalCommodityConfig {
   config: CommodityConfiguration;
   charges: Array<{ charge_name: string; charge_type: ChargeType; value: string; applies_to: AppliesTo }>;
   deductionRules: Array<{ min_weight: string; max_weight: string; deduction_value: string }>;
-  hamaliSlabs: Array<{ threshold_weight: string; fixed_rate: string; per_kg_rate: string }>;
+  hamaliSlabs: Array<{ threshold_weight: string; fixed_rate: string }>;
   hamaliEnabled: boolean;
   billPrefix: string;
   gstApplicable: boolean;
@@ -71,7 +71,6 @@ function fullConfigToLocal(commodity: Commodity, full: FullCommodityConfigDto): 
   const hamaliSlabs = (full.hamaliSlabs ?? []).map(s => ({
     threshold_weight: String(s.thresholdWeight),
     fixed_rate: String(s.fixedRate),
-    per_kg_rate: String(s.perKgRate ?? 0),
   }));
   return {
     commodity,
@@ -196,7 +195,7 @@ const CommoditySettings = () => {
     setItems(prev => prev.map((item, i) => i === index ? { ...item, ...updates } : item));
   };
 
-  const syncWeighingFromHamaliSlabs = (item: LocalCommodityConfig, nextSlabs: Array<{ threshold_weight: string; fixed_rate: string; per_kg_rate: string }>) => {
+  const syncWeighingFromHamaliSlabs = (item: LocalCommodityConfig, nextSlabs: Array<{ threshold_weight: string; fixed_rate: string }>) => {
     const firstSlab = nextSlabs[0];
     if (!firstSlab) {
       return item;
@@ -243,7 +242,7 @@ const CommoditySettings = () => {
   const addHamaliSlab = (index: number) => {
     setItems(prev => prev.map((item, i) =>
       i === index
-        ? syncWeighingFromHamaliSlabs(item, [...item.hamaliSlabs, { threshold_weight: '', fixed_rate: '', per_kg_rate: '' }])
+        ? syncWeighingFromHamaliSlabs(item, [...item.hamaliSlabs, { threshold_weight: '', fixed_rate: '' }])
         : item
     ));
   };
@@ -475,7 +474,6 @@ const CommoditySettings = () => {
         commodityId: cid,
         thresholdWeight: Number(s.threshold_weight),
         fixedRate: Number(s.fixed_rate),
-        perKgRate: Number(s.per_kg_rate) || 0,
       })),
       dynamicCharges: item.charges.map(ch => ({
         commodityId: cid,
@@ -1004,10 +1002,6 @@ const CommoditySettings = () => {
                                     ii === index ? syncWeighingFromHamaliSlabs(it, slabs) : it
                                   )));
                                 }} className="h-11 rounded-xl bg-white dark:bg-white/10 border-2 border-pink-200 dark:border-pink-700/50 text-sm flex-1 focus:border-pink-500" min={0} />
-                                <Input type="number" placeholder="Per-kg ₹" value={slab.per_kg_rate} onChange={e => {
-                                  const slabs = [...item.hamaliSlabs]; slabs[si] = { ...slabs[si], per_kg_rate: e.target.value };
-                                  updateItem(index, { hamaliSlabs: slabs });
-                                }} className="h-11 rounded-xl bg-white dark:bg-white/10 border-2 border-pink-200 dark:border-pink-700/50 text-sm flex-1 focus:border-pink-500" min={0} step={0.1} />
                                 <button onClick={() => setPendingInlineRemove({ kind: 'hamali', cIndex: index, slabIndex: si })} className="text-red-500 hover:text-red-600 shrink-0"><Trash2 className="w-4 h-4" /></button>
                               </div>
                             ))}

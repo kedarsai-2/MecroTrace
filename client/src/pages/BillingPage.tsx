@@ -42,7 +42,7 @@ const arrOutlineMd = 'rounded-xl h-9 text-sm font-semibold';
 const arrOutlineTall = 'rounded-xl h-12 text-sm font-semibold';
 const arrOutlineSm = 'rounded-xl h-8 text-xs font-semibold';
 const arrSolid =
-  'rounded-xl font-bold bg-[#6075FF] text-white shadow-lg hover:bg-[#5060e8] hover:text-white border-transparent';
+  'rounded-xl font-bold bg-[#6075FF] text-white shadow-lg hover:!bg-slate-500 hover:!text-white border-transparent transition-colors';
 const arrSolidLg = cn(arrSolid, 'h-11 sm:h-12 px-4 text-sm');
 const arrSolidMd = cn(arrSolid, 'h-9 px-3 text-sm');
 const arrSolidTall = cn(arrSolid, 'h-12 px-6 text-sm');
@@ -2180,7 +2180,7 @@ const BillingPage = () => {
         </div>
         ) : (
         <div className="px-8 py-5 flex items-center gap-4">
-          <Button onClick={() => setShowPrint(false)} variant="outline" className={cn(arrOutlineMd, 'gap-1.5')}>
+          <Button onClick={() => setShowPrint(false)} variant="outline" className={cn(arrSolidMd, 'gap-1.5')}>
             <ArrowLeft className="w-4 h-4" /> Back
           </Button>
           <div>
@@ -2317,7 +2317,7 @@ const BillingPage = () => {
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-end gap-3 mt-4">
             <div className="flex gap-3 w-full sm:w-auto">
             <Button
-              variant="default"
+              variant="outline"
               onClick={async () => {
               const printedAt = new Date().toISOString();
               try {
@@ -2410,8 +2410,8 @@ const BillingPage = () => {
             This phone exists on an inactive contact. Restore it to use again?
           </p>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setRestorePendingPhone(null)} className={arrOutlineMd}>Cancel</Button>
-            <Button variant="default" onClick={handleRestoreContactFromBilling} disabled={!canEditContact} className={arrSolidMd}>Restore</Button>
+            <Button variant="outline" onClick={() => setRestorePendingPhone(null)} className={arrSolidMd}>Cancel</Button>
+            <Button variant="outline" onClick={handleRestoreContactFromBilling} disabled={!canEditContact} className={arrSolidMd}>Restore</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -2427,7 +2427,7 @@ const BillingPage = () => {
         <DialogContent className="max-w-lg">
           <DialogHeader>
             <DialogTitle>
-              Search Bid - {searchBidSourceBuyer ? `${searchBidSourceBuyer.buyerName} (${searchBidSourceBuyer.buyerMark})` : 'Buyer'}
+              Search & Migrate Bid - {searchBidSourceBuyer ? `${searchBidSourceBuyer.buyerName} (${searchBidSourceBuyer.buyerMark})` : 'Buyer'}
             </DialogTitle>
           </DialogHeader>
           {!searchBidSourceBuyer || searchBidSourceBuyer.entries.length === 0 ? (
@@ -2474,9 +2474,9 @@ const BillingPage = () => {
             </div>
           )}
           <DialogFooter>
-            <Button variant="outline" onClick={() => setSearchBidDialogOpen(false)} className={arrOutlineMd}>Cancel</Button>
+            <Button variant="outline" onClick={() => setSearchBidDialogOpen(false)} className={arrSolidMd}>Cancel</Button>
             <Button
-              variant="default"
+              variant="outline"
               onClick={addSearchedBidsToCurrentBill}
               disabled={searchBidSelectedKeys.length === 0}
               className={arrSolidMd}
@@ -2549,7 +2549,7 @@ const BillingPage = () => {
                 <BookOpen className="w-4 h-4 text-emerald-600 dark:text-emerald-400 mt-0.5 shrink-0" />
                 <p className="text-xs text-emerald-700 dark:text-emerald-400">Contact registered. A receivable ledger is created automatically.</p>
               </div>
-              <Button variant="default" onClick={submitBillingContactAdd} className={arrSolidWide14}>
+              <Button variant="outline" onClick={submitBillingContactAdd} className={arrSolidWide14}>
                 Register Contact
               </Button>
             </motion.div>
@@ -2715,10 +2715,10 @@ const BillingPage = () => {
                 </div>
               )}
             </div>
-              <Button type="button" variant="default" onClick={() => void handleGetBidsForMark()} className={cn(arrSolidLg, 'sm:self-end')}>
+              <Button type="button" variant="outline" onClick={() => void handleGetBidsForMark()} className={cn(arrSolidLg, 'sm:self-end')}>
                 Get Bid
               </Button>
-              <Button type="button" variant="outline" onClick={handleSelectBidMode} className={cn(arrOutlineLg, 'sm:self-end')}>
+              <Button type="button" variant="outline" onClick={handleSelectBidMode} className={cn(arrSolidLg, 'sm:self-end')}>
                 Select Bid
               </Button>
             </div>
@@ -2736,7 +2736,7 @@ const BillingPage = () => {
                     type="button"
                     variant="outline"
                     onClick={() => { setSelectBidBuyer(null); setSelectedBidKeys([]); }}
-                    className={arrOutlineSm}
+                    className={arrSolidSm}
                   >
                     Clear
                   </Button>
@@ -2774,7 +2774,7 @@ const BillingPage = () => {
                 </div>
                 <Button
                   type="button"
-                  variant="default"
+                  variant="outline"
                   onClick={() => void handleCreateBillFromSelected()}
                   disabled={selectedBidKeys.length === 0}
                   className={arrSolidWide10}
@@ -2786,7 +2786,7 @@ const BillingPage = () => {
             {buyersForBilling.length === 0 && (
               <div className="rounded-xl bg-muted/30 p-4 text-center space-y-2">
                 <p className="text-sm text-muted-foreground">No auction bids loaded yet.</p>
-                <Button type="button" variant="outline" onClick={() => navigate('/auctions')} className={arrOutlineMd}>Go to Auctions</Button>
+                <Button type="button" variant="outline" onClick={() => navigate('/auctions')} className={arrSolidMd}>Go to Auctions</Button>
               </div>
             )}
           </motion.div>
@@ -2808,7 +2808,7 @@ const BillingPage = () => {
                   </div>
                 </div>
                 <div className="flex items-center gap-2 shrink-0 flex-wrap">
-                  <Button type="button" variant="outline" className={arrOutlineMd} onClick={() => void handleClearBillEditor()}>
+                  <Button type="button" variant="outline" className={arrSolidMd} onClick={() => void handleClearBillEditor()}>
                     Change buyer
                   </Button>
                 </div>
@@ -2858,7 +2858,7 @@ const BillingPage = () => {
             <div className="glass-card rounded-2xl p-3 sm:p-4 space-y-3 overflow-visible relative z-[80]">
               <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
                 <div>
-                  <Label className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide mb-1 block">Search Bid</Label>
+                  <Label className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide mb-1 block">Search & Migrate Bid</Label>
                   <div ref={searchBidBuyerSelectRef} className="relative w-full sm:w-48">
                     <Input
                       ref={searchBidInputRef}
@@ -2868,9 +2868,9 @@ const BillingPage = () => {
                         setSearchBidInput(e.target.value);
                         setShowSearchBidBuyerSuggestions(true);
                       }}
-                      aria-label="Search Bid"
-                      title={`Search Bid${tabHint('Alt L')}`}
-                      placeholder="Search Bid"
+                      aria-label="Search & Migrate Bid"
+                      title={`Search & Migrate Bid${tabHint('Alt L')}`}
+                      placeholder="Search & Migrate Bid"
                       className="h-9 rounded-xl text-xs"
                     />
                     {showSearchBidBuyerSuggestions && (
@@ -2897,7 +2897,7 @@ const BillingPage = () => {
                 <Button
                   type="button"
                   variant="outline"
-                  className={cn(arrOutlineMd, 'shrink-0', showAddBidCard && 'ring-2 ring-[#6075FF] ring-offset-2 ring-offset-background')}
+                  className={cn(arrSolidMd, 'shrink-0', showAddBidCard && 'ring-2 ring-[#6075FF] ring-offset-2 ring-offset-background')}
                   onClick={() => {
                     setShowAddBidCard(prev => {
                       const next = !prev;
@@ -2990,7 +2990,7 @@ const BillingPage = () => {
                   <div className="flex items-center gap-2 pt-1">
                     <Button
                       type="button"
-                      variant="default"
+                      variant="outline"
                       className={arrSolidSm}
                       onClick={() => void handleAddBidToCurrentBuyer()}
                       disabled={addBidSaving}
@@ -3000,7 +3000,7 @@ const BillingPage = () => {
                     <Button
                       type="button"
                       variant="outline"
-                      className={arrOutlineSm}
+                      className={arrSolidSm}
                       onClick={() => {
                         resetAddBidForm();
                         setShowAddBidCard(false);
@@ -3098,7 +3098,7 @@ const BillingPage = () => {
                 />
                 <Button
                   type="button"
-                  variant="default"
+                  variant="outline"
                   className={cn(arrSolidMd, 'whitespace-nowrap shrink-0')}
                   onClick={() => void submitReplacement()}
                   disabled={
@@ -3114,7 +3114,7 @@ const BillingPage = () => {
                     ? `Update ${replaceTarget === 'BROKER' ? 'Broker' : 'Buyer'}`
                     : `Add ${replaceTarget === 'BROKER' ? 'Broker' : 'Buyer'}`}
                 </Button>
-                <Button type="button" variant="outline" className={cn(arrOutlineMd, 'shrink-0')} onClick={clearReplacementInline}>
+                <Button type="button" variant="outline" className={cn(arrSolidMd, 'shrink-0')} onClick={clearReplacementInline}>
                   Clear
                 </Button>
                 <label className="inline-flex items-center gap-1.5 text-xs text-muted-foreground whitespace-nowrap">
@@ -3251,7 +3251,7 @@ const BillingPage = () => {
                           type="button"
                           variant="outline"
                           onClick={applyGlobalCharges}
-                          className={cn(arrOutlineSm, 'whitespace-nowrap')}
+                          className={cn(arrSolidSm, 'whitespace-nowrap')}
                         >
                           Apply to All
                         </Button>
@@ -3989,7 +3989,7 @@ const BillingPage = () => {
                     <Button
                       type="button"
                       variant="outline"
-                      className={cn(arrOutlineMd, 'gap-1.5')}
+                      className={cn(arrSolidMd, 'gap-1.5')}
                       onClick={() => setEditLocked(false)}
                       disabled={!isBackendBillId(bill.billId)}
                     >
@@ -3997,7 +3997,7 @@ const BillingPage = () => {
                     </Button>
                     <Button
                       type="button"
-                      variant="default"
+                      variant="outline"
                       className={cn(arrSolidMd, 'gap-1.5')}
                       onClick={() => void handleSaveDraft()}
                     >
@@ -4006,7 +4006,7 @@ const BillingPage = () => {
                     <Button
                       type="button"
                       variant="outline"
-                      className={cn(arrOutlineMd, 'gap-1.5')}
+                      className={cn(arrSolidMd, 'gap-1.5')}
                       onClick={() => void saveAndPreparePrint()}
                       disabled={!hasSavedOnce}
                     >
@@ -4015,7 +4015,7 @@ const BillingPage = () => {
                     <Button
                       type="button"
                       variant="outline"
-                      className={cn(arrOutlineMd, 'gap-1.5')}
+                      className={cn(arrSolidMd, 'gap-1.5')}
                       onClick={handleCreateNewBill}
                     >
                       <Plus className="w-4 h-4" /> Create New (Alt+N)
