@@ -245,6 +245,15 @@ function sessionEntryToSaleEntry(e: AuctionEntryDTO): SaleEntry {
   };
 }
 
+function mapOrderedSessionEntries(entries: AuctionEntryDTO[]): SaleEntry[] {
+  return entries
+    .map(sessionEntryToSaleEntry)
+    .sort((a, b) => {
+      if (a.bidNumber !== b.bidNumber) return a.bidNumber - b.bidNumber;
+      return a.id.localeCompare(b.id);
+    });
+}
+
 const AUCTION_SCROLL_EPS = 2;
 
 function AuctionsGridScrollPanel({
@@ -252,11 +261,13 @@ function AuctionsGridScrollPanel({
   children,
   contentLayoutKey,
   autoScrollToBottomKey,
+  gridSectionRef,
 }: {
   className?: string;
   children: React.ReactNode;
   contentLayoutKey: number;
   autoScrollToBottomKey: number;
+  gridSectionRef?: React.RefObject<HTMLDivElement>;
 }) {
   const outerRef = useRef<HTMLDivElement | null>(null);
   const [hintBottom, setHintBottom] = useState(false);
@@ -322,12 +333,133 @@ function AuctionsGridScrollPanel({
   useEffect(() => {
     const outer = outerRef.current;
     if (!outer || autoScrollToBottomKey <= 0) return;
-    outer.scrollTo({ top: outer.scrollHeight, behavior: 'smooth' });
-    const rafId = window.requestAnimationFrame(() => {
-      outer.scrollTo({ top: outer.scrollHeight, behavior: 'smooth' });
+
+    let cleanedUp = false;
+    const timeouts: number[] = [];
+    const rafs: number[] = [];
+    let pollingInterval: number | null = null;
+    let lastScrollHeight = 0;
+    let stableCount = 0;
+
+    const scrollPageToGrid = () => {
+      if (cleanedUp) return;
+      
+      if (gridSectionRef?.current) {
+        gridSectionRef.current.scrollIntoView({ 
+          behavior: 'smooth', 
+          block: 'start',
+          inline: 'nearest'
+        });
+      }
+    };
+
+    const scrollToBottom = (smooth: boolean) => {
+      if (cleanedUp) return;
+      
+      const maxScroll = Math.max(0, outer.scrollHeight - outer.clientHeight);
+      
+      if (maxScroll <= 0) return;
+
+      if (smooth) {
+        outer.scrollTo({ top: maxScroll, behavior: 'smooth' });
+      } else {
+        outer.scrollTop = maxScroll;
+      }
+
+      const raf = requestAnimationFrame(() => {
+        if (cleanedUp || maxScroll <= 0) return;
+        outer.scrollTop = maxScroll;
+      });
+      rafs.push(raf);
+    };
+
+    const isLatestRowFullyVisible = (): boolean => {
+      const rows = Array.from(
+        outer.querySelectorAll('tr[data-auction-entry-row="true"]')
+      ) as HTMLTableRowElement[];
+      
+      if (rows.length === 0) return true;
+
+      const latestRow = rows.reduce<HTMLTableRowElement | null>((latest, row) => {
+        const bid = Number(row.dataset.bidNumber ?? 0);
+        if (!latest) return row;
+        const latestBid = Number(latest.dataset.bidNumber ?? 0);
+        return bid >= latestBid ? row : latest;
+      }, null);
+
+      if (!latestRow) return true;
+
+      const outerRect = outer.getBoundingClientRect();
+      const rowRect = latestRow.getBoundingClientRect();
+      
+      const rowBottomRelative = rowRect.bottom - outerRect.top;
+      const containerHeight = outer.clientHeight;
+      
+      return rowBottomRelative <= containerHeight;
+    };
+
+    const checkAndScroll = () => {
+      if (cleanedUp) return;
+
+      const currentScrollHeight = outer.scrollHeight;
+      
+      if (currentScrollHeight === lastScrollHeight) {
+        stableCount++;
+      } else {
+        stableCount = 0;
+        lastScrollHeight = currentScrollHeight;
+      }
+
+      const isVisible = isLatestRowFullyVisible();
+
+      if (!isVisible) {
+        scrollToBottom(false);
+      }
+
+      if (stableCount >= 3 && isVisible) {
+        if (pollingInterval !== null) {
+          clearInterval(pollingInterval);
+          pollingInterval = null;
+        }
+      }
+    };
+
+    scrollPageToGrid();
+    
+    timeouts.push(window.setTimeout(() => scrollToBottom(false), 200));
+    timeouts.push(window.setTimeout(() => scrollToBottom(true), 400));
+    timeouts.push(window.setTimeout(() => checkAndScroll(), 600));
+    timeouts.push(window.setTimeout(() => checkAndScroll(), 900));
+    timeouts.push(window.setTimeout(() => checkAndScroll(), 1200));
+
+    pollingInterval = window.setInterval(() => {
+      checkAndScroll();
+    }, 400);
+
+    const resizeObserver = new ResizeObserver(() => {
+      if (cleanedUp) return;
+      scrollToBottom(false);
+      const timeout = window.setTimeout(() => checkAndScroll(), 100);
+      timeouts.push(timeout);
     });
-    return () => window.cancelAnimationFrame(rafId);
-  }, [autoScrollToBottomKey]);
+    resizeObserver.observe(outer);
+
+    const mutationObserver = new MutationObserver(() => {
+      if (cleanedUp) return;
+      const timeout = window.setTimeout(() => scrollToBottom(false), 50);
+      timeouts.push(timeout);
+    });
+    mutationObserver.observe(outer, { childList: true, subtree: true });
+
+    return () => {
+      cleanedUp = true;
+      rafs.forEach(id => cancelAnimationFrame(id));
+      timeouts.forEach(id => clearTimeout(id));
+      if (pollingInterval !== null) clearInterval(pollingInterval);
+      resizeObserver?.disconnect();
+      mutationObserver?.disconnect();
+    };
+  }, [autoScrollToBottomKey, gridSectionRef]);
 
   const setScrollLeftFromPointerX = useCallback((clientX: number) => {
     const outer = outerRef.current;
@@ -399,19 +531,42 @@ function AuctionsGridScrollPanel({
             style={{
               left: horizontalThumbMetrics.left,
               width: horizontalThumbMetrics.width,
-              borderColor: horizontalThumbPressed ? 'hsl(var(--foreground) / 0.75)' : 'hsl(var(--foreground) / 0.45)',
-              backgroundColor: horizontalThumbPressed ? 'hsl(var(--foreground) / 0.22)' : 'hsl(var(--foreground) / 0.14)',
+              borderColor: horizontalThumbPressed ? 'hsl(229 76% 61%)' : 'hsl(229 100% 69%)',
+              backgroundColor: horizontalThumbPressed ? 'hsl(229 76% 61%)' : 'hsl(229 100% 69%)',
               boxShadow:
                 horizontalThumbPressed
-                  ? 'inset 0 0 0 1px hsl(var(--foreground) / 0.75), 0 0 22px hsl(var(--foreground) / 0.24)'
-                  : 'inset 0 0 0 1px hsl(var(--foreground) / 0.55), 0 0 14px hsl(var(--foreground) / 0.16)',
+                  ? 'inset 0 0 0 1px hsl(0 0% 100% / 0.4), 0 0 26px hsl(229 100% 69% / 0.35)'
+                  : 'inset 0 0 0 1px hsl(0 0% 100% / 0.3), 0 0 18px hsl(229 100% 69% / 0.25)',
             }}
             onPointerDown={onHorizontalThumbPointerDown}
             role="slider"
             aria-label="Drag to scroll auction grid horizontally"
             aria-valuemin={0}
             aria-valuemax={1}
-          />
+          >
+            <div className="pointer-events-none absolute inset-0 flex items-center justify-center gap-1.5">
+              <span
+                className="block h-[8px] w-[8px] -rotate-45 border-t-2 border-l-2"
+                style={{ borderColor: 'hsl(0 0% 100% / 0.92)' }}
+                aria-hidden
+              />
+              <span
+                className="grid h-[10px] w-[10px] place-items-center rounded-full"
+                style={{ backgroundColor: 'hsl(0 0% 100% / 0.92)' }}
+                aria-hidden
+              >
+                <span
+                  className="block h-[2px] w-[2px] rounded-full"
+                  style={{ backgroundColor: 'hsl(229 100% 69%)' }}
+                />
+              </span>
+              <span
+                className="block h-[8px] w-[8px] rotate-[135deg] border-t-2 border-l-2"
+                style={{ borderColor: 'hsl(0 0% 100% / 0.92)' }}
+                aria-hidden
+              />
+            </div>
+          </div>
         </div>
       )}
     </div>
@@ -542,6 +697,7 @@ const AuctionsPage = () => {
   const didDragMarkRef = useRef(false);
   const pendingBidAutoScrollRef = useRef(false);
   const [autoScrollKey, setAutoScrollKey] = useState(0);
+  const auctionGridSectionRef = useRef<HTMLDivElement>(null);
 
   const makeScrollHandlers = useCallback((
     ref: React.RefObject<HTMLDivElement | null>,
@@ -674,7 +830,7 @@ const AuctionsPage = () => {
     auctionApi
       .getOrStartSession(lot.lot_id)
       .then((session: AuctionSessionDTO) => {
-        setEntries(session.entries.map(sessionEntryToSaleEntry));
+        setEntries(mapOrderedSessionEntries(session.entries));
         void loadTemporaryBuyerMarks();
       })
       .catch(() => { /* entries stay empty from draft if API fails */ })
@@ -868,7 +1024,12 @@ const AuctionsPage = () => {
   useEffect(() => {
     if (!pendingBidAutoScrollRef.current) return;
     pendingBidAutoScrollRef.current = false;
-    setAutoScrollKey((prev) => prev + 1);
+    
+    const timeoutId = window.setTimeout(() => {
+      setAutoScrollKey((prev) => prev + 1);
+    }, 50);
+    
+    return () => window.clearTimeout(timeoutId);
   }, [entries.length]);
 
   const getBidRateFromInput = useCallback((rawRate: string) => {
@@ -883,7 +1044,7 @@ const AuctionsPage = () => {
   }, [editingBidId, entries]);
 
   const applyAuctionSession = useCallback((session: AuctionSessionDTO) => {
-    setEntries(session.entries.map(sessionEntryToSaleEntry));
+    setEntries(mapOrderedSessionEntries(session.entries));
     setSelfSaleContext(session.self_sale_context ?? null);
     const lotId = selectedLot?.lot_id;
     const selfSaleUnitId = selectedLot?.selfSaleUnitId;
@@ -1798,7 +1959,7 @@ const AuctionsPage = () => {
           vehicle_number: info.vehicle_number || lot.vehicle_number || '',
           commodity_name: info.commodity_name || lot.commodity_name || '',
         });
-        setEntries(session.entries.map(sessionEntryToSaleEntry));
+        setEntries(mapOrderedSessionEntries(session.entries));
         setSelfSaleContext(session.self_sale_context ?? null);
         void loadTemporaryBuyerMarks();
       })
@@ -2750,7 +2911,7 @@ const AuctionsPage = () => {
         )}
 
         {/* Auction Grid — entries list */}
-        <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }} className={cn(!isDesktop && "order-2")}>
+        <motion.div ref={auctionGridSectionRef} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }} className={cn(!isDesktop && "order-2")}>
           <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">
             Auction Grid · {entries.length} entries
           </p>
@@ -2770,6 +2931,7 @@ const AuctionsPage = () => {
                 )}
                 contentLayoutKey={entries.length}
                 autoScrollToBottomKey={autoScrollKey}
+                gridSectionRef={auctionGridSectionRef}
               >
                 <table className={cn("w-[42rem] md:w-full text-sm sm:text-base table-fixed border-collapse", showPresetMargin ? "min-w-[480px]" : "min-w-[420px]")}>
                   <thead className="sticky top-0 z-[3] bg-background">
@@ -2787,6 +2949,8 @@ const AuctionsPage = () => {
                     {entries.map((entry, i) => (
                       <Fragment key={entry.id}>
                         <motion.tr
+                          data-auction-entry-row="true"
+                          data-bid-number={entry.bidNumber}
                           initial={{ opacity: 0, x: -15 }}
                           animate={{ opacity: 1, x: 0 }}
                           transition={{ delay: i * 0.05 }}
@@ -2805,7 +2969,7 @@ const AuctionsPage = () => {
                         >
                           <td className={cn("px-3 py-[12px]", isDesktop ? "" : "px-2 py-[10px]")}>
                             <div className="flex items-center gap-1.5 flex-wrap">
-                              <span className={cn("font-medium text-foreground truncate max-w-[120px]", isDesktop ? "text-sm" : "text-xs")} title={entry.buyerName}>
+                              <span className={cn("font-medium text-foreground truncate max-w-[120px]", isDesktop ? "text-base" : "text-sm")} title={entry.buyerName}>
                                 {normalizeScribbleBuyerName(entry.buyerName, entry.isScribble)}
                               </span>
                               {entry.isSelfSale && <span className="px-1 py-0.5 rounded bg-amber-500/15 text-amber-600 dark:text-amber-400 text-[8px] font-bold">SELF</span>}
@@ -2814,7 +2978,7 @@ const AuctionsPage = () => {
                               )}
                             </div>
                           </td>
-                          <td className={cn("align-middle text-center font-semibold text-foreground", isDesktop ? "px-3 py-[12px] text-sm" : "px-2 py-[10px] text-xs")}>
+                          <td className={cn("align-middle text-center font-semibold text-foreground", isDesktop ? "px-3 py-[12px] text-base" : "px-2 py-[10px] text-sm")}>
                             <div>₹{entry.rate}</div>
                             {showPresetMargin && (
                               <div className="text-[10px] font-medium text-muted-foreground">
@@ -2826,7 +2990,7 @@ const AuctionsPage = () => {
                             <td
                               className={cn(
                                 "align-middle text-center font-medium tabular-nums",
-                                isDesktop ? "px-3 py-[12px] text-sm" : "px-2 py-[10px] text-xs",
+                                isDesktop ? "px-3 py-[12px] text-base" : "px-2 py-[10px] text-sm",
                                 entry.presetApplied > 0 && "text-success",
                                 entry.presetApplied < 0 && "text-destructive"
                               )}
@@ -2834,7 +2998,7 @@ const AuctionsPage = () => {
                               {formatPresetMarginCell(entry.presetApplied)}
                             </td>
                           )}
-                          <td className={cn("align-middle text-center text-muted-foreground", isDesktop ? "px-3 py-[12px] text-sm" : "px-2 py-[10px] text-xs")}>
+                          <td className={cn("align-middle text-center text-muted-foreground", isDesktop ? "px-3 py-[12px] text-base" : "px-2 py-[10px] text-sm")}>
                             {entry.quantity}
                           </td>
                           <td className={cn("text-right", isDesktop ? "px-3 py-[12px]" : "px-2 py-[10px]")}>

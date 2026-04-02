@@ -445,6 +445,16 @@
     border-color: rgba(255, 255, 255, 0.96);
   }
 
+  .auctions-grid-scroll-panel {
+    scrollbar-gutter: stable;
+    scrollbar-width: none;
+  }
+  .auctions-grid-scroll-panel::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+    display: none;
+  }
+
   .lot-fields-x-scroll {
     scrollbar-gutter: stable;
     scrollbar-color: hsl(220 15% 58% / 0.95) hsl(220 20% 90% / 0.45);
