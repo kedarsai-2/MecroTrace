@@ -1,5 +1,6 @@
 interface FreightDetailsCardProps {
   freightRate: number;
+  freightKgs?: number;
   netWeight: number;
   freightMethod: string;
   freightTotal: number;
@@ -14,7 +15,7 @@ const METHODS: Record<string, string> = {
   DIVIDE_BY_WEIGHT: 'Lumpsum + Divide',
 };
 
-const FreightDetailsCard = ({ freightRate = 0, netWeight = 0, freightMethod = 'BY_WEIGHT', freightTotal = 0, advancePaid = 0, noRental = false }: FreightDetailsCardProps) => {
+const FreightDetailsCard = ({ freightRate = 0, freightKgs, netWeight = 0, freightMethod = 'BY_WEIGHT', freightTotal = 0, advancePaid = 0, noRental = false }: FreightDetailsCardProps) => {
   if (noRental || (freightTotal ?? 0) <= 0) return null;
 
   const perKg = freightMethod === 'BY_WEIGHT' ? 1 : 0;
@@ -30,6 +31,13 @@ const FreightDetailsCard = ({ freightRate = 0, netWeight = 0, freightMethod = 'B
 
         <span className="text-muted-foreground">Freight Rate</span>
         <span className="font-medium text-foreground text-right">₹{freightRate.toLocaleString()}</span>
+
+        {freightMethod === 'BY_WEIGHT' && freightKgs && freightKgs !== 1 && (
+          <>
+            <span className="text-muted-foreground">Rate per</span>
+            <span className="font-medium text-foreground text-right">{freightKgs} kg</span>
+          </>
+        )}
 
         <span className="text-muted-foreground">Net Weight</span>
         <span className="font-medium text-foreground text-right">{netWeight.toLocaleString()} kg</span>

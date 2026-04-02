@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <changeSet id="20260401125000-1" author="mercotrace">
+        <addColumn tableName="freight_calculation">
+            <column name="freight_kgs" type="double precision" defaultValue="1.0">
+                <constraints nullable="true"/>
+            </column>
+        </addColumn>
+    </changeSet>
+
+    <changeSet id="20260401125000-2" author="mercotrace">
+        <addNotNullConstraint tableName="freight_calculation" columnName="freight_kgs" defaultNullValue="1.0"/>
+    </changeSet>
+
+</databaseChangeLog>

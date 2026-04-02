@@ -240,13 +240,15 @@ public class ArrivalService {
 
         FreightMethod fm = request.getFreightMethod() != null ? request.getFreightMethod() : FreightMethod.BY_WEIGHT;
         double freightRate = request.getFreightRate() != null ? request.getFreightRate() : 0d;
+        double freightKgs = request.getFreightKgs() != null ? request.getFreightKgs() : 1.0d;
         double advancePaid = request.getAdvancePaid() != null ? request.getAdvancePaid() : 0d;
-        double freightTotal = computeFreightTotal(fm, freightRate, finalBillableWeight, lots, request.isNoRental());
+        double freightTotal = computeFreightTotal(fm, freightRate, freightKgs, finalBillableWeight, lots, request.isNoRental());
 
         FreightCalculation freight = new FreightCalculation();
         freight.setVehicleId(vehicle.getId());
         freight.setMethod(fm);
         freight.setRate(freightRate);
+        freight.setFreightKgs(freightKgs);
         freight.setTotalAmount(freightTotal);
         freight.setNoRental(request.isNoRental());
         freight.setAdvancePaid(advancePaid);
@@ -448,6 +450,7 @@ public class ArrivalService {
             FreightCalculation fc = freightOpt.get();
             dto.setFreightMethod(fc.getMethod());
             dto.setFreightRate(fc.getRate());
+            dto.setFreightKgs(fc.getFreightKgs());
             dto.setFreightTotal(fc.getTotalAmount());
             dto.setNoRental(Boolean.TRUE.equals(fc.getNoRental()));
             dto.setAdvancePaid(fc.getAdvancePaid());
@@ -668,11 +671,12 @@ public class ArrivalService {
 
         Optional<FreightCalculation> freightOpt = freightCalculationRepository.findOneByVehicleId(vehicleId);
         boolean updateFreight = update.getFreightMethod() != null || update.getFreightRate() != null
-            || update.getNoRental() != null || update.getAdvancePaid() != null || sellersReplaced;
+            || update.getFreightKgs() != null || update.getNoRental() != null || update.getAdvancePaid() != null || sellersReplaced;
         if (updateFreight && freightOpt.isPresent()) {
             FreightCalculation freight = freightOpt.get();
             if (update.getFreightMethod() != null) freight.setMethod(update.getFreightMethod());
             if (update.getFreightRate() != null) freight.setRate(update.getFreightRate());
+            if (update.getFreightKgs() != null) freight.setFreightKgs(update.getFreightKgs());
             if (update.getNoRental() != null) freight.setNoRental(update.getNoRental());
             if (update.getAdvancePaid() != null) freight.setAdvancePaid(update.getAdvancePaid());
 
@@ -686,6 +690,7 @@ public class ArrivalService {
             double freightTotal = computeFreightTotal(
                 freight.getMethod() != null ? freight.getMethod() : FreightMethod.BY_WEIGHT,
                 freight.getRate() != null ? freight.getRate() : 0d,
+                freight.getFreightKgs() != null ? freight.getFreightKgs() : 1.0d,
                 finalBillable,
                 lotsForFreight,
                 Boolean.TRUE.equals(freight.getNoRental())
@@ -1037,6 +1042,14 @@ public class ArrivalService {
         if (!effectiveRequestMultiSeller(request) && sellers.size() > 1) {
             throw new IllegalArgumentException("Single-seller arrival allows only one seller");
         }
+        
+        // Validate freight_kgs for BY_WEIGHT method
+        if (request.getFreightMethod() == FreightMethod.BY_WEIGHT && request.getFreightKgs() != null) {
+            if (request.getFreightKgs() <= 0) {
+                throw new IllegalArgumentException("Freight kgs must be greater than 0 for BY_WEIGHT method");
+            }
+        }
+        
         for (ArrivalSellerDTO seller : sellers) {
             if (seller.getContactId() == null && seller.getSellerPhone() != null && !seller.getSellerPhone().isBlank()) {
                 String phone = seller.getSellerPhone().trim();
@@ -1279,6 +1292,7 @@ public class ArrivalService {
     private double computeFreightTotal(
         FreightMethod method,
         Double rate,
+        Double freightKgs,
         double finalBillableWeight,
         List<Lot> lots,
         boolean noRental
@@ -1287,9 +1301,11 @@ public class ArrivalService {
             return 0d;
         }
         double safeRate = rate != null ? rate : 0d;
+        double safeKgs = freightKgs != null ? freightKgs : 1.0d;
         switch (method) {
             case BY_WEIGHT:
-                return finalBillableWeight * safeRate;
+                if (safeKgs <= 0d) return 0d;
+                return (finalBillableWeight * safeRate) / safeKgs;
             case BY_COUNT:
                 int totalBags = lots.stream().mapToInt(l -> l.getBagCount() != null ? l.getBagCount() : 0).sum();
                 return totalBags * safeRate;

@@ -363,95 +363,86 @@
   }
 
   /**
-   * Arrivals “Sellers & lots” vertical scroller: pill track + bordered thumb with grip lines.
-   * Pair with `overflow-y: scroll` + `ensureVerticalScrollThumbWhenShort` so the bar shows with one lot.
-   * Firefox: `scrollbar-color` only (no arrows); WebKit/Chromium/Edge: full styling.
+   * Arrivals “Sellers & lots” vertical scroller.
+   * Styled to match the blue circular up/down reference control.
    */
   .lots-scroll-panel {
     scrollbar-gutter: stable;
-    scrollbar-width: thin;
+    scrollbar-width: auto;
     /* thumb | track */
-    scrollbar-color: hsl(var(--foreground) / 0.45) hsl(var(--card));
+    scrollbar-color: #ffffff #2563eb;
   }
   .dark .lots-scroll-panel {
-    scrollbar-color: hsl(var(--muted-foreground) / 0.75) hsl(var(--card));
+    scrollbar-color: #ffffff #2563eb;
   }
   .lots-scroll-panel::-webkit-scrollbar {
-    width: 15px;
+    width: 0;
+    height: 0;
+    display: none;
   }
   .lots-scroll-panel::-webkit-scrollbar-corner {
     background: transparent;
   }
-  /* Pill track: light interior, dark outline (matches reference: capsule + end caps) */
+  /* Blue capsule track. */
   .lots-scroll-panel::-webkit-scrollbar-track {
     margin-block: 2px;
-    background: hsl(var(--card));
+    background: linear-gradient(180deg, #3b82f6 0%, #2563eb 45%, #1d4ed8 100%);
     border-radius: 9999px;
-    box-shadow: inset 0 0 0 1px hsl(var(--foreground) / 0.28);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.2), 0 8px 16px rgba(37, 99, 235, 0.3);
   }
   .dark .lots-scroll-panel::-webkit-scrollbar-track {
-    box-shadow: inset 0 0 0 1px hsl(var(--foreground) / 0.22);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.2), 0 8px 16px rgba(37, 99, 235, 0.35);
   }
-  /* Up / down chevrons inside rounded ends (Chromium shows when classic scrollbars are used) */
+  /* White chevrons in capsule ends. */
   .lots-scroll-panel::-webkit-scrollbar-button:single-button:vertical:decrement,
   .lots-scroll-panel::-webkit-scrollbar-button:vertical:start:decrement {
     display: block;
-    height: 13px;
-    width: 15px;
+    height: 20px;
+    width: 24px;
     border-radius: 9999px 9999px 0 0;
-    background-color: hsl(var(--card));
-    box-shadow: inset 0 0 0 1px hsl(var(--foreground) / 0.28), inset 0 -1px 0 0 hsl(var(--foreground) / 0.12);
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath fill='%23334155' d='M6%203.3%20L9.7%208.7%20L2.3%208.7z'/%3E%3C/svg%3E");
-    background-size: 9px 9px;
+    background: linear-gradient(180deg, #3b82f6 0%, #2563eb 100%);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.22);
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath fill='%23ffffff' d='M6 2.2 L10.4 8.6 L8.9 9.6 L6 5.4 L3.1 9.6 L1.6 8.6 z'/%3E%3C/svg%3E");
+    background-size: 13px 13px;
     background-position: center 5px;
     background-repeat: no-repeat;
   }
   .dark .lots-scroll-panel::-webkit-scrollbar-button:single-button:vertical:decrement,
   .dark .lots-scroll-panel::-webkit-scrollbar-button:vertical:start:decrement {
-    box-shadow: inset 0 0 0 1px hsl(var(--foreground) / 0.22), inset 0 -1px 0 0 hsl(var(--foreground) / 0.1);
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath fill='%23cbd5e1' d='M6%203.3%20L9.7%208.7%20L2.3%208.7z'/%3E%3C/svg%3E");
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.22);
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath fill='%23ffffff' d='M6 2.2 L10.4 8.6 L8.9 9.6 L6 5.4 L3.1 9.6 L1.6 8.6 z'/%3E%3C/svg%3E");
   }
   .lots-scroll-panel::-webkit-scrollbar-button:single-button:vertical:increment,
   .lots-scroll-panel::-webkit-scrollbar-button:vertical:end:increment {
     display: block;
-    height: 13px;
-    width: 15px;
+    height: 20px;
+    width: 24px;
     border-radius: 0 0 9999px 9999px;
-    background-color: hsl(var(--card));
-    box-shadow: inset 0 0 0 1px hsl(var(--foreground) / 0.28), inset 0 1px 0 0 hsl(var(--foreground) / 0.12);
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath fill='%23334155' d='M6%208.7%20L2.3%203.3%20L9.7%203.3z'/%3E%3C/svg%3E");
-    background-size: 9px 9px;
-    background-position: center 4px;
+    background: linear-gradient(180deg, #2563eb 0%, #1d4ed8 100%);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.22);
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath fill='%23ffffff' d='M1.6 3.4 L3.1 2.4 L6 6.6 L8.9 2.4 L10.4 3.4 L6 9.8 z'/%3E%3C/svg%3E");
+    background-size: 13px 13px;
+    background-position: center 5px;
     background-repeat: no-repeat;
   }
   .dark .lots-scroll-panel::-webkit-scrollbar-button:single-button:vertical:increment,
   .dark .lots-scroll-panel::-webkit-scrollbar-button:vertical:end:increment {
-    box-shadow: inset 0 0 0 1px hsl(var(--foreground) / 0.22), inset 0 1px 0 0 hsl(var(--foreground) / 0.1);
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath fill='%23cbd5e1' d='M6%208.7%20L2.3%203.3%20L9.7%203.3z'/%3E%3C/svg%3E");
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.22);
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath fill='%23ffffff' d='M1.6 3.4 L3.1 2.4 L6 6.6 L8.9 2.4 L10.4 3.4 L6 9.8 z'/%3E%3C/svg%3E");
   }
-  /* Thumb: pill + three horizontal grip lines */
+  /* White circular knob style. */
   .lots-scroll-panel::-webkit-scrollbar-thumb {
     border-radius: 9999px;
-    border: 2px solid hsl(var(--card));
-    box-shadow: inset 0 0 0 1px hsl(var(--foreground) / 0.32);
-    background-color: hsl(var(--card));
-    background-image:
-      linear-gradient(to right, hsl(var(--foreground) / 0.42), hsl(var(--foreground) / 0.42)),
-      linear-gradient(to right, hsl(var(--foreground) / 0.42), hsl(var(--foreground) / 0.42)),
-      linear-gradient(to right, hsl(var(--foreground) / 0.42), hsl(var(--foreground) / 0.42));
-    background-size: 8px 1px, 8px 1px, 8px 1px;
-    background-position: center 38%, center 50%, center 62%;
-    background-repeat: no-repeat;
+    border: 2px solid rgba(255, 255, 255, 0.96);
+    box-shadow: inset 0 0 0 1px rgba(29, 78, 216, 0.2), 0 0 0 1px rgba(29, 78, 216, 0.15);
+    background-color: #ffffff;
     background-clip: padding-box;
+    min-height: 28px;
   }
   .dark .lots-scroll-panel::-webkit-scrollbar-thumb {
-    box-shadow: inset 0 0 0 1px hsl(var(--foreground) / 0.25);
-    background-color: hsl(var(--muted));
-    border-color: hsl(var(--card));
-    background-image:
-      linear-gradient(to right, hsl(var(--muted-foreground) / 0.65), hsl(var(--muted-foreground) / 0.65)),
-      linear-gradient(to right, hsl(var(--muted-foreground) / 0.65), hsl(var(--muted-foreground) / 0.65)),
-      linear-gradient(to right, hsl(var(--muted-foreground) / 0.65), hsl(var(--muted-foreground) / 0.65));
+    box-shadow: inset 0 0 0 1px rgba(29, 78, 216, 0.22), 0 0 0 1px rgba(29, 78, 216, 0.2);
+    background-color: #ffffff;
+    border-color: rgba(255, 255, 255, 0.96);
   }
 
   .lot-fields-x-scroll {

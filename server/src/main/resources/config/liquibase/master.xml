@@ -83,9 +83,10 @@
     <include file="config/liquibase/changelog/20260326140000_trader_preset_enabled_global_presets.xml" relativeToChangelogFile="false"/>
     <include file="config/liquibase/changelog/20260330180000_sales_bill_bill_number_nullable.xml" relativeToChangelogFile="false"/>
     <include file="config/liquibase/changelog/20260401120000_sales_bill_token_advance.xml" relativeToChangelogFile="false"/>
+    <include file="config/liquibase/changelog/20260401125000_add_freight_kgs.xml" relativeToChangelogFile="false"/>
     <include file="config/liquibase/changelog/20260401130000_sales_bill_line_item_token_advance.xml" relativeToChangelogFile="false"/>
     <include file="config/liquibase/changelog/20260401140000_sales_bill_buyer_broker_details.xml" relativeToChangelogFile="false"/>
+    <include file="config/liquibase/changelog/20260402000000_per_commodity_billing_charges.xml" relativeToChangelogFile="false"/>
     <include file="config/liquibase/changelog/20260402120000_sales_bill_line_item_lot_id.xml" relativeToChangelogFile="false"/>
     <include file="config/liquibase/changelog/20260402140000_sales_bill_line_item_auction_entry_id.xml" relativeToChangelogFile="false"/>
-    <include file="config/liquibase/changelog/20260402000000_per_commodity_billing_charges.xml" relativeToChangelogFile="false"/>
 </databaseChangeLog>
