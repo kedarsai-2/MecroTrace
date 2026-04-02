@@ -2,6 +2,7 @@ import { useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback, Fra
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Capacitor } from '@capacitor/core';
+import { Keyboard } from '@capacitor/keyboard';
 import BottomNav from '@/components/BottomNav';
 import {
   ArrowLeft, Plus, Truck, Scale, ChevronDown, ChevronUp, ChevronRight, ChevronsUpDown, Trash2,
@@ -905,6 +906,7 @@ const ArrivalsPage = () => {
   const sellerNameInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
   const pendingSellerFocusIdRef = useRef<string | null>(null);
   const [sellerFocusNonce, setSellerFocusNonce] = useState(0);
+  const sellerKeyboardTriggeredRef = useRef<Set<string>>(new Set());
   // Rapid-click safety helpers (avoid stale closures around `sellers.length` / `isMultiSeller`).
   const isMultiSellerRef = useRef(isMultiSeller);
   const sellerCountRef = useRef(0);
@@ -1807,6 +1809,8 @@ const ArrivalsPage = () => {
         delete next[sellerToRemove.seller_vehicle_id];
         return next;
       });
+      // Clean up keyboard trigger tracking for this seller
+      sellerKeyboardTriggeredRef.current.delete(sellerToRemove.seller_vehicle_id);
     }
   };
 
@@ -2016,18 +2020,45 @@ const ArrivalsPage = () => {
 
       input.scrollIntoView({ block: 'center', behavior: 'auto' });
       
-      // Focus the input and ensure keyboard opens on mobile.
-      // On iOS, programmatic focus() alone may not trigger the keyboard
-      // when called asynchronously (via setTimeout/requestAnimationFrame).
+      // Focus the input to ensure it's active
       input.focus({ preventScroll: false });
       
-      // Additional trigger: simulate a click to ensure keyboard opens.
-      // This makes the browser treat it as a user-initiated action.
-      if (Capacitor.isNativePlatform()) {
-        // Use a microtask delay to ensure the input is fully rendered and focusable
+      // Aggressively ensure keyboard opens on mobile/tablet.
+      // Many mobile browsers don't open the keyboard for programmatic focus().
+      // We use multiple strategies to maximize reliability.
+      if (Capacitor.isNativePlatform() && !sellerKeyboardTriggeredRef.current.has(sellerId)) {
+        sellerKeyboardTriggeredRef.current.add(sellerId);
+        
+        // Strategy 1: Simulate a click event (works on most browsers)
         requestAnimationFrame(() => {
-          input.click();
+          if (document.activeElement === input) {
+            input.click();
+          }
         });
+        
+        // Strategy 2: Try to explicitly show the keyboard via Capacitor API
+        // This is more reliable than click() on some Android devices
+        window.setTimeout(() => {
+          if (document.activeElement === input) {
+            Keyboard.show().catch(() => {
+              // Keyboard.show() may fail if not supported or if keyboard
+              // is already showing - this is fine, we have other fallbacks
+            });
+          }
+        }, 100);
+        
+        // Strategy 3: Dispatch a native touch event as a last resort
+        // This simulates an actual user tap more accurately
+        window.setTimeout(() => {
+          if (document.activeElement === input) {
+            const touchEvent = new TouchEvent('touchstart', {
+              bubbles: true,
+              cancelable: true,
+              view: window,
+            });
+            input.dispatchEvent(touchEvent);
+          }
+        }, 150);
       }
 
       // Mobile keyboard: keep nudging the active element into view after focus.
@@ -2178,6 +2209,8 @@ const ArrivalsPage = () => {
     setIsMultiSeller(true);
     setEditingVehicleId(null);
     editBaselineSnapshotRef.current = null;
+    // Clear keyboard trigger tracking when form is reset
+    sellerKeyboardTriggeredRef.current.clear();
   };
 
   const loadExpandedDetail = async (vehicleId: number | string) => {
