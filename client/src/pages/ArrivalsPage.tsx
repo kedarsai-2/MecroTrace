@@ -3239,7 +3239,7 @@ const ArrivalsPage = () => {
                                     </LotFieldsHorizontalScroll>
                                     </div>
                                     {/* Action buttons */}
-                                    <div className="flex flex-nowrap items-center gap-2 justify-end sm:self-start pl-1">
+                                    <div className="relative z-[8] flex flex-nowrap items-center gap-2 justify-end sm:self-start pl-1">
                                     <Button
                                       type="button"
                                       variant="ghost"
@@ -3284,7 +3284,7 @@ const ArrivalsPage = () => {
                                 contentLayoutKey={seller.lots.length}
                                 showScrollAffordanceFooter={seller.lots.length > 0}
                                 scrollAffordanceHint="Scroll to see all lots"
-                                className="min-h-[12rem] max-h-[min(32rem,58dvh)] overflow-y-auto overflow-x-auto lg:overflow-x-hidden overscroll-contain [-webkit-overflow-scrolling:touch] touch-auto border-t border-border/30"
+                                className="min-h-[12rem] max-h-[min(32rem,58dvh)] overflow-y-auto overflow-x-auto lg:overflow-x-hidden overscroll-contain [-webkit-overflow-scrolling:touch] touch-auto border-t border-border/30 pb-6"
                               >
                                   {seller.lots.length === 0 ? (
                                     <p className="text-xs text-muted-foreground text-center py-3 italic px-3">No lots added yet.</p>
@@ -3685,7 +3685,7 @@ const ArrivalsPage = () => {
                     </div>
                   </div>
 
-                  <div className="px-4 pt-4 space-y-4 pb-36">
+                  <div className="px-4 pt-4 space-y-4 pb-[calc(11rem+env(safe-area-inset-bottom,0px))] md:pb-40">
                     {editingVehicleId != null && editLoading && (
                       <div className="glass-card rounded-2xl p-8 text-center">
                         <p className="text-muted-foreground font-medium">Loading arrival details…</p>
@@ -4128,7 +4128,7 @@ const ArrivalsPage = () => {
                                     </LotFieldsHorizontalScroll>
                                     </div>
                                     {/* Action buttons */}
-                                    <div className="flex flex-nowrap items-center gap-2 justify-end sm:self-start pl-1">
+                                    <div className="relative z-[8] flex flex-nowrap items-center gap-2 justify-end sm:self-start pl-1">
                                     <Button
                                       type="button"
                                       variant="ghost"
@@ -4172,7 +4172,7 @@ const ArrivalsPage = () => {
                                 contentLayoutKey={seller.lots.length}
                                 showScrollAffordanceFooter={seller.lots.length > 0}
                                 scrollAffordanceHint="Swipe here to scroll lots"
-                                className="min-h-[11rem] max-h-[min(28rem,52dvh)] overflow-y-auto overflow-x-auto lg:overflow-x-hidden overscroll-contain [-webkit-overflow-scrolling:touch] touch-auto border-t border-border/30"
+                                className="min-h-[11rem] max-h-[min(28rem,52dvh)] overflow-y-auto overflow-x-auto lg:overflow-x-hidden overscroll-contain [-webkit-overflow-scrolling:touch] touch-auto border-t border-border/30 pb-6"
                               >
                                   {seller.lots.length === 0 ? (
                                     <p className="text-xs text-muted-foreground text-center py-3 italic px-3">No lots added yet.</p>
