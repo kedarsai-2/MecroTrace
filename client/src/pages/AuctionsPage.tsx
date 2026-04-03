@@ -1032,12 +1032,15 @@ const AuctionsPage = () => {
     return () => window.clearTimeout(timeoutId);
   }, [entries.length]);
 
-  /** Parsed rate is always the seller bid (same as shown in the Rate column); preset is separate. */
+  /**
+   * When preset is on, the rate field shows buyer total (bid + preset); this returns seller bid for API / grid `rate`.
+   * When preset is off, the field is the seller bid.
+   */
   const getBidRateFromInput = useCallback((rawRate: string) => {
     const parsed = parseInt(rawRate, 10);
     if (!Number.isFinite(parsed)) return 0;
-    return parsed;
-  }, []);
+    return showPresetMargin ? Math.max(0, parsed - preset) : parsed;
+  }, [showPresetMargin, preset]);
 
   const editingEntry = useMemo(() => {
     if (!editingBidId) return null;
@@ -1715,8 +1718,12 @@ const AuctionsPage = () => {
     setEditBidQtyDialog(null);
     setEditingBidId(entry.id);
     setEditBidRetryAllowIncrease(false);
+    const displayRateForInput =
+      entry.presetApplied !== 0
+        ? Math.trunc(entry.rate + entry.presetApplied)
+        : Math.trunc(entry.rate);
     setEditBidDraft({
-      rate: String(Math.trunc(entry.rate)),
+      rate: String(displayRateForInput),
       qty: String(entry.quantity),
       preset: entry.presetApplied,
       presetType: entry.presetType,
@@ -1726,7 +1733,7 @@ const AuctionsPage = () => {
     });
 
     // Prefill Sales Pad controls from the bid being edited.
-    setRate(String(Math.trunc(entry.rate)));
+    setRate(String(displayRateForInput));
     setQty(String(entry.quantity));
     setPreset(entry.presetApplied);
     setPresetType(entry.presetType);
@@ -1763,9 +1770,16 @@ const AuctionsPage = () => {
       toast.error('You do not have permission to edit auction bids.');
       return;
     }
-    const rateN = parseInt(editBidDraft.rate, 10);
+    const rateDisplay = parseInt(editBidDraft.rate, 10);
     const qtyN = parseInt(editBidDraft.qty, 10);
-    if (!Number.isFinite(rateN) || rateN < 1 || !Number.isFinite(qtyN) || qtyN < 1) {
+    if (!Number.isFinite(rateDisplay) || rateDisplay < 1 || !Number.isFinite(qtyN) || qtyN < 1) {
+      toast.error('Enter valid rate and quantity (at least 1).');
+      return;
+    }
+    const baseBid = showPresetMargin
+      ? Math.max(0, rateDisplay - editBidDraft.preset)
+      : rateDisplay;
+    if (baseBid < 1) {
       toast.error('Enter valid rate and quantity (at least 1).');
       return;
     }
@@ -1779,7 +1793,7 @@ const AuctionsPage = () => {
     const newTotalSold = others + qtyN;
     const lotCap = selectedLot.bag_count;
     const body: AuctionBidUpdateRequest = {
-      rate: rateN,
+      rate: baseBid,
       quantity: qtyN,
       extra_rate: extra,
       preset_applied: editBidDraft.preset,
@@ -1839,6 +1853,7 @@ const AuctionsPage = () => {
     applyAuctionSession,
     refetchAuctionSession,
     cancelEditBid,
+    showPresetMargin,
   ]);
 
   const confirmEditBidQtyIncrease = useCallback(async () => {
@@ -1876,12 +1891,27 @@ const AuctionsPage = () => {
 
   const applyPreset = (value: number) => {
     const next = preset === value ? 0 : value;
+    const currentInput = parseInt(rate, 10);
+    let newRateStr: string | null = null;
+    if (showPresetMargin && Number.isFinite(currentInput) && currentInput > 0) {
+      const baseRate = currentInput - preset;
+      const nextDisplay = baseRate + next;
+      newRateStr = String(Math.max(0, nextDisplay));
+      setRate(newRateStr);
+    }
     setPreset(next);
     if (next !== 0) setPresetType(value >= 0 ? 'PROFIT' : 'LOSS');
 
-    // Sync edit draft so "Update Bid" uses latest preset changes.
     if (editingBidId) {
-      setEditBidDraft((d) => (d ? { ...d, preset: next, presetType: next < 0 ? 'LOSS' : 'PROFIT' } : d));
+      setEditBidDraft((d) => {
+        if (!d) return d;
+        return {
+          ...d,
+          preset: next,
+          presetType: next < 0 ? 'LOSS' : 'PROFIT',
+          ...(newRateStr !== null ? { rate: newRateStr } : {}),
+        };
+      });
     }
   };
 
@@ -1890,39 +1920,45 @@ const AuctionsPage = () => {
     if (userClearedRateRef.current) return;
     if (rate.trim() !== '') return;
     if (previousBidRate <= 0) return;
-    setRate(String(previousBidRate));
-  }, [editingBidId, previousBidRate, rate]);
+    const displayRate = showPresetMargin ? previousBidRate + preset : previousBidRate;
+    setRate(String(displayRate));
+  }, [editingBidId, previousBidRate, rate, showPresetMargin, preset]);
 
   const handleShowPresetMarginChange = useCallback((checked: boolean) => {
-    if (!editingBidId) {
-      const currentInput = parseInt(rate, 10);
-      if (Number.isFinite(currentInput) && currentInput > 0) {
-        // Rate field is the seller bid; preset is independent — do not rewrite the number.
+    const currentInput = parseInt(rate, 10);
+    if (Number.isFinite(currentInput) && currentInput > 0) {
+      // Field shows seller bid when preset off, buyer total (bid + preset) when preset on.
+      const nextDisplay = checked ? currentInput + preset : currentInput - preset;
+      const s = String(Math.max(0, nextDisplay));
+      setRate(s);
+      if (editingBidId) {
+        setEditBidDraft((d) => (d ? { ...d, rate: s } : d));
+      }
+      userClearedRateRef.current = false;
+    } else if (!editingBidId) {
+      if (checked) {
+        if (previousBidRate > 0) {
+          setRate(String(previousBidRate + preset));
+          userClearedRateRef.current = false;
+        } else {
+          setRate('');
+        }
+      } else if (previousBidRate > 0) {
+        setRate(String(previousBidRate));
         userClearedRateRef.current = false;
-      } else if (checked) {
-        if (previousBidRate > 0) {
-          setRate(String(previousBidRate));
-          userClearedRateRef.current = false;
-        } else {
-          setRate('');
-        }
       } else {
-        if (previousBidRate > 0) {
-          setRate(String(previousBidRate));
-          userClearedRateRef.current = false;
-        } else {
-          setRate('');
-        }
+        setRate('');
       }
     }
     setShowPresetMargin(checked);
-    if (!editingBidId) return;
-    setEditBidDraft((d) => {
-      if (!d) return d;
-      const nextPreset = checked ? preset : 0;
-      return { ...d, preset: nextPreset, presetType: nextPreset < 0 ? 'LOSS' : 'PROFIT' };
-    });
-  }, [editingBidId, previousBidRate, rate]);
+    if (editingBidId) {
+      setEditBidDraft((d) => {
+        if (!d) return d;
+        const nextPreset = checked ? preset : 0;
+        return { ...d, preset: nextPreset, presetType: nextPreset < 0 ? 'LOSS' : 'PROFIT' };
+      });
+    }
+  }, [editingBidId, preset, previousBidRate, rate]);
 
   const selectLot = useCallback((lot: LotInfo, source: LotSource = statusFilter === 'self_sale' ? 'self_sale' : 'regular') => {
     setSelectedLotSource(source);
