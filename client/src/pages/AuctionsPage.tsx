@@ -238,7 +238,7 @@ function sessionEntryToSaleEntry(e: AuctionEntryDTO): SaleEntry {
     extraRate: Number(e.extra_rate ?? 0),
     presetApplied: Number(e.preset_margin ?? 0),
     presetType: (e.preset_type as PresetType) ?? 'PROFIT',
-    // API keeps base bid and preset separate; UI shows seller line as bid + preset
+    // API keeps seller bid and preset separate; UI shows buyer total as bid + preset on the subline
     sellerRate: Number(e.bid_rate) + Number(e.preset_margin ?? 0),
     buyerRate: Number(e.buyer_rate ?? e.bid_rate),
     lastModifiedMs: e.last_modified_ms ?? null,
@@ -1032,11 +1032,12 @@ const AuctionsPage = () => {
     return () => window.clearTimeout(timeoutId);
   }, [entries.length]);
 
+  /** Parsed rate is always the seller bid (same as shown in the Rate column); preset is separate. */
   const getBidRateFromInput = useCallback((rawRate: string) => {
     const parsed = parseInt(rawRate, 10);
     if (!Number.isFinite(parsed)) return 0;
-    return showPresetMargin ? parsed - preset : parsed;
-  }, [showPresetMargin, preset]);
+    return parsed;
+  }, []);
 
   const editingEntry = useMemo(() => {
     if (!editingBidId) return null;
@@ -1163,7 +1164,7 @@ const AuctionsPage = () => {
     return counts;
   }, [availableLots, selfSaleLots]);
 
-  /** Seller final = base bid rate + signed preset margin (matches server AuctionService). */
+  /** Buyer-facing total = seller bid + signed preset margin (grid subline when preset is on). */
   const calcSellerRate = useCallback((bidRate: number, presetVal: number) => {
     if (presetVal === 0) return bidRate;
     return bidRate + presetVal;
@@ -1875,12 +1876,6 @@ const AuctionsPage = () => {
 
   const applyPreset = (value: number) => {
     const next = preset === value ? 0 : value;
-    const currentInput = parseInt(rate, 10);
-    if (!editingBidId && showPresetMargin && Number.isFinite(currentInput) && currentInput > 0) {
-      const baseRate = currentInput - preset;
-      const nextDisplay = baseRate + next;
-      setRate(String(Math.max(0, nextDisplay)));
-    }
     setPreset(next);
     if (next !== 0) setPresetType(value >= 0 ? 'PROFIT' : 'LOSS');
 
@@ -1895,21 +1890,18 @@ const AuctionsPage = () => {
     if (userClearedRateRef.current) return;
     if (rate.trim() !== '') return;
     if (previousBidRate <= 0) return;
-    const displayRate = showPresetMargin ? previousBidRate + preset : previousBidRate;
-    setRate(String(displayRate));
-  }, [editingBidId, previousBidRate, rate, showPresetMargin, preset]);
+    setRate(String(previousBidRate));
+  }, [editingBidId, previousBidRate, rate]);
 
   const handleShowPresetMarginChange = useCallback((checked: boolean) => {
     if (!editingBidId) {
       const currentInput = parseInt(rate, 10);
       if (Number.isFinite(currentInput) && currentInput > 0) {
-        // Preserve user-entered value; toggling ON adds preset, toggling OFF removes it.
-        const nextDisplay = checked ? currentInput + preset : currentInput - preset;
-        setRate(String(Math.max(0, nextDisplay)));
+        // Rate field is the seller bid; preset is independent — do not rewrite the number.
         userClearedRateRef.current = false;
       } else if (checked) {
         if (previousBidRate > 0) {
-          setRate(String(previousBidRate + preset));
+          setRate(String(previousBidRate));
           userClearedRateRef.current = false;
         } else {
           setRate('');
@@ -1930,7 +1922,7 @@ const AuctionsPage = () => {
       const nextPreset = checked ? preset : 0;
       return { ...d, preset: nextPreset, presetType: nextPreset < 0 ? 'LOSS' : 'PROFIT' };
     });
-  }, [editingBidId, preset, previousBidRate, rate]);
+  }, [editingBidId, previousBidRate, rate]);
 
   const selectLot = useCallback((lot: LotInfo, source: LotSource = statusFilter === 'self_sale' ? 'self_sale' : 'regular') => {
     setSelectedLotSource(source);
@@ -2592,11 +2584,11 @@ const AuctionsPage = () => {
                 </div>
                 {preset !== 0 && highestBid > 0 && (
                   <motion.p initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="text-[10px] text-muted-foreground mt-2">
-                    Buyer pays <span className="text-foreground font-semibold">₹{highestBid}</span> · Seller gets{' '}
+                    Seller <span className="text-foreground font-semibold">₹{highestBid}</span> · Buyer pays{' '}
                     <span className={cn('font-semibold', preset >= 0 ? 'text-success' : 'text-destructive')}>
                       ₹{calcSellerRate(highestBid, preset)}
                     </span>
-                    <span className="ml-1">(base ₹{highestBid} + margin {preset >= 0 ? '+' : ''}{preset})</span>
+                    <span className="ml-1">(₹{highestBid} + margin {preset >= 0 ? '+' : ''}{preset})</span>
                   </motion.p>
                 )}
               </div>
@@ -2982,7 +2974,7 @@ const AuctionsPage = () => {
                             <div>₹{entry.rate}</div>
                             {showPresetMargin && (
                               <div className="text-[10px] font-medium text-muted-foreground">
-                                Total ₹{entry.sellerRate}
+                                Buyer ₹{entry.sellerRate}
                               </div>
                             )}
                           </td>

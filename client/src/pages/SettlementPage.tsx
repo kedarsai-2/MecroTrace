@@ -206,13 +206,29 @@ interface SellerExpenseFormState {
   others: number;
 }
 
-interface SellerExpenseVoucher {
+/** Vehicle-level expense lines (Add Expense modal). */
+interface VehicleExpenseRow {
   id: string;
-  voucher: string;
-  narration: string;
-  receivable: number;
-  remaining: number;
-  received: number;
+  sellerId: string;
+  sellerName: string;
+  quantity: number;
+  freight: number;
+  unloading: number;
+  weighing: number;
+  gunnies: number;
+}
+
+function createVehicleExpenseRowFromSeller(s: SellerSettlement): VehicleExpenseRow {
+  return {
+    id: `seller_${s.sellerId || Math.random().toString(36).slice(2, 9)}`,
+    sellerId: s.sellerId || '',
+    sellerName: s.sellerName || 'Seller',
+    quantity: totalBagsForSeller(s),
+    freight: 0,
+    unloading: 0,
+    weighing: 0,
+    gunnies: 0,
+  };
 }
 
 function lotSalesRow(lot: SettlementLot) {
@@ -414,18 +430,14 @@ const SettlementPage = () => {
     null
   );
   const saveMainPattiShortcutRef = useRef<() => void>(() => {});
+  const salesReportCarouselRef = useRef<HTMLDivElement | null>(null);
+  const [activeSalesReportSlide, setActiveSalesReportSlide] = useState(0);
 
   const [sellerFormById, setSellerFormById] = useState<Record<string, SellerRegFormState>>({});
   const [registeredBaselineById, setRegisteredBaselineById] = useState<Record<string, SellerRegFormState>>({});
   const [sellerExpensesById, setSellerExpensesById] = useState<Record<string, SellerExpenseFormState>>({});
-  const [expenseVouchersBySellerId, setExpenseVouchersBySellerId] = useState<Record<string, SellerExpenseVoucher[]>>({});
-  const [expenseModalState, setExpenseModalState] = useState<{
-    open: boolean;
-    sellerId: string;
-    sellerName: string;
-    voucherNumber: string;
-    narration: string;
-  }>({ open: false, sellerId: '', sellerName: '', voucherNumber: '', narration: '' });
+  const [vehicleExpenseModalOpen, setVehicleExpenseModalOpen] = useState(false);
+  const [vehicleExpenseRows, setVehicleExpenseRows] = useState<VehicleExpenseRow[]>([]);
 
   /** Per-seller per-lot edits for Sales report qty / weight / rate-per-kg. */
   const [lotSalesOverridesBySellerId, setLotSalesOverridesBySellerId] = useState<
@@ -469,6 +481,8 @@ const SettlementPage = () => {
     setExistingPattiId(null);
     setRemovedLotsBySellerId({});
     setLotSalesOverridesBySellerId({});
+    setVehicleExpenseRows([]);
+    setVehicleExpenseModalOpen(false);
     setSelectedSeller(seller);
     setHasArrivalSelection(true);
 
@@ -579,6 +593,8 @@ const SettlementPage = () => {
       }
       setRemovedLotsBySellerId({});
       setLotSalesOverridesBySellerId({});
+      setVehicleExpenseRows([]);
+      setVehicleExpenseModalOpen(false);
       const data = mapPattiDTOToPattiData(dto);
       if (data.createdAt && new Date(data.createdAt) > new Date()) {
         toast.warning('Patti date is in the future — please verify');
@@ -714,6 +730,39 @@ const SettlementPage = () => {
     const scope = sellers.filter(s => normalizeVehicleKey(s.vehicleNumber) === vKey);
     return scope.length > 0 ? scope : [selectedSeller];
   }, [sellers, selectedSeller, pattiData]);
+
+  const arrivalSalesReportSellerIdsKey = useMemo(
+    () => arrivalSellersForPatti.map(s => s.sellerId).join(','),
+    [arrivalSellersForPatti]
+  );
+
+  const handleSalesReportCarouselScroll = useCallback(() => {
+    const el = salesReportCarouselRef.current;
+    const n = arrivalSellersForPatti.length;
+    if (!el || n <= 0) return;
+    const step = el.scrollWidth / n;
+    if (step <= 0) return;
+    const idx = Math.max(0, Math.min(n - 1, Math.round(el.scrollLeft / step)));
+    setActiveSalesReportSlide(idx);
+  }, [arrivalSellersForPatti.length]);
+
+  useEffect(() => {
+    setActiveSalesReportSlide(0);
+    salesReportCarouselRef.current?.scrollTo({ left: 0 });
+  }, [selectedSeller?.sellerId, arrivalSalesReportSellerIdsKey]);
+
+  /** Sync vehicle expense modal rows when arrival scope sellers change; preserve edits per sellerId. */
+  useEffect(() => {
+    if (!selectedSeller || !pattiData) return;
+    setVehicleExpenseRows(prev => {
+      const bySeller = new Map(prev.map(r => [r.sellerId, r]));
+      return arrivalSellersForPatti.map(s => {
+        const ex = bySeller.get(s.sellerId);
+        if (!ex) return createVehicleExpenseRowFromSeller(s);
+        return { ...ex, sellerName: s.sellerName || ex.sellerName };
+      });
+    });
+  }, [arrivalSellersForPatti, selectedSeller, pattiData]);
 
   useEffect(() => {
     if (!selectedSeller || !pattiData) return;
@@ -869,40 +918,36 @@ const SettlementPage = () => {
     toast.success('All sub-pattis sent to printer');
   }, [pattiData, arrivalSellersForPatti, sellerFormById, sellerExpensesById, removedLotsBySellerId, lotSalesOverridesBySellerId]);
 
-  const openExpenseModal = useCallback((seller: SellerSettlement, displayName: string) => {
-    setExpenseModalState({
-      open: true,
-      sellerId: seller.sellerId,
-      sellerName: displayName || seller.sellerName || 'Seller',
-      voucherNumber: '',
-      narration: '',
-    });
-  }, []);
+  const vehicleExpenseTotals = useMemo(() => {
+    return vehicleExpenseRows.reduce(
+      (acc, r) => ({
+        quantity: acc.quantity + r.quantity,
+        freight: acc.freight + r.freight,
+        unloading: acc.unloading + r.unloading,
+        weighing: acc.weighing + r.weighing,
+        gunnies: acc.gunnies + r.gunnies,
+      }),
+      { quantity: 0, freight: 0, unloading: 0, weighing: 0, gunnies: 0 }
+    );
+  }, [vehicleExpenseRows]);
 
-  const addExpenseVoucherRow = useCallback(() => {
-    const voucher = expenseModalState.voucherNumber.trim();
-    const narration = expenseModalState.narration.trim();
-    if (!expenseModalState.sellerId) return;
-    if (!voucher || !narration) {
-      toast.message('Enter voucher number and name.');
-      return;
-    }
-    setExpenseVouchersBySellerId(prev => {
-      const nextRow: SellerExpenseVoucher = {
-        id: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-        voucher,
-        narration,
-        receivable: 0,
-        remaining: 0,
-        received: 0,
-      };
-      return {
-        ...prev,
-        [expenseModalState.sellerId]: [...(prev[expenseModalState.sellerId] ?? []), nextRow],
-      };
-    });
-    setExpenseModalState(prev => ({ ...prev, voucherNumber: '', narration: '' }));
-  }, [expenseModalState]);
+  const updateVehicleExpenseCell = useCallback(
+    (id: string, field: keyof Omit<VehicleExpenseRow, 'id' | 'sellerId' | 'sellerName'>, raw: string) => {
+      setVehicleExpenseRows(prev =>
+        prev.map(row => {
+          if (row.id !== id) return row;
+          if (raw.trim() === '') {
+            return { ...row, [field]: 0 };
+          }
+          const n = parseFloat(raw);
+          if (!Number.isFinite(n)) return row;
+          if (field === 'quantity') return { ...row, quantity: Math.max(0, Math.round(n)) };
+          return { ...row, [field]: clampMoney(n) };
+        })
+      );
+    },
+    []
+  );
 
   const getSellerLots = (seller: SellerSettlement): number =>
     seller.lots.reduce((s, l) => s + l.entries.reduce((s2, e) => s2 + e.quantity, 0), 0);
@@ -1345,9 +1390,6 @@ const SettlementPage = () => {
               <p className="text-center text-sm font-bold tracking-tight text-foreground sm:text-base">
                 Expenses &amp; invoice
               </p>
-              <p className="mt-1 text-center text-xs leading-relaxed text-muted-foreground">
-                Add freight, unloading, weighman, cash advance, and other charges per seller in the Sales report.
-              </p>
             </div>
             <div className="p-4 sm:p-5">
               <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between sm:gap-6">
@@ -1355,6 +1397,12 @@ const SettlementPage = () => {
                   type="button"
                   variant="outline"
                   className="h-11 w-full shrink-0 rounded-xl border-dashed border-primary/40 bg-background/60 font-semibold sm:h-10 sm:w-auto sm:min-w-[9rem]"
+                  onClick={() => {
+                    setVehicleExpenseRows(prev =>
+                      prev.length === 0 ? arrivalSellersForPatti.map(s => createVehicleExpenseRowFromSeller(s)) : prev
+                    );
+                    setVehicleExpenseModalOpen(true);
+                  }}
                 >
                   <PlusCircle className="mr-2 h-4 w-4" />
                   Add Expense
@@ -1384,7 +1432,33 @@ const SettlementPage = () => {
             className="glass-card rounded-2xl border border-border/50 p-4 sm:p-5"
           >
             <h3 className="mb-4 text-center text-base font-bold tracking-tight text-foreground sm:text-lg">Sales report</h3>
-            <div className="space-y-4">
+            {arrivalSellersForPatti.length > 1 && (
+              <div className="-mt-1 mb-3 flex items-center justify-center gap-1.5 lg:hidden">
+                {arrivalSellersForPatti.map((_, si) => (
+                  <button
+                    key={`sales-report-dot-${si}`}
+                    type="button"
+                    onClick={() => {
+                      const el = salesReportCarouselRef.current;
+                      if (!el) return;
+                      const n = arrivalSellersForPatti.length;
+                      const left = (el.scrollWidth / n) * si;
+                      el.scrollTo({ left, behavior: 'smooth' });
+                    }}
+                    className={cn(
+                      'rounded-full transition-all bg-muted-foreground/40',
+                      activeSalesReportSlide === si ? 'h-2 w-4 bg-primary' : 'h-2 w-2'
+                    )}
+                    aria-label={`Go to seller ${si + 1}`}
+                  />
+                ))}
+              </div>
+            )}
+            <div
+              ref={salesReportCarouselRef}
+              onScroll={handleSalesReportCarouselScroll}
+              className="flex gap-2 overflow-x-auto snap-x snap-mandatory pb-1 [-webkit-overflow-scrolling:touch] lg:block lg:overflow-visible lg:snap-none lg:space-y-4 lg:pb-0"
+            >
               {arrivalSellersForPatti.map(seller => {
                 const form = sellerFormById[seller.sellerId] ?? defaultSellerForm(seller);
                 const baseline = registeredBaselineById[seller.sellerId] ?? form;
@@ -1406,9 +1480,12 @@ const SettlementPage = () => {
                 return (
                   <div
                     key={seller.sellerId}
-                    id={`settlement-seller-card-${seller.sellerId}`}
-                    className="rounded-2xl border border-border/60 bg-muted/10 p-3 sm:p-4"
+                    className="min-w-0 w-[calc(100%-0.1rem)] shrink-0 snap-start lg:w-auto lg:shrink"
                   >
+                    <div
+                      id={`settlement-seller-card-${seller.sellerId}`}
+                      className="rounded-2xl border border-border/60 bg-muted/10 p-3 sm:p-4"
+                    >
                     <div className="mb-3 flex flex-wrap items-center gap-4">
                       <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Seller source</span>
                       <label className="flex cursor-pointer items-center gap-2 text-sm">
@@ -1693,16 +1770,7 @@ const SettlementPage = () => {
                         <Save className="mr-1.5 h-3.5 w-3.5" />
                         Save patti
                       </Button>
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="secondary"
-                        className="h-9 rounded-xl text-xs sm:text-sm"
-                        onClick={() => openExpenseModal(seller, form.name || seller.sellerName)}
-                      >
-                        <PlusCircle className="mr-1.5 h-3.5 w-3.5" />
-                        Add expense
-                      </Button>
+                    </div>
                     </div>
                   </div>
                 );
@@ -1754,100 +1822,140 @@ const SettlementPage = () => {
           </motion.div>
 
           <Dialog
-            open={expenseModalState.open}
+            open={vehicleExpenseModalOpen}
             onOpenChange={open => {
-              setExpenseModalState(prev => ({ ...prev, open }));
+              setVehicleExpenseModalOpen(open);
+              if (open) {
+                setVehicleExpenseRows(prev =>
+                  prev.length === 0 ? arrivalSellersForPatti.map(s => createVehicleExpenseRowFromSeller(s)) : prev
+                );
+              }
             }}
           >
-            <DialogContent className="max-w-3xl rounded-2xl">
+            <DialogContent className="max-h-[90dvh] max-w-4xl overflow-y-auto rounded-2xl">
               <DialogHeader>
-                <DialogTitle>Add Expense Vouchers to {expenseModalState.sellerName}</DialogTitle>
+                <DialogTitle>Add Expense</DialogTitle>
                 <DialogDescription>
-                  Enter voucher number and name, then add it to the list.
+                  Enter quantity and charge amounts per line. Footer shows column totals for this vehicle settlement.
                 </DialogDescription>
               </DialogHeader>
 
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <div>
-                  <label className="mb-1.5 block text-xs font-semibold text-muted-foreground">Enter Voucher Number</label>
-                  <Input
-                    value={expenseModalState.voucherNumber}
-                    onChange={e => setExpenseModalState(prev => ({ ...prev, voucherNumber: e.target.value }))}
-                    placeholder="Voucher number"
-                    className="h-10 rounded-xl"
-                  />
-                </div>
-                <div>
-                  <label className="mb-1.5 block text-xs font-semibold text-muted-foreground">Enter Name</label>
-                  <Input
-                    value={expenseModalState.narration}
-                    onChange={e => setExpenseModalState(prev => ({ ...prev, narration: e.target.value }))}
-                    placeholder="Narration / name"
-                    className="h-10 rounded-xl"
-                  />
-                </div>
-              </div>
-
-              <div className="overflow-x-auto rounded-xl border border-border/60">
-                <table className="w-full min-w-[760px] border-collapse text-sm">
+              <div className="overflow-x-auto rounded-xl border border-border/50 shadow-sm">
+                <table className="w-full min-w-[820px] border-collapse text-sm">
                   <thead>
-                    <tr className="bg-muted/50 text-[11px] font-semibold text-muted-foreground">
-                      <th className="px-3 py-2 text-center">Action</th>
-                      <th className="px-3 py-2 text-center">Voucher</th>
-                      <th className="px-3 py-2 text-center">Narration</th>
-                      <th className="px-3 py-2 text-center">Receivable</th>
-                      <th className="px-3 py-2 text-center">Remaining</th>
-                      <th className="px-3 py-2 text-center">Received</th>
+                    <tr className="bg-gradient-to-r from-blue-500/75 via-indigo-500/75 to-cyan-500/75 text-white shadow-sm dark:from-blue-600/60 dark:via-indigo-600/60 dark:to-cyan-600/60">
+                      <th className="min-w-[12rem] px-2 py-3 text-center text-[10px] font-bold uppercase tracking-wide">
+                        Seller Name
+                      </th>
+                      <th className="min-w-[5.5rem] px-2 py-3 text-center text-[10px] font-bold uppercase tracking-wide">
+                        Quantity
+                      </th>
+                      <th className="min-w-[7rem] px-2 py-3 text-center text-[10px] font-bold uppercase tracking-wide">
+                        Freight Amount
+                      </th>
+                      <th className="min-w-[7rem] px-2 py-3 text-center text-[10px] font-bold uppercase tracking-wide">
+                        Unloading Charges
+                      </th>
+                      <th className="min-w-[7rem] px-2 py-3 text-center text-[10px] font-bold uppercase tracking-wide">
+                        Weighing Charges
+                      </th>
+                      <th className="min-w-[7rem] px-2 py-3 text-center text-[10px] font-bold uppercase tracking-wide">
+                        Gunnies
+                      </th>
                     </tr>
                   </thead>
                   <tbody>
-                    {(expenseVouchersBySellerId[expenseModalState.sellerId] ?? []).length === 0 ? (
-                      <tr>
-                        <td colSpan={6} className="px-3 py-5 text-center text-muted-foreground">
-                          No vouchers added yet.
+                    {vehicleExpenseRows.map(row => (
+                      <tr key={row.id} className="border-b border-border/40 bg-background/50 hover:bg-muted/30">
+                        <td className="px-2 py-2 text-left align-middle">
+                          <div className="truncate text-xs font-semibold text-foreground sm:text-sm">{row.sellerName}</div>
+                        </td>
+                        <td className="px-1 py-1.5 align-middle">
+                          <Input
+                            type="number"
+                            min={0}
+                            step={1}
+                            className="h-9 w-full min-w-[4.5rem] rounded-lg border-border/60 px-2 text-center text-xs tabular-nums [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                            value={row.quantity || ''}
+                            onChange={e => updateVehicleExpenseCell(row.id, 'quantity', e.target.value)}
+                          />
+                        </td>
+                        <td className="px-1 py-1.5 align-middle">
+                          <Input
+                            type="number"
+                            min={0}
+                            step={0.01}
+                            className="h-9 w-full min-w-[5rem] rounded-lg border-border/60 px-2 text-center text-xs tabular-nums [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                            value={row.freight === 0 ? '' : row.freight}
+                            onChange={e => updateVehicleExpenseCell(row.id, 'freight', e.target.value)}
+                          />
+                        </td>
+                        <td className="px-1 py-1.5 align-middle">
+                          <Input
+                            type="number"
+                            min={0}
+                            step={0.01}
+                            className="h-9 w-full min-w-[5rem] rounded-lg border-border/60 px-2 text-center text-xs tabular-nums [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                            value={row.unloading === 0 ? '' : row.unloading}
+                            onChange={e => updateVehicleExpenseCell(row.id, 'unloading', e.target.value)}
+                          />
+                        </td>
+                        <td className="px-1 py-1.5 align-middle">
+                          <Input
+                            type="number"
+                            min={0}
+                            step={0.01}
+                            className="h-9 w-full min-w-[5rem] rounded-lg border-border/60 px-2 text-center text-xs tabular-nums [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                            value={row.weighing === 0 ? '' : row.weighing}
+                            onChange={e => updateVehicleExpenseCell(row.id, 'weighing', e.target.value)}
+                          />
+                        </td>
+                        <td className="px-1 py-1.5 align-middle">
+                          <Input
+                            type="number"
+                            min={0}
+                            step={0.01}
+                            className="h-9 w-full min-w-[5rem] rounded-lg border-border/60 px-2 text-center text-xs tabular-nums [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                            value={row.gunnies === 0 ? '' : row.gunnies}
+                            onChange={e => updateVehicleExpenseCell(row.id, 'gunnies', e.target.value)}
+                          />
                         </td>
                       </tr>
-                    ) : (
-                      (expenseVouchersBySellerId[expenseModalState.sellerId] ?? []).map(v => (
-                        <tr key={v.id} className="border-t border-border/40">
-                          <td className="px-3 py-2 text-center">
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="icon"
-                              className="h-8 w-8 text-destructive hover:bg-destructive/10"
-                              onClick={() =>
-                                setExpenseVouchersBySellerId(prev => ({
-                                  ...prev,
-                                  [expenseModalState.sellerId]: (prev[expenseModalState.sellerId] ?? []).filter(x => x.id !== v.id),
-                                }))
-                              }
-                            >
-                              <Trash2 className="h-4 w-4" />
-                            </Button>
-                          </td>
-                          <td className="px-3 py-2 text-center">{v.voucher}</td>
-                          <td className="px-3 py-2 text-center">{v.narration}</td>
-                          <td className="px-3 py-2 text-center tabular-nums">{v.receivable.toFixed(2)}</td>
-                          <td className="px-3 py-2 text-center tabular-nums">{v.remaining.toFixed(2)}</td>
-                          <td className="px-3 py-2 text-center tabular-nums">{v.received.toFixed(2)}</td>
-                        </tr>
-                      ))
-                    )}
+                    ))}
                   </tbody>
+                  <tfoot>
+                    <tr className="border-t-2 border-border/50 bg-gradient-to-r from-blue-600/85 via-indigo-600/85 to-cyan-600/85 text-white dark:from-blue-700/75 dark:via-indigo-700/75 dark:to-cyan-700/75">
+                      <td className="px-2 py-3 text-center text-xs font-black uppercase tracking-wide">Total</td>
+                      <td className="px-2 py-3 text-center text-sm font-bold tabular-nums">
+                        {vehicleExpenseTotals.quantity}
+                      </td>
+                      <td className="px-2 py-3 text-center text-sm font-bold tabular-nums">
+                        {vehicleExpenseTotals.freight.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </td>
+                      <td className="px-2 py-3 text-center text-sm font-bold tabular-nums">
+                        {vehicleExpenseTotals.unloading.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </td>
+                      <td className="px-2 py-3 text-center text-sm font-bold tabular-nums">
+                        {vehicleExpenseTotals.weighing.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </td>
+                      <td className="px-2 py-3 text-center text-sm font-bold tabular-nums">
+                        {vehicleExpenseTotals.gunnies.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </td>
+                    </tr>
+                  </tfoot>
                 </table>
               </div>
 
-              <DialogFooter className="gap-2 sm:justify-end">
+              <DialogFooter className="flex-col gap-2 sm:flex-row sm:justify-end">
                 <Button
                   type="button"
                   variant="outline"
                   className="rounded-xl"
-                  onClick={() => setExpenseModalState(prev => ({ ...prev, open: false }))}
+                  onClick={() => setVehicleExpenseModalOpen(false)}
                 >
                   Close
                 </Button>
-                <Button type="button" className="rounded-xl" onClick={addExpenseVoucherRow}>
+                <Button type="button" className="rounded-xl" onClick={() => toast.message('Expense add action will be wired next.')}>
                   <PlusCircle className="mr-1.5 h-4 w-4" />
                   Add
                 </Button>
