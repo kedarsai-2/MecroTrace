@@ -1901,7 +1901,13 @@ const AuctionsPage = () => {
 
   const handleShowPresetMarginChange = useCallback((checked: boolean) => {
     if (!editingBidId) {
-      if (checked) {
+      const currentInput = parseInt(rate, 10);
+      if (Number.isFinite(currentInput) && currentInput > 0) {
+        // Preserve user-entered value; toggling ON adds preset, toggling OFF removes it.
+        const nextDisplay = checked ? currentInput + preset : currentInput - preset;
+        setRate(String(Math.max(0, nextDisplay)));
+        userClearedRateRef.current = false;
+      } else if (checked) {
         if (previousBidRate > 0) {
           setRate(String(previousBidRate + preset));
           userClearedRateRef.current = false;
@@ -1924,7 +1930,7 @@ const AuctionsPage = () => {
       const nextPreset = checked ? preset : 0;
       return { ...d, preset: nextPreset, presetType: nextPreset < 0 ? 'LOSS' : 'PROFIT' };
     });
-  }, [editingBidId, preset, previousBidRate]);
+  }, [editingBidId, preset, previousBidRate, rate]);
 
   const selectLot = useCallback((lot: LotInfo, source: LotSource = statusFilter === 'self_sale' ? 'self_sale' : 'regular') => {
     setSelectedLotSource(source);
