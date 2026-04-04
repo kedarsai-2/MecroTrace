@@ -2,6 +2,8 @@ package com.mercotrace.service.dto;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
 import java.io.Serializable;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * Lightweight Lot summary with auction-aware status for Sales Pad lot selector.
@@ -52,6 +54,13 @@ public class LotSummaryDTO implements Serializable {
     /** Total bags for this seller (all lots of that seller). For lot identifier: Seller QTY. */
     @JsonProperty("seller_total_qty")
     private Integer sellerTotalQty;
+
+    /**
+     * Distinct buyers with bids on the latest auction for this lot (registered contacts and scribble/temp).
+     * Excludes self-sale rows. Omitted or empty when there are no qualifying bids.
+     */
+    @JsonProperty("participating_buyers")
+    private List<LotParticipatingBuyerDTO> participatingBuyers = new ArrayList<>();
 
     public Long getLotId() {
         return lotId;
@@ -163,6 +172,14 @@ public class LotSummaryDTO implements Serializable {
 
     public void setSellerTotalQty(Integer sellerTotalQty) {
         this.sellerTotalQty = sellerTotalQty;
+    }
+
+    public List<LotParticipatingBuyerDTO> getParticipatingBuyers() {
+        return participatingBuyers;
+    }
+
+    public void setParticipatingBuyers(List<LotParticipatingBuyerDTO> participatingBuyers) {
+        this.participatingBuyers = participatingBuyers != null ? participatingBuyers : new ArrayList<>();
     }
 
 }

@@ -16,6 +16,7 @@ export { billingApi } from './billing';
 export { writersPadApi } from './writersPad';
 export type {
   LotSummaryDTO,
+  LotParticipatingBuyerDTO,
   AuctionSessionDTO,
   AuctionEntryDTO,
   AuctionResultDTO,

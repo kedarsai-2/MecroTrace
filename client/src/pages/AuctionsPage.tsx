@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useCallback, useRef, useLayoutEffect, Fra
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   ArrowLeft, Gavel, Plus, Trash2,
-  ShoppingCart, User, Package, Truck, Banknote, ChevronDown,
+  ShoppingCart, User, Users, Package, Truck, Banknote, ChevronDown,
   Search, AlertTriangle, Merge, Hash,
   ChevronLeft, ChevronRight, List, Filter, Printer,
   Pencil, Check, X,
@@ -20,6 +20,7 @@ import InlineScribblePad, { MAX_MARK_LEN, type MarkDetectionMeta } from '@/compo
 import { contactApi, auctionApi, presetMarksApi } from '@/services/api';
 import type {
   LotSummaryDTO,
+  LotParticipatingBuyerDTO,
   AuctionSelfSaleUnitDTO,
   AuctionSessionDTO,
   AuctionEntryDTO,
@@ -58,6 +59,13 @@ interface LotInfo {
   selfSaleRate?: number;
   selfSaleAmount?: number;
   createdAt?: string;
+  /** From API: buyers with bids on latest auction (for By Buyer navigation). */
+  participatingBuyers?: Array<{
+    groupKey: string;
+    buyerName: string;
+    buyerMark: string;
+    registered: boolean;
+  }>;
 }
 
 type LotStatus = 'available' | 'sold' | 'partial' | 'pending' | 'self_sale';
@@ -163,6 +171,12 @@ function formatLotDisplayName(lot: {
 
 // ── Map API DTOs to UI types ──────────────────────────────
 function lotSummaryToLotInfo(dto: LotSummaryDTO): LotInfo {
+  const participatingBuyers = (dto.participating_buyers ?? []).map((p: LotParticipatingBuyerDTO) => ({
+    groupKey: p.group_key,
+    buyerName: p.buyer_name ?? '',
+    buyerMark: p.buyer_mark ?? '',
+    registered: p.registered ?? false,
+  }));
   return {
     lot_id: String(dto.lot_id),
     lot_name: dto.lot_name ?? '',
@@ -177,6 +191,7 @@ function lotSummaryToLotInfo(dto: LotSummaryDTO): LotInfo {
     status: (dto.status?.toLowerCase() as LotStatus) ?? 'available',
     vehicle_total_qty: dto.vehicle_total_qty,
     seller_total_qty: dto.seller_total_qty,
+    participatingBuyers: participatingBuyers.length > 0 ? participatingBuyers : undefined,
   };
 }
 
@@ -270,6 +285,10 @@ function AuctionsGridScrollPanel({
   gridSectionRef?: React.RefObject<HTMLDivElement>;
 }) {
   const outerRef = useRef<HTMLDivElement | null>(null);
+  /** User scrolled away from bottom — do not fight them with auto scroll-to-bottom. */
+  const suppressAutoScrollToBottomRef = useRef(false);
+  /** Ignore scroll events right after programmatic scroll (smooth scroll would otherwise set suppress). */
+  const ignoreScrollForAutoDetectionUntilRef = useRef(0);
   const [hintBottom, setHintBottom] = useState(false);
   const [hintRight, setHintRight] = useState(false);
   const [horizontalThumbMetrics, setHorizontalThumbMetrics] = useState<{ visible: boolean; left: number; width: number }>({
@@ -334,12 +353,11 @@ function AuctionsGridScrollPanel({
     const outer = outerRef.current;
     if (!outer || autoScrollToBottomKey <= 0) return;
 
+    suppressAutoScrollToBottomRef.current = false;
+
     let cleanedUp = false;
     const timeouts: number[] = [];
     const rafs: number[] = [];
-    let pollingInterval: number | null = null;
-    let lastScrollHeight = 0;
-    let stableCount = 0;
 
     const scrollPageToGrid = () => {
       if (cleanedUp) return;
@@ -360,6 +378,8 @@ function AuctionsGridScrollPanel({
       
       if (maxScroll <= 0) return;
 
+      ignoreScrollForAutoDetectionUntilRef.current = performance.now() + (smooth ? 650 : 120);
+
       if (smooth) {
         outer.scrollTo({ top: maxScroll, behavior: 'smooth' });
       } else {
@@ -372,6 +392,17 @@ function AuctionsGridScrollPanel({
       });
       rafs.push(raf);
     };
+
+    const onUserScroll = () => {
+      if (cleanedUp) return;
+      if (performance.now() < ignoreScrollForAutoDetectionUntilRef.current) return;
+      const maxScroll = Math.max(0, outer.scrollHeight - outer.clientHeight);
+      const atBottom =
+        maxScroll <= AUCTION_SCROLL_EPS ||
+        outer.scrollTop >= maxScroll - AUCTION_SCROLL_EPS;
+      suppressAutoScrollToBottomRef.current = !atBottom;
+    };
+    outer.addEventListener('scroll', onUserScroll, { passive: true });
 
     const isLatestRowFullyVisible = (): boolean => {
       const rows = Array.from(
@@ -400,27 +431,9 @@ function AuctionsGridScrollPanel({
 
     const checkAndScroll = () => {
       if (cleanedUp) return;
-
-      const currentScrollHeight = outer.scrollHeight;
-      
-      if (currentScrollHeight === lastScrollHeight) {
-        stableCount++;
-      } else {
-        stableCount = 0;
-        lastScrollHeight = currentScrollHeight;
-      }
-
-      const isVisible = isLatestRowFullyVisible();
-
-      if (!isVisible) {
+      if (suppressAutoScrollToBottomRef.current) return;
+      if (!isLatestRowFullyVisible()) {
         scrollToBottom(false);
-      }
-
-      if (stableCount >= 3 && isVisible) {
-        if (pollingInterval !== null) {
-          clearInterval(pollingInterval);
-          pollingInterval = null;
-        }
       }
     };
 
@@ -432,12 +445,9 @@ function AuctionsGridScrollPanel({
     timeouts.push(window.setTimeout(() => checkAndScroll(), 900));
     timeouts.push(window.setTimeout(() => checkAndScroll(), 1200));
 
-    pollingInterval = window.setInterval(() => {
-      checkAndScroll();
-    }, 400);
-
     const resizeObserver = new ResizeObserver(() => {
       if (cleanedUp) return;
+      if (suppressAutoScrollToBottomRef.current) return;
       scrollToBottom(false);
       const timeout = window.setTimeout(() => checkAndScroll(), 100);
       timeouts.push(timeout);
@@ -446,6 +456,7 @@ function AuctionsGridScrollPanel({
 
     const mutationObserver = new MutationObserver(() => {
       if (cleanedUp) return;
+      if (suppressAutoScrollToBottomRef.current) return;
       const timeout = window.setTimeout(() => scrollToBottom(false), 50);
       timeouts.push(timeout);
     });
@@ -453,9 +464,9 @@ function AuctionsGridScrollPanel({
 
     return () => {
       cleanedUp = true;
+      outer.removeEventListener('scroll', onUserScroll);
       rafs.forEach(id => cancelAnimationFrame(id));
       timeouts.forEach(id => clearTimeout(id));
-      if (pollingInterval !== null) clearInterval(pollingInterval);
       resizeObserver?.disconnect();
       mutationObserver?.disconnect();
     };
@@ -496,7 +507,10 @@ function AuctionsGridScrollPanel({
     <div className="relative">
       <div
         ref={outerRef}
-        className={cn('auctions-grid-scroll-panel lot-fields-x-scroll overflow-y-auto overflow-x-auto overscroll-contain touch-auto pb-5', className)}
+        className={cn(
+          'auctions-grid-scroll-panel lot-fields-x-scroll min-h-0 overflow-y-auto overflow-x-auto overscroll-contain touch-auto pb-5',
+          className
+        )}
         style={{ WebkitOverflowScrolling: 'touch', scrollbarWidth: 'none', msOverflowStyle: 'none' }}
       >
         {children}
@@ -615,7 +629,7 @@ const AuctionsPage = () => {
   const [selectedLotSource, setSelectedLotSource] = useState<LotSource>('regular');
   const [selfSaleContext, setSelfSaleContext] = useState<AuctionSelfSaleContextDTO | null>(null);
   const [lotSearchQuery, setLotSearchQuery] = useState('');
-  const [lotNavMode, setLotNavMode] = useState<'all' | 'vehicle' | 'seller' | 'lot_number'>('all');
+  const [lotNavMode, setLotNavMode] = useState<'all' | 'vehicle' | 'seller' | 'buyer' | 'lot_number'>('all');
   const [lotNumberSearch, setLotNumberSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<LotStatus | 'all'>('all');
   const [showLotList, setShowLotList] = useState(false);
@@ -647,6 +661,11 @@ const AuctionsPage = () => {
 
   /** ENH-34: inline edit bid row */
   const [editingBidId, setEditingBidId] = useState<string | null>(null);
+  const entriesRef = useRef<SaleEntry[]>([]);
+  const editingBidIdRef = useRef<string | null>(null);
+  entriesRef.current = entries;
+  editingBidIdRef.current = editingBidId;
+  const presetSyncChainRef = useRef(Promise.resolve());
   const [editBidDraft, setEditBidDraft] = useState<{
     rate: string;
     qty: string;
@@ -908,6 +927,21 @@ const AuctionsPage = () => {
     return map;
   }, [filteredLots]);
 
+  /** Group lots by buyer (registered contact or temp scribble) who has bids on that lot — same pattern as By Seller. */
+  const lotsByBuyer = useMemo(() => {
+    const map = new Map<string, LotInfo[]>();
+    filteredLots.forEach(l => {
+      const pbs = l.participatingBuyers;
+      if (!pbs?.length) return;
+      pbs.forEach(pb => {
+        const key = pb.groupKey;
+        if (!map.has(key)) map.set(key, []);
+        map.get(key)!.push(l);
+      });
+    });
+    return map;
+  }, [filteredLots]);
+
   // Row 1: Contacts from contact module — filter by scribble pad search (name/mark/phone)
   const filteredContacts = useMemo(() => {
     const q = (scribbleMark || '').trim().toLowerCase();
@@ -1116,6 +1150,61 @@ const AuctionsPage = () => {
       ? auctionApi.updateSelfSaleBid(selectedLot.selfSaleUnitId ?? selectedLot.lot_id, bidId, body)
       : auctionApi.updateBid(selectedLot.lot_id, bidId, body);
   }, [selectedLot, selectedLotSource]);
+
+  /** When preset margin changes, persist the same margin on every bid in the session (all traders). */
+  const syncPresetToAllSessionBids = useCallback(
+    (applied: number, type: PresetType) => {
+      if (!selectedLot) return;
+      if (!can('Auctions / Sales', 'Edit')) return;
+
+      presetSyncChainRef.current = presetSyncChainRef.current
+        .then(async () => {
+          let lastSession: AuctionSessionDTO | null = null;
+          let iterations = 0;
+          while (iterations < 500) {
+            iterations += 1;
+            const fresh = lastSession
+              ? mapOrderedSessionEntries(lastSession.entries)
+              : entriesRef.current;
+            const next = fresh.find(
+              e => !(e.presetApplied === applied && e.presetType === type)
+            );
+            if (!next) break;
+            lastSession = await updateBidForCurrentSelection(Number(next.id), {
+              rate: next.rate,
+              quantity: next.quantity,
+              extra_rate: next.extraRate ?? 0,
+              token_advance: next.tokenAdvance ?? 0,
+              preset_applied: applied,
+              preset_type: type,
+              expected_last_modified_ms: next.lastModifiedMs ?? undefined,
+            });
+            applyAuctionSession(lastSession);
+          }
+
+          const editId = editingBidIdRef.current;
+          if (editId && lastSession) {
+            const updated = mapOrderedSessionEntries(lastSession.entries).find(x => x.id === editId);
+            if (updated) {
+              setEditBidDraft(d => {
+                if (!d) return d;
+                return {
+                  ...d,
+                  lastModifiedMs: updated.lastModifiedMs ?? null,
+                  preset: updated.presetApplied,
+                  presetType: updated.presetType,
+                };
+              });
+            }
+          }
+        })
+        .catch(async err => {
+          toast.error(err instanceof Error ? err.message : 'Failed to sync preset on bids');
+          await refetchAuctionSession();
+        });
+    },
+    [selectedLot, can, updateBidForCurrentSelection, applyAuctionSession, refetchAuctionSession]
+  );
 
   const deleteBidForCurrentSelection = useCallback(async (bidId: number) => {
     if (!selectedLot) throw new Error('No lot selected');
@@ -1913,6 +2002,11 @@ const AuctionsPage = () => {
         };
       });
     }
+
+    if (showPresetMargin) {
+      const nextType: PresetType = next !== 0 ? (value >= 0 ? 'PROFIT' : 'LOSS') : 'PROFIT';
+      syncPresetToAllSessionBids(next, nextType);
+    }
   };
 
   useEffect(() => {
@@ -1958,7 +2052,13 @@ const AuctionsPage = () => {
         return { ...d, preset: nextPreset, presetType: nextPreset < 0 ? 'LOSS' : 'PROFIT' };
       });
     }
-  }, [editingBidId, preset, previousBidRate, rate]);
+
+    if (!checked) {
+      syncPresetToAllSessionBids(0, 'PROFIT');
+    } else if (preset !== 0) {
+      syncPresetToAllSessionBids(preset, presetType);
+    }
+  }, [editingBidId, preset, presetType, previousBidRate, rate, syncPresetToAllSessionBids]);
 
   const selectLot = useCallback((lot: LotInfo, source: LotSource = statusFilter === 'self_sale' ? 'self_sale' : 'regular') => {
     setSelectedLotSource(source);
@@ -2256,9 +2356,10 @@ const AuctionsPage = () => {
               { key: 'all', label: 'All Lots', icon: Package },
               { key: 'vehicle', label: 'By Vehicle', icon: Truck },
               { key: 'seller', label: 'By Seller', icon: User },
+              { key: 'buyer', label: 'By Buyer', icon: Users },
               { key: 'lot_number', label: 'By Lot #', icon: Hash },
             ].map(m => (
-              <button key={m.key} onClick={() => setLotNavMode(m.key as any)}
+              <button key={m.key} onClick={() => setLotNavMode(m.key as 'all' | 'vehicle' | 'seller' | 'buyer' | 'lot_number')}
                 className={cn("flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold whitespace-nowrap transition-all",
                   lotNavMode === m.key
                     ? 'bg-gradient-to-r from-primary to-accent text-white shadow-md'
@@ -2332,6 +2433,56 @@ const AuctionsPage = () => {
                   <div className="p-3 bg-gradient-to-r from-emerald-50 to-green-50 dark:from-emerald-950/20 dark:to-green-950/20 border-b border-border/30 flex items-center gap-2">
                     <User className="w-4 h-4 text-emerald-600 dark:text-emerald-400 flex-shrink-0" />
                     <span className="text-sm font-bold text-foreground truncate min-w-0">{label}</span>
+                    <span className="ml-auto text-xs text-muted-foreground flex-shrink-0">{lots.length} lot(s)</span>
+                  </div>
+                  <div className="divide-y divide-border/20">
+                    {lots.map(lot => (
+                      <LotRow key={getLotRenderKey(lot)} lot={lot} onSelect={selectLot} statusFilter={statusFilter} />
+                    ))}
+                  </div>
+                </div>
+              ));
+            })()
+          ) : lotNavMode === 'buyer' && statusFilter !== 'self_sale' ? (
+            (() => {
+              const entries = Array.from(lotsByBuyer.entries());
+              if (entries.length === 0) {
+                return (
+                  <div className="glass-card rounded-2xl p-8 text-center">
+                    <Users className="w-10 h-10 text-muted-foreground/30 mx-auto mb-3" />
+                    <p className="text-sm text-muted-foreground font-medium">No buyer-linked lots yet</p>
+                    <p className="text-xs text-muted-foreground/70 mt-1">Lots appear here once buyers (registered or temporary) have bids on them.</p>
+                  </div>
+                );
+              }
+              const toLabel = ([groupKey, lots]: [string, LotInfo[]]) => {
+                const first = lots[0];
+                const pb = first?.participatingBuyers?.find(p => p.groupKey === groupKey);
+                if (!pb) {
+                  return { key: groupKey, lots, label: groupKey, sortKey: groupKey, registered: true };
+                }
+                const name = (pb.buyerName || '').trim();
+                const mark = (pb.buyerMark || '').trim();
+                const label = [name, mark ? `(${mark})` : null].filter(Boolean).join(' ') || groupKey;
+                const sortKey = `${pb.registered ? '0' : '1'}|${name.toLowerCase()}|${mark.toLowerCase()}`;
+                return { key: groupKey, lots, label, sortKey, registered: pb.registered };
+              };
+              const sorted = entries.map(toLabel).sort((a, b) => a.sortKey.localeCompare(b.sortKey));
+              return sorted.map(({ key, lots, label, registered }) => (
+                <div key={key} className="glass-card rounded-2xl overflow-hidden">
+                  <div className="p-3 bg-gradient-to-r from-violet-50 to-fuchsia-50 dark:from-violet-950/20 dark:to-fuchsia-950/20 border-b border-border/30 flex items-center gap-2">
+                    <Users className="w-4 h-4 text-violet-600 dark:text-violet-400 flex-shrink-0" />
+                    <span className="text-sm font-bold text-foreground truncate min-w-0">{label}</span>
+                    {!registered && (
+                      <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-violet-500/20 text-violet-700 dark:text-violet-300 flex-shrink-0">
+                        Temp
+                      </span>
+                    )}
+                    {registered && (
+                      <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 flex-shrink-0">
+                        Registered
+                      </span>
+                    )}
                     <span className="ml-auto text-xs text-muted-foreground flex-shrink-0">{lots.length} lot(s)</span>
                   </div>
                   <div className="divide-y divide-border/20">
@@ -2953,9 +3104,13 @@ const AuctionsPage = () => {
             <div className="glass-card rounded-2xl h-auto min-h-0 overflow-hidden">
               <AuctionsGridScrollPanel
                 className={cn(
-                  entries.length > 5
-                    ? 'max-h-[min(42vh,17rem)] sm:max-h-[min(48vh,19rem)] md:max-h-[min(52vh,21rem)]'
-                    : 'max-h-[min(52vh,21rem)]'
+                  isDesktop
+                    ? entries.length > 5
+                      ? 'max-h-[min(60vh,28rem)] lg:max-h-[min(55vh,26rem)]'
+                      : 'max-h-[min(65vh,32rem)] lg:max-h-[min(60vh,30rem)]'
+                    : entries.length > 5
+                      ? 'max-h-[min(42vh,17rem)] sm:max-h-[min(48vh,19rem)] md:max-h-[min(52vh,21rem)]'
+                      : 'max-h-[min(52vh,21rem)]'
                 )}
                 contentLayoutKey={entries.length}
                 autoScrollToBottomKey={autoScrollKey}

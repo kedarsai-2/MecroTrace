@@ -3,6 +3,14 @@ import { apiFetch } from './http';
 const BASE = '/module-auctions';
 
 // ─── Response types (match backend DTOs, snake_case where @JsonProperty) ───
+/** Buyer with at least one bid on the lot (registered contact or temporary scribble). */
+export interface LotParticipatingBuyerDTO {
+  group_key: string;
+  buyer_name: string;
+  buyer_mark: string;
+  registered: boolean;
+}
+
 export interface LotSummaryDTO {
   lot_id: number;
   lot_name: string;
@@ -20,6 +28,8 @@ export interface LotSummaryDTO {
   vehicle_total_qty?: number;
   /** Total bags for this seller (all lots of that seller). For lot identifier. */
   seller_total_qty?: number;
+  /** Distinct buyers with bids (latest auction); for "By Buyer" lot navigation. */
+  participating_buyers?: LotParticipatingBuyerDTO[];
 }
 
 export type PresetType = 'PROFIT' | 'LOSS';

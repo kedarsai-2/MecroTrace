@@ -239,7 +239,47 @@ public class AuctionService {
             status = remaining == 0 ? "SOLD" : "PENDING";
         }
         dto.setStatus(status);
+        dto.setParticipatingBuyers(buildParticipatingBuyers(latestAuctionEntries));
         return dto;
+    }
+
+    /**
+     * Distinct buyers (registered or scribble/temp) with bids on the latest auction, excluding self-sale rows.
+     */
+    private List<LotParticipatingBuyerDTO> buildParticipatingBuyers(List<AuctionEntry> latestAuctionEntries) {
+        if (latestAuctionEntries == null || latestAuctionEntries.isEmpty()) {
+            return List.of();
+        }
+        Set<String> seen = new LinkedHashSet<>();
+        List<LotParticipatingBuyerDTO> out = new ArrayList<>();
+        for (AuctionEntry e : latestAuctionEntries) {
+            if (Boolean.TRUE.equals(e.getIsSelfSale())) {
+                continue;
+            }
+            String key;
+            if (e.getBuyerId() != null) {
+                key = "r:" + e.getBuyerId();
+            } else {
+                String mark = e.getBuyerMark() != null ? e.getBuyerMark().trim().toLowerCase(Locale.ROOT) : "";
+                String name = e.getBuyerName() != null ? e.getBuyerName().trim().toLowerCase(Locale.ROOT) : "";
+                key = "t:" + mark + "|" + name;
+            }
+            if (!seen.add(key)) {
+                continue;
+            }
+            LotParticipatingBuyerDTO b = new LotParticipatingBuyerDTO();
+            b.setGroupKey(key);
+            b.setBuyerName(e.getBuyerName() != null ? e.getBuyerName() : "");
+            b.setBuyerMark(e.getBuyerMark() != null ? e.getBuyerMark() : "");
+            b.setRegistered(e.getBuyerId() != null);
+            out.add(b);
+        }
+        out.sort(
+            Comparator.comparing((LotParticipatingBuyerDTO x) -> !x.isRegistered())
+                .thenComparing(x -> (x.getBuyerName() != null ? x.getBuyerName() : "").toLowerCase(Locale.ROOT))
+                .thenComparing(x -> (x.getBuyerMark() != null ? x.getBuyerMark() : "").toLowerCase(Locale.ROOT))
+        );
+        return out;
     }
 
     /**
