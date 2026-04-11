@@ -129,6 +129,12 @@ export interface CommodityConfiguration {
   bill_prefix?: string;
   hamali_enabled?: boolean;
   gst_rate?: number;
+  /** Optional intra-state component (percent). */
+  sgst_rate?: number;
+  /** Optional intra-state component (percent). */
+  cgst_rate?: number;
+  /** Optional inter-state component (percent). */
+  igst_rate?: number;
   weighing_threshold?: number;
 }
 

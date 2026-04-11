@@ -73,6 +73,8 @@ class SettlementResourceIT {
     void createPattiReturns200WithPattiId() throws Exception {
         PattiSaveRequest request = new PattiSaveRequest();
         request.setSellerId("S1");
+        request.setPattiBaseNumber("2255");
+        request.setSellerSequenceNumber(1);
         request.setSellerName("Settlement Test Seller");
         request.setGrossAmount(new BigDecimal("50000"));
         request.setTotalDeductions(new BigDecimal("2000"));
@@ -100,7 +102,9 @@ class SettlementResourceIT {
             )
             .andExpect(status().isOk())
             .andExpect(content().contentType(MediaType.APPLICATION_JSON_VALUE))
-            .andExpect(jsonPath("$.pattiId").value(org.hamcrest.Matchers.startsWith("PT-")))
+            .andExpect(jsonPath("$.pattiId").value("2255-1"))
+            .andExpect(jsonPath("$.pattiBaseNumber").value("2255"))
+            .andExpect(jsonPath("$.sellerSequenceNumber").value(1))
             .andExpect(jsonPath("$.sellerName").value("Settlement Test Seller"))
             .andExpect(jsonPath("$.grossAmount").value(50000))
             .andExpect(jsonPath("$.netPayable").value(48000))

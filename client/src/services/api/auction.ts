@@ -424,11 +424,16 @@ export const auctionApi = {
  * downstream pages (Billing, Weighing, Logistics, etc.) need minimal changes.
  * Result shape is normalized to include lotId, entries[].bidNumber, etc.
  */
-export async function fetchAllAuctionResults(maxPages = 20, pageSize = 100): Promise<AuctionResultDTO[]> {
+export async function fetchAllAuctionResults(maxPages = 50, pageSize = 100): Promise<AuctionResultDTO[]> {
   const all: AuctionResultDTO[] = [];
   let page = 0;
   while (page < maxPages) {
-    const chunk = await auctionApi.listResults({ page, size: pageSize });
+    const chunk = await auctionApi.listResults({
+      page,
+      size: pageSize,
+      /** Newest first (matches server default); avoids missing today’s auctions when capped at maxPages × pageSize. */
+      sort: 'completedAt,desc',
+    });
     all.push(...chunk);
     if (chunk.length < pageSize) break;
     page += 1;

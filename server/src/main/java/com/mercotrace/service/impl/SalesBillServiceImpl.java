@@ -348,6 +348,29 @@ public class SalesBillServiceImpl implements SalesBillService {
             group.setDiscount(nullToZero(g.getDiscount()));
             group.setDiscountType(g.getDiscountType() != null ? g.getDiscountType() : "AMOUNT");
             group.setManualRoundOff(nullToZero(g.getManualRoundOff()));
+            // Backend enforces split-tax behavior used by Billing UI:
+            // - combined GST is deprecated for bills (always stored as 0)
+            // - GST mode uses SGST+CGST (IGST forced to 0)
+            // - IGST mode uses IGST (SGST+CGST forced to 0)
+            BigDecimal sgstRate = nullToZero(g.getSgstRate());
+            BigDecimal cgstRate = nullToZero(g.getCgstRate());
+            BigDecimal igstRate = nullToZero(g.getIgstRate());
+            boolean hasIgst = igstRate.compareTo(BigDecimal.ZERO) > 0;
+            boolean hasSplit = sgstRate.compareTo(BigDecimal.ZERO) > 0 || cgstRate.compareTo(BigDecimal.ZERO) > 0;
+            if (hasIgst) {
+                sgstRate = BigDecimal.ZERO;
+                cgstRate = BigDecimal.ZERO;
+            } else if (hasSplit) {
+                igstRate = BigDecimal.ZERO;
+            }
+            group.setGstRate(BigDecimal.ZERO);
+            group.setGstInputMode(null);
+            group.setSgstRate(sgstRate);
+            group.setSgstInputMode(g.getSgstInputMode());
+            group.setCgstRate(cgstRate);
+            group.setCgstInputMode(g.getCgstInputMode());
+            group.setIgstRate(igstRate);
+            group.setIgstInputMode(g.getIgstInputMode());
             group.setSortOrder(go++);
             bill.getCommodityGroups().add(group);
             int io = 0;
@@ -423,6 +446,15 @@ public class SalesBillServiceImpl implements SalesBillService {
             gdto.setDiscount(g.getDiscount());
             gdto.setDiscountType(g.getDiscountType());
             gdto.setManualRoundOff(g.getManualRoundOff());
+            // Keep API responses aligned with split-tax UX (no combined GST value returned).
+            gdto.setGstRate(BigDecimal.ZERO);
+            gdto.setGstInputMode(null);
+            gdto.setSgstRate(g.getSgstRate());
+            gdto.setSgstInputMode(g.getSgstInputMode());
+            gdto.setCgstRate(g.getCgstRate());
+            gdto.setCgstInputMode(g.getCgstInputMode());
+            gdto.setIgstRate(g.getIgstRate());
+            gdto.setIgstInputMode(g.getIgstInputMode());
             List<BillLineItemDTO> items = new ArrayList<>();
             for (SalesBillLineItem it : g.getItems()) {
                 BillLineItemDTO idto = new BillLineItemDTO();

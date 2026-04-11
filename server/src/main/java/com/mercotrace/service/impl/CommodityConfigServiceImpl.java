@@ -150,6 +150,10 @@ public class CommodityConfigServiceImpl implements CommodityConfigService {
                     throw new BadRequestAlertException("GST rate allows max 2 decimal places (e.g. 12.50)", ENTITY_NAME, "invalidgstrate");
                 }
             }
+            validateOptionalGstComponentRate(configDto.getSgstRate(), "SGST");
+            validateOptionalGstComponentRate(configDto.getCgstRate(), "CGST");
+            validateOptionalGstComponentRate(configDto.getIgstRate(), "IGST");
+            validateGstStructure(configDto);
             if (configDto.getHsnCode() != null && !configDto.getHsnCode().trim().isEmpty()) {
                 String hsn = configDto.getHsnCode().trim().replaceAll("\\D", "");
                 if (hsn.length() != 6 && hsn.length() != 8) {
@@ -200,6 +204,84 @@ public class CommodityConfigServiceImpl implements CommodityConfigService {
         return getFullConfig(commodityId);
     }
 
+    private static void validateOptionalGstComponentRate(Double rate, String label) {
+        if (rate == null) {
+            return;
+        }
+        double v = rate;
+        if (v < 0D || v > 100D) {
+            throw new BadRequestAlertException(
+                label + " rate must be between 0 and 100 (max 2 decimal places)",
+                ENTITY_NAME,
+                "invalidgstrate"
+            );
+        }
+        double rounded = Math.round(v * 100) / 100.0;
+        if (Math.abs(v - rounded) > 0.0001) {
+            throw new BadRequestAlertException(
+                label + " rate allows max 2 decimal places (e.g. 2.50)",
+                ENTITY_NAME,
+                "invalidgstrate"
+            );
+        }
+    }
+
+    private static void validateGstStructure(CommodityConfigDTO configDto) {
+        Double gstRate = configDto.getGstRate();
+        Double sgstRate = configDto.getSgstRate();
+        Double cgstRate = configDto.getCgstRate();
+        Double igstRate = configDto.getIgstRate();
+
+        // If no GST at all, no further structure validation required.
+        if ((gstRate == null || gstRate <= 0D) && sgstRate == null && cgstRate == null && igstRate == null) {
+            return;
+        }
+
+        boolean hasSplit = sgstRate != null || cgstRate != null;
+        boolean hasIgst = igstRate != null;
+        boolean hasGst = gstRate != null && gstRate > 0D;
+
+        if (hasSplit && hasIgst) {
+            throw new BadRequestAlertException(
+                "Do not mix split GST with IGST. Send one tax structure only.",
+                ENTITY_NAME,
+                "invalidgstrate"
+            );
+        }
+
+        // Split GST (with optional base GST): SGST+CGST must be complete and can optionally match GST.
+        if (hasSplit) {
+            if (sgstRate == null || cgstRate == null) {
+                throw new BadRequestAlertException(
+                    "Both SGST and CGST are required for split GST",
+                    ENTITY_NAME,
+                    "invalidgstrate"
+                );
+            }
+            if (hasGst && Math.abs((sgstRate + cgstRate) - gstRate) > 0.01D) {
+                throw new BadRequestAlertException(
+                    "SGST + CGST must match GST rate",
+                    ENTITY_NAME,
+                    "invalidgstrate"
+                );
+            }
+            return;
+        }
+
+        if (!hasGst && !hasIgst) {
+            return;
+        }
+
+        // New model: either GST only (intra-state auto split handled elsewhere) OR IGST only.
+        if (hasGst && hasIgst) {
+            throw new BadRequestAlertException(
+                "Select only one tax type: GST or IGST",
+                ENTITY_NAME,
+                "invalidgstrate"
+            );
+        }
+    }
+
     private CommodityConfigDTO toConfigDTO(CommodityConfig e) {
         CommodityConfigDTO d = new CommodityConfigDTO();
         d.setId(e.getId());
@@ -216,6 +298,9 @@ public class CommodityConfigServiceImpl implements CommodityConfigService {
         d.setBillPrefix(e.getBillPrefix());
         d.setHamaliEnabled(e.getHamaliEnabled());
         d.setGstRate(e.getGstRate());
+        d.setSgstRate(e.getSgstRate());
+        d.setCgstRate(e.getCgstRate());
+        d.setIgstRate(e.getIgstRate());
         d.setWeighingThreshold(e.getWeighingThreshold());
         d.setCreatedBy(e.getCreatedBy());
         d.setCreatedDate(e.getCreatedDate());
@@ -240,6 +325,9 @@ public class CommodityConfigServiceImpl implements CommodityConfigService {
         e.setBillPrefix(d.getBillPrefix());
         e.setHamaliEnabled(d.getHamaliEnabled() != null ? d.getHamaliEnabled() : false);
         e.setGstRate(d.getGstRate());
+        e.setSgstRate(d.getSgstRate());
+        e.setCgstRate(d.getCgstRate());
+        e.setIgstRate(d.getIgstRate());
         e.setWeighingThreshold(d.getWeighingThreshold());
         return e;
     }

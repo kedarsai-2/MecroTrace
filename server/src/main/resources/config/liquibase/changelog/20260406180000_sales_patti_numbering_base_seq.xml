@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <changeSet id="20260406180000-1" author="mercotrace">
+        <addColumn tableName="sales_patti">
+            <column name="patti_base_number" type="varchar(16)"/>
+            <column name="seller_sequence_number" type="integer"/>
+        </addColumn>
+
+        <sql>
+            UPDATE sales_patti
+            SET
+                patti_base_number = COALESCE(
+                    NULLIF(regexp_replace(split_part(COALESCE(patti_id, ''), '-', 1), '[^0-9]', '', 'g'), ''),
+                    id::text
+                ),
+                seller_sequence_number = COALESCE(
+                    NULLIF(regexp_replace(split_part(COALESCE(patti_id, ''), '-', 2), '[^0-9]', '', 'g'), '')::integer,
+                    1
+                )
+            WHERE patti_base_number IS NULL OR seller_sequence_number IS NULL;
+        </sql>
+
+        <addNotNullConstraint tableName="sales_patti" columnName="patti_base_number" columnDataType="varchar(16)"/>
+        <addNotNullConstraint tableName="sales_patti" columnName="seller_sequence_number" columnDataType="integer"/>
+        <createIndex tableName="sales_patti" indexName="idx_sales_patti_base_number">
+            <column name="patti_base_number"/>
+        </createIndex>
+        <addUniqueConstraint
+            tableName="sales_patti"
+            columnNames="trader_id,patti_base_number,seller_sequence_number"
+            constraintName="ux_sales_patti_trader_base_seq"/>
+    </changeSet>
+</databaseChangeLog>

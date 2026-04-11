@@ -16,6 +16,15 @@ public interface LotRepository extends JpaRepository<Lot, Long> {
 
     List<Lot> findAllBySellerVehicleIdIn(Iterable<Long> sellerVehicleIds);
 
+    /**
+     * Lots for a seller-in-vehicle row, scoped to the trader (Arrivals → Settlement billing).
+     */
+    @Query(
+        "SELECT l FROM Lot l JOIN SellerInVehicle siv ON l.sellerVehicleId = siv.id JOIN Vehicle v ON siv.vehicleId = v.id " +
+        "WHERE l.sellerVehicleId = :sivId AND v.traderId = :traderId"
+    )
+    List<Lot> findAllBySellerVehicleIdAndTraderId(@Param("sivId") Long sivId, @Param("traderId") Long traderId);
+
     void deleteBySellerVehicleIdIn(Collection<Long> sellerVehicleIds);
 
     Page<Lot> findAllByLotNameContainingIgnoreCase(String lotName, Pageable pageable);
@@ -96,5 +105,14 @@ public interface LotRepository extends JpaRepository<Lot, Long> {
         @Param("normalizedMark") String normalizedMark,
         @Param("traderId") Long traderId
     );
+
+    /**
+     * Highest lot serial on any historical lot for this trader.
+     */
+    @Query(
+        "SELECT MAX(l.lotSerialNo) FROM Lot l, SellerInVehicle siv, Vehicle v WHERE l.sellerVehicleId = siv.id AND siv.vehicleId = v.id " +
+        "AND v.traderId = :traderId"
+    )
+    Optional<Integer> findMaxLotSerialNoByTraderId(@Param("traderId") Long traderId);
 }
 

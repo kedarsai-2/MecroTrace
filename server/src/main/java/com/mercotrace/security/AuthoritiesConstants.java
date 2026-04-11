@@ -124,6 +124,10 @@ public final class AuthoritiesConstants {
     public static final String PRESET_SETTINGS_EDIT = "ROLE_PRESET_SETTINGS_EDIT";
     public static final String PRESET_SETTINGS_DELETE = "ROLE_PRESET_SETTINGS_DELETE";
 
+    /** Print Settings module (Settlement/Billing page format presets) */
+    public static final String PRINT_SETTINGS_VIEW = "ROLE_PRINT_SETTINGS_VIEW";
+    public static final String PRINT_SETTINGS_EDIT = "ROLE_PRINT_SETTINGS_EDIT";
+
     /** Print Templates module */
     public static final String PRINT_TEMPLATES_VIEW = "ROLE_PRINT_TEMPLATES_VIEW";
     public static final String PRINT_TEMPLATES_CREATE = "ROLE_PRINT_TEMPLATES_CREATE";

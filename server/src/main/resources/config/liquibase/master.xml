@@ -89,4 +89,17 @@
     <include file="config/liquibase/changelog/20260402000000_per_commodity_billing_charges.xml" relativeToChangelogFile="false"/>
     <include file="config/liquibase/changelog/20260402120000_sales_bill_line_item_lot_id.xml" relativeToChangelogFile="false"/>
     <include file="config/liquibase/changelog/20260402140000_sales_bill_line_item_auction_entry_id.xml" relativeToChangelogFile="false"/>
+    <include file="config/liquibase/changelog/20260404120000_commodity_config_sgst_cgst_igst.xml" relativeToChangelogFile="false"/>
+    <include file="config/liquibase/changelog/20260404130000_sales_bill_commodity_group_gst_rates.xml" relativeToChangelogFile="false"/>
+    <include file="config/liquibase/changelog/20260406120000_sales_patti_version.xml" relativeToChangelogFile="false"/>
+    <include file="config/liquibase/changelog/20260406180000_sales_patti_numbering_base_seq.xml" relativeToChangelogFile="false"/>
+    <include file="config/liquibase/changelog/20260407110000_settlement_quick_expense_state.xml" relativeToChangelogFile="false"/>
+    <include file="config/liquibase/changelog/20260408110000_settlement_voucher_temp.xml" relativeToChangelogFile="false"/>
+    <include file="config/liquibase/changelog/20260408140000_sales_patti_in_progress.xml" relativeToChangelogFile="false"/>
+    <include file="config/liquibase/changelog/20260409123000_sales_bill_tax_input_modes.xml" relativeToChangelogFile="false"/>
+    <include file="config/liquibase/changelog/20260410110000_print_setting_schema.xml" relativeToChangelogFile="false"/>
+    <include file="config/liquibase/changelog/20260410111000_print_settings_authorities.xml" relativeToChangelogFile="false"/>
+    <include file="config/liquibase/changelog/20260410123000_settlement_voucher_temp_for_who_name.xml" relativeToChangelogFile="false"/>
+    <include file="config/liquibase/changelog/20260410140000_sales_patti_extension_json.xml" relativeToChangelogFile="false"/>
+    <include file="config/liquibase/changelog/20260411120000_sales_patti_original_snapshot.xml" relativeToChangelogFile="false"/>
 </databaseChangeLog>

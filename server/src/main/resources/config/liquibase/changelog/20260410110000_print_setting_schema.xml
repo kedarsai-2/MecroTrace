@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <changeSet id="20260410110000-1" author="mercotrace">
+        <createTable tableName="print_setting">
+            <column name="id" type="bigint">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="trader_id" type="bigint">
+                <constraints nullable="false"/>
+            </column>
+            <column name="module_key" type="varchar(50)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="paper_size" type="varchar(2)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="include_header" type="boolean" defaultValueBoolean="true">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+        <addUniqueConstraint
+            tableName="print_setting"
+            columnNames="trader_id,module_key"
+            constraintName="uk_print_setting_trader_module"/>
+        <createIndex tableName="print_setting" indexName="idx_print_setting_trader">
+            <column name="trader_id"/>
+        </createIndex>
+    </changeSet>
+</databaseChangeLog>

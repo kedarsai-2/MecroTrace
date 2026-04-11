@@ -17,6 +17,10 @@ public interface PattiRepository extends JpaRepository<Patti, Long> {
 
     Page<Patti> findAllByTraderIdOrderByCreatedDateDesc(Long traderId, Pageable pageable);
 
+    Page<Patti> findAllByTraderIdAndInProgressFalseOrderByCreatedDateDesc(Long traderId, Pageable pageable);
+
+    Page<Patti> findAllByTraderIdAndInProgressTrueOrderByCreatedDateDesc(Long traderId, Pageable pageable);
+
     boolean existsByPattiId(String pattiId);
 
     /** For REQ-PUT-008: next patti counter for date prefix (e.g. PT-20250302-). */

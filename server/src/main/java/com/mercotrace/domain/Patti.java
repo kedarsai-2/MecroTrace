@@ -11,7 +11,7 @@ import org.hibernate.annotations.CacheConcurrencyStrategy;
 
 /**
  * Sales Patti (settlement document) per seller.
- * Aligned with SettlementPage.tsx PattiData. Business key: pattiId (PT-YYYYMMDD-NNNN).
+ * Aligned with SettlementPage.tsx PattiData. Business key: pattiId (base-sellerSeq, e.g. 2255-1).
  */
 @Entity
 @Table(name = "sales_patti")
@@ -30,9 +30,15 @@ public class Patti extends AbstractAuditingEntity<Long> implements Serializable 
     @Column(name = "trader_id")
     private Long traderId;
 
-    /** Business key: PT-YYYYMMDD-NNNN */
+    /** Business key: base-sellerSeq (for example 2255-1). */
     @Column(name = "patti_id", nullable = false, unique = true, length = 32)
     private String pattiId;
+
+    @Column(name = "patti_base_number", nullable = false, length = 16)
+    private String pattiBaseNumber;
+
+    @Column(name = "seller_sequence_number")
+    private Integer sellerSequenceNumber;
 
     @Column(name = "seller_id", length = 128)
     private String sellerId;
@@ -51,6 +57,17 @@ public class Patti extends AbstractAuditingEntity<Long> implements Serializable 
 
     @Column(name = "use_average_weight", nullable = false)
     private Boolean useAverageWeight = false;
+
+    @Column(name = "in_progress", nullable = false)
+    private Boolean inProgress = false;
+
+    /** Optional JSON: per-lot sales report overrides (weight, rate) and removed lot ids (frontend v1 schema). */
+    @Column(name = "extension_json", columnDefinition = "TEXT")
+    private String extensionJson;
+
+    /** Immutable snapshot JSON (first-open baseline) for Alt+O reference; set once. */
+    @Column(name = "original_snapshot_json", columnDefinition = "TEXT")
+    private String originalSnapshotJson;
 
     @OneToMany(mappedBy = "patti", cascade = CascadeType.ALL, orphanRemoval = true)
     @OrderBy("rate DESC")
@@ -83,6 +100,22 @@ public class Patti extends AbstractAuditingEntity<Long> implements Serializable 
 
     public void setPattiId(String pattiId) {
         this.pattiId = pattiId;
+    }
+
+    public String getPattiBaseNumber() {
+        return pattiBaseNumber;
+    }
+
+    public void setPattiBaseNumber(String pattiBaseNumber) {
+        this.pattiBaseNumber = pattiBaseNumber;
+    }
+
+    public Integer getSellerSequenceNumber() {
+        return sellerSequenceNumber;
+    }
+
+    public void setSellerSequenceNumber(Integer sellerSequenceNumber) {
+        this.sellerSequenceNumber = sellerSequenceNumber;
     }
 
     public String getSellerId() {
@@ -133,6 +166,22 @@ public class Patti extends AbstractAuditingEntity<Long> implements Serializable 
         this.useAverageWeight = useAverageWeight;
     }
 
+    public Boolean getInProgress() {
+        return inProgress;
+    }
+
+    public void setInProgress(Boolean inProgress) {
+        this.inProgress = inProgress;
+    }
+
+    public String getExtensionJson() {
+        return extensionJson;
+    }
+
+    public void setExtensionJson(String extensionJson) {
+        this.extensionJson = extensionJson;
+    }
+
     public List<PattiRateCluster> getRateClusters() {
         return rateClusters;
     }
@@ -147,5 +196,13 @@ public class Patti extends AbstractAuditingEntity<Long> implements Serializable 
 
     public void setDeductions(List<PattiDeduction> deductions) {
         this.deductions = deductions;
+    }
+
+    public String getOriginalSnapshotJson() {
+        return originalSnapshotJson;
+    }
+
+    public void setOriginalSnapshotJson(String originalSnapshotJson) {
+        this.originalSnapshotJson = originalSnapshotJson;
     }
 }

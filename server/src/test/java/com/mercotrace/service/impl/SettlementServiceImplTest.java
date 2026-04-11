@@ -10,11 +10,15 @@ import com.mercotrace.domain.ChartOfAccount;
 import com.mercotrace.domain.FreightCalculation;
 import com.mercotrace.domain.Patti;
 import com.mercotrace.domain.PattiDeduction;
+import com.mercotrace.domain.Lot;
 import com.mercotrace.domain.PattiRateCluster;
 import com.mercotrace.domain.SellerInVehicle;
+import com.mercotrace.domain.Vehicle;
+import com.mercotrace.domain.BillNumberSequence;
 import com.mercotrace.repository.ChartOfAccountRepository;
 import com.mercotrace.repository.PattiRepository;
 import com.mercotrace.repository.VoucherLineRepository;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mercotrace.service.TraderContextService;
 import com.mercotrace.service.dto.SettlementDTOs.*;
 import java.math.BigDecimal;
@@ -35,6 +39,8 @@ class SettlementServiceImplTest {
 
     @Mock
     private TraderContextService traderContextService;
+    @Mock
+    private com.mercotrace.repository.BillNumberSequenceRepository billNumberSequenceRepository;
 
     @Mock
     private com.mercotrace.repository.LotRepository lotRepository;
@@ -69,12 +75,37 @@ class SettlementServiceImplTest {
     @Mock
     private VoucherLineRepository voucherLineRepository;
 
+    @Mock
+    private com.mercotrace.repository.VehicleWeightRepository vehicleWeightRepository;
+
+    @Mock
+    private com.mercotrace.repository.SalesBillLineItemRepository salesBillLineItemRepository;
+
+    @Mock
+    private com.mercotrace.repository.SalesBillRepository salesBillRepository;
+
+    @Mock
+    private com.mercotrace.repository.SettlementQuickExpenseStateRepository settlementQuickExpenseStateRepository;
+
+    @Mock
+    private com.mercotrace.repository.SettlementVoucherTempRepository settlementVoucherTempRepository;
+
+    @Mock
+    private com.mercotrace.service.ContactService contactService;
+
+    @Mock
+    private com.mercotrace.repository.HamaliSlabRepository hamaliSlabRepository;
+
+    @Mock
+    private com.mercotrace.repository.CommodityConfigRepository commodityConfigRepository;
+
     private SettlementServiceImpl service;
 
     @BeforeEach
     void setUp() {
         service = new SettlementServiceImpl(
             traderContextService,
+            billNumberSequenceRepository,
             lotRepository,
             auctionService,
             pattiRepository,
@@ -85,7 +116,16 @@ class SettlementServiceImplTest {
             commodityRepository,
             freightCalculationRepository,
             chartOfAccountRepository,
-            voucherLineRepository
+            voucherLineRepository,
+            vehicleWeightRepository,
+            salesBillLineItemRepository,
+            salesBillRepository,
+            settlementQuickExpenseStateRepository,
+            settlementVoucherTempRepository,
+            contactService,
+            hamaliSlabRepository,
+            commodityConfigRepository,
+            new ObjectMapper()
         );
         // Only create stubbing when needed in specific tests to avoid UnnecessaryStubbingException.
     }
@@ -121,14 +161,17 @@ class SettlementServiceImplTest {
         PattiSaveRequest req = sampleSaveRequest();
 
         when(traderContextService.getCurrentTraderId()).thenReturn(TRADER_ID);
-        when(pattiRepository.findTopByPattiIdStartingWithOrderByIdDesc(any())).thenReturn(Optional.empty());
+        BillNumberSequence seq = new BillNumberSequence();
+        seq.setPrefix("PATTI");
+        seq.setNextValue(2255L);
+        when(billNumberSequenceRepository.findByPrefixForUpdate("PATTI")).thenReturn(Optional.of(seq));
         when(pattiRepository.save(any(Patti.class))).thenAnswer(inv -> {
             Patti p = inv.getArgument(0);
             if (p.getId() == null) {
                 p.setId(1L);
             }
             if (p.getPattiId() == null) {
-                p.setPattiId("PT-20260316-0001");
+                p.setPattiId("2255-1");
             }
             return p;
         });
@@ -136,7 +179,9 @@ class SettlementServiceImplTest {
             Patti p = new Patti();
             p.setId(1L);
             p.setTraderId(TRADER_ID);
-            p.setPattiId("PT-20260316-0001");
+            p.setPattiId("2255-1");
+            p.setPattiBaseNumber("2255");
+            p.setSellerSequenceNumber(1);
             p.setSellerId(req.getSellerId());
             p.setSellerName(req.getSellerName());
             p.setGrossAmount(req.getGrossAmount());
@@ -166,7 +211,9 @@ class SettlementServiceImplTest {
 
         // Verify basic persistence behaviour via resulting DTO rather than exact save invocations,
         // since the service intentionally saves twice (before and after mapping nested collections).
-        assertThat(dto.getPattiId()).startsWith("PT-");
+        assertThat(dto.getPattiId()).isEqualTo("2255-1");
+        assertThat(dto.getPattiBaseNumber()).isEqualTo("2255");
+        assertThat(dto.getSellerSequenceNumber()).isEqualTo(1);
         assertThat(dto.getSellerName()).isEqualTo("Test Seller");
         assertThat(dto.getRateClusters()).hasSize(1);
         assertThat(dto.getDeductions()).hasSize(1);
@@ -190,6 +237,16 @@ class SettlementServiceImplTest {
         assertThat(dto.getAdvance()).isEqualByComparingTo(BigDecimal.ZERO);
         assertThat(dto.getFreightAutoPulled()).isFalse();
         assertThat(dto.getAdvanceAutoPulled()).isFalse();
+    }
+
+    @Test
+    void getSellerExpenseSnapshot_returnsZerosWhenInvalidSellerId() {
+        SellerExpenseSnapshotDTO dto = service.getSellerExpenseSnapshot("not-a-number");
+        assertThat(dto.getFreight()).isEqualByComparingTo(BigDecimal.ZERO);
+        assertThat(dto.getUnloading()).isEqualByComparingTo(BigDecimal.ZERO);
+        assertThat(dto.getWeighing()).isEqualByComparingTo(BigDecimal.ZERO);
+        assertThat(dto.getCashAdvance()).isEqualByComparingTo(BigDecimal.ZERO);
+        assertThat(dto.getCashAdvanceJournalPending()).isTrue();
     }
 
     @Test
@@ -280,6 +337,40 @@ class SettlementServiceImplTest {
         assertThat(dto.getAdvance()).isEqualByComparingTo(BigDecimal.valueOf(800)); // 500 + 300
         assertThat(dto.getFreightAutoPulled()).isTrue();
         assertThat(dto.getAdvanceAutoPulled()).isTrue();
+    }
+
+    @Test
+    void getSettlementAmountSummary_aggregatesFromLotsAndBills() {
+        SellerInVehicle siv = new SellerInVehicle();
+        siv.setId(100L);
+        siv.setVehicleId(200L);
+
+        Vehicle vehicle = new Vehicle();
+        vehicle.setId(200L);
+        vehicle.setTraderId(TRADER_ID);
+
+        Lot lot = new Lot();
+        lot.setId(55L);
+        lot.setSellerVehicleId(100L);
+
+        when(traderContextService.getCurrentTraderId()).thenReturn(TRADER_ID);
+        when(sellerInVehicleRepository.findById(100L)).thenReturn(Optional.of(siv));
+        when(sellerInVehicleRepository.findAllByVehicleId(200L)).thenReturn(List.of(siv));
+        when(vehicleRepository.findById(200L)).thenReturn(Optional.of(vehicle));
+        when(freightCalculationRepository.findOneByVehicleId(200L)).thenReturn(Optional.empty());
+        when(lotRepository.findAllBySellerVehicleIdIn(List.of(100L))).thenReturn(List.of(lot));
+        when(salesBillLineItemRepository.sumLineAmountByTraderLotsForSettlement(TRADER_ID, List.of("55"), List.of(55L), null))
+            .thenReturn(BigDecimal.valueOf(8888));
+        when(salesBillLineItemRepository.findDistinctBillIdsByTraderAndLotsForSettlement(TRADER_ID, List.of("55"), List.of(55L), null))
+            .thenReturn(List.of(1L, 2L));
+        when(salesBillRepository.sumOutboundFreightByTraderAndBillIds(TRADER_ID, List.of(1L, 2L)))
+            .thenReturn(BigDecimal.valueOf(450));
+
+        SettlementAmountSummaryDTO dto = service.getSettlementAmountSummary("100", null);
+
+        assertThat(dto.getArrivalFreightAmount()).isEqualByComparingTo(BigDecimal.ZERO);
+        assertThat(dto.getFreightInvoiced()).isEqualByComparingTo(BigDecimal.valueOf(450));
+        assertThat(dto.getPayableInvoiced()).isEqualByComparingTo(BigDecimal.valueOf(8888));
     }
 
     // generateNextPattiId is indirectly covered via createPatti and logging; explicit reflection-based

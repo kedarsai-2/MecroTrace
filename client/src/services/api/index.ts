@@ -61,3 +61,5 @@ export { arapDocumentsApi } from './arapDocuments';
 export type { ArApDocumentDTO, ArApDocumentPage } from './arapDocuments';
 export { presetMarksApi } from './presetMarks';
 export type { PresetMarkSettingDTO } from './presetMarks';
+export { printSettingsApi } from './printSettings';
+export type { PrintSettingDTO, PrintModuleKey, PrintPaperSize } from './printSettings';

@@ -2,6 +2,7 @@ package com.mercotrace.repository;
 
 import com.mercotrace.domain.SalesBill;
 import java.math.BigDecimal;
+import java.util.Collection;
 import java.util.Optional;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -64,4 +65,10 @@ public interface SalesBillRepository extends JpaRepository<SalesBill, Long> {
         @Param("dateFrom") java.time.Instant dateFrom,
         @Param("dateTo") java.time.Instant dateTo
     );
+
+    @Query(
+        "SELECT COALESCE(SUM(b.outboundFreight), 0) FROM SalesBill b " +
+        "WHERE b.traderId = :traderId AND b.id IN :billIds"
+    )
+    BigDecimal sumOutboundFreightByTraderAndBillIds(@Param("traderId") Long traderId, @Param("billIds") Collection<Long> billIds);
 }

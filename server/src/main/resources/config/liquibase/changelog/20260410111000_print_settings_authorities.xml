@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <changeSet id="20260410111000-1" author="mercotrace">
+        <comment>Insert Print Settings module authorities for trader RBAC.</comment>
+        <insert tableName="jhi_authority">
+            <column name="name" value="ROLE_PRINT_SETTINGS_VIEW"/>
+        </insert>
+        <insert tableName="jhi_authority">
+            <column name="name" value="ROLE_PRINT_SETTINGS_EDIT"/>
+        </insert>
+    </changeSet>
+</databaseChangeLog>

@@ -94,12 +94,6 @@ interface SaleEntry {
   lastModifiedMs?: number | null;
 }
 
-const DEFAULT_PRESETS = [
-  { label: '10', value: 10 },
-  { label: '20', value: 20 },
-  { label: '50', value: 50 },
-];
-
 // ── In-memory draft only (no localStorage). Session-only; backend draft API not implemented. ──
 interface AuctionDraft {
   selectedLotId: string | null;
@@ -592,6 +586,7 @@ const AuctionsPage = () => {
   const isDesktop = useDesktopMode();
   const { trader } = useAuth();
   const { canAccessModule, can } = usePermissions();
+  const canUsePreset = trader?.preset_enabled !== false;
   const canView = canAccessModule('Auctions / Sales');
   if (!canView) {
     return <ForbiddenPage moduleName="Auctions" />;
@@ -620,6 +615,7 @@ const AuctionsPage = () => {
   const rateInputRef = useRef<HTMLInputElement>(null);
   const qtyInputRef = useRef<HTMLInputElement>(null);
   const userClearedRateRef = useRef(false);
+  const [preferRateForFirstBidFormFocus, setPreferRateForFirstBidFormFocus] = useState(true);
 
   // Lot selection
   const [showLotSelector, setShowLotSelector] = useState(true);
@@ -647,8 +643,8 @@ const AuctionsPage = () => {
     pendingEntry: Omit<SaleEntry, 'id' | 'bidNumber'>;
   } | null>(null);
 
-  // Preset options from Settings (dynamic); fallback to default
-  const [presetOptions, setPresetOptions] = useState<{ label: string; value: number }[]>(DEFAULT_PRESETS);
+  // Preset options from Settings (dynamic only; no local fallback)
+  const [presetOptions, setPresetOptions] = useState<{ label: string; value: number }[]>([]);
 
   // API loading / 409 retry
   const [lotsLoading, setLotsLoading] = useState(true);
@@ -823,10 +819,18 @@ const AuctionsPage = () => {
               value: Number(p.extra_amount),
             }))
           );
+        } else {
+          setPresetOptions([]);
         }
       })
-      .catch(() => { /* keep default presets */ });
+      .catch(() => { setPresetOptions([]); });
   }, [loadTemporaryBuyerMarks, loadLots, loadSelfSaleLots]);
+
+  useEffect(() => {
+    if (canUsePreset) return;
+    if (showPresetMargin) setShowPresetMargin(false);
+    if (preset !== 0) setPreset(0);
+  }, [canUsePreset, showPresetMargin, preset]);
 
   // ── Restore draft after lots are loaded from API ─────────
   useEffect(() => {
@@ -2076,6 +2080,10 @@ const AuctionsPage = () => {
     setQty('');
     setLotNumberSearch('');
     userClearedRateRef.current = false;
+    // Available lots have no bids yet — user must enter a rate, so focus Rate first.
+    // Sold/partial/pending lots already have bids and the rate auto-fills from the
+    // last bid, so focus Mark instead (existing behaviour).
+    setPreferRateForFirstBidFormFocus(lot.status === 'available' || !lot.status);
     setSessionLoading(true);
     const loadSession = source === 'self_sale'
       ? auctionApi.getOrStartSelfSaleSession(lot.selfSaleUnitId ?? lot.lot_id)
@@ -2736,7 +2744,7 @@ const AuctionsPage = () => {
 
       <div className="px-4 mt-4 flex flex-col gap-3 h-auto min-h-0">
         {/* REQ-AUC-003: Preset margin (preset labels A/B/C; green = profit, red = negative). Toggle to show/hide. */}
-        {isDesktop && (
+        {isDesktop && canUsePreset && (
           <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="glass-card rounded-2xl p-3">
             <div className="flex items-center justify-between mb-2">
               <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Preset Margin</p>
@@ -2748,27 +2756,33 @@ const AuctionsPage = () => {
 
             {showPresetMargin && (
               <div className="flex flex-col gap-2">
-                <div className="flex items-center gap-2">
-                  {presetOptions.map((opt) => (
-                    <button
-                      key={opt.label + String(opt.value)}
-                      type="button"
-                      onClick={() => applyPreset(opt.value)}
-                      className={cn(
-                        'flex-1 py-2 rounded-xl text-sm font-bold transition-all',
-                        preset === opt.value
-                          ? opt.value >= 0
-                            ? 'bg-gradient-to-r from-emerald-500 to-green-500 text-white shadow-md shadow-emerald-500/20'
-                            : 'bg-gradient-to-r from-red-500 to-rose-500 text-white shadow-md shadow-red-500/20'
-                          : 'bg-muted/40 text-muted-foreground hover:bg-muted/60',
-                        preset !== opt.value && opt.value >= 0 && 'text-success',
-                        preset !== opt.value && opt.value < 0 && 'text-destructive'
-                      )}
-                    >
-                      {opt.label}
-                    </button>
-                  ))}
-                </div>
+                {presetOptions.length > 0 ? (
+                  <div className="flex items-center gap-2">
+                    {presetOptions.map((opt) => (
+                      <button
+                        key={opt.label + String(opt.value)}
+                        type="button"
+                        onClick={() => applyPreset(opt.value)}
+                        className={cn(
+                          'flex-1 py-2 rounded-xl text-sm font-bold transition-all',
+                          preset === opt.value
+                            ? opt.value >= 0
+                              ? 'bg-gradient-to-r from-emerald-500 to-green-500 text-white shadow-md shadow-emerald-500/20'
+                              : 'bg-gradient-to-r from-red-500 to-rose-500 text-white shadow-md shadow-red-500/20'
+                            : 'bg-muted/40 text-muted-foreground hover:bg-muted/60',
+                          preset !== opt.value && opt.value >= 0 && 'text-success',
+                          preset !== opt.value && opt.value < 0 && 'text-destructive'
+                        )}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-xs text-muted-foreground rounded-lg border border-dashed border-border px-3 py-2">
+                    Preset is not configured yet. Please set preset values in Preset Settings.
+                  </p>
+                )}
                 {preset !== 0 && highestBid > 0 && (
                   <motion.p initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="text-[10px] text-muted-foreground mt-2">
                     Seller <span className="text-foreground font-semibold">₹{highestBid}</span> · Buyer pays{' '}
@@ -2801,6 +2815,7 @@ const AuctionsPage = () => {
                     />
                     <Input
                       ref={markInputRef}
+                      data-skip-route-autofocus={preferRateForFirstBidFormFocus ? 'true' : undefined}
                       type="text"
                       value={scribbleMark}
                       readOnly={!!editingBidId}
@@ -3003,6 +3018,7 @@ const AuctionsPage = () => {
                         if (editingBidId) setEditBidDraft((d) => (d ? { ...d, rate: v } : d));
                       }}
                       onFocus={(e) => {
+                        if (preferRateForFirstBidFormFocus) setPreferRateForFirstBidFormFocus(false);
                         setActiveNumpadField('rate');
                         if (isTouchLayout && !mobileKeyboardEnabled) {
                           e.currentTarget.blur();
@@ -3436,6 +3452,7 @@ const AuctionsPage = () => {
                   if (editingBidId) setEditBidDraft((d) => (d ? { ...d, rate: v } : d));
                 }}
                 onFocus={(e) => {
+                  if (preferRateForFirstBidFormFocus) setPreferRateForFirstBidFormFocus(false);
                   setActiveNumpadField('rate');
                   if (!mobileKeyboardEnabled) {
                     e.currentTarget.blur();
@@ -3460,6 +3477,7 @@ const AuctionsPage = () => {
               <Input
                 id="sales-pad-mark-mobile"
                 ref={markInputRef}
+                data-skip-route-autofocus={preferRateForFirstBidFormFocus ? 'true' : undefined}
                 type="text"
                 autoComplete="off"
                 value={scribbleMark}
@@ -3526,35 +3544,43 @@ const AuctionsPage = () => {
             </div>
           </div>
           {/* Preset margin: compact row below rate/qty */}
-          <div className="flex items-center justify-between gap-2 mb-1 py-0.5">
-            <span className="text-[9px] font-semibold text-muted-foreground uppercase">Preset</span>
-            <div className="flex items-center gap-1.5">
-              <span className="text-[9px] text-muted-foreground">Show</span>
-              <Switch checked={showPresetMargin} onCheckedChange={handleShowPresetMarginChange} aria-label="Show preset margin" className="scale-75 origin-right" />
+          {canUsePreset && (
+            <div className="flex items-center justify-between gap-2 mb-1 py-0.5">
+              <span className="text-[9px] font-semibold text-muted-foreground uppercase">Preset</span>
+              <div className="flex items-center gap-1.5">
+                <span className="text-[9px] text-muted-foreground">Show</span>
+                <Switch checked={showPresetMargin} onCheckedChange={handleShowPresetMarginChange} aria-label="Show preset margin" className="scale-75 origin-right" />
+              </div>
             </div>
-          </div>
-          {showPresetMargin && (
-            <div className="flex items-center gap-1 mb-1">
-              {presetOptions.map((opt) => (
-                <button
-                  key={opt.label + String(opt.value)}
-                  type="button"
-                  onClick={() => applyPreset(opt.value)}
-                  className={cn(
-                    'flex-1 py-1.5 rounded-lg text-[11px] font-bold transition-all',
-                    preset === opt.value
-                      ? opt.value >= 0
-                        ? 'bg-gradient-to-r from-emerald-500 to-green-500 text-white'
-                        : 'bg-gradient-to-r from-red-500 to-rose-500 text-white'
-                      : 'bg-muted/40 text-muted-foreground hover:bg-muted/60',
-                    preset !== opt.value && opt.value >= 0 && 'text-success',
-                    preset !== opt.value && opt.value < 0 && 'text-destructive'
-                  )}
-                >
-                  {opt.label}
-                </button>
-              ))}
-            </div>
+          )}
+          {canUsePreset && showPresetMargin && (
+            presetOptions.length > 0 ? (
+              <div className="flex items-center gap-1 mb-1">
+                {presetOptions.map((opt) => (
+                  <button
+                    key={opt.label + String(opt.value)}
+                    type="button"
+                    onClick={() => applyPreset(opt.value)}
+                    className={cn(
+                      'flex-1 py-1.5 rounded-lg text-[11px] font-bold transition-all',
+                      preset === opt.value
+                        ? opt.value >= 0
+                          ? 'bg-gradient-to-r from-emerald-500 to-green-500 text-white'
+                          : 'bg-gradient-to-r from-red-500 to-rose-500 text-white'
+                        : 'bg-muted/40 text-muted-foreground hover:bg-muted/60',
+                      preset !== opt.value && opt.value >= 0 && 'text-success',
+                      preset !== opt.value && opt.value < 0 && 'text-destructive'
+                    )}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <p className="text-[10px] text-muted-foreground rounded-md border border-dashed border-border px-2 py-1 mb-1">
+                Preset is not set. Please configure it in Preset Settings.
+              </p>
+            )
           )}
           <div className="grid grid-cols-[1.4fr_1fr] gap-1.5 items-stretch">
             <div className="rounded-xl border border-violet-400/20 bg-card/80 p-1.5 h-full min-h-[15rem] flex flex-col gap-1">

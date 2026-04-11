@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <changeSet id="20260409123000-sales-bill-tax-input-modes" author="mercotrace">
+        <addColumn tableName="sales_bill_commodity_group">
+            <column name="gst_input_mode" type="varchar(10)"/>
+            <column name="sgst_input_mode" type="varchar(10)"/>
+            <column name="cgst_input_mode" type="varchar(10)"/>
+            <column name="igst_input_mode" type="varchar(10)"/>
+        </addColumn>
+    </changeSet>
+
+</databaseChangeLog>

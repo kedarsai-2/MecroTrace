@@ -60,6 +60,15 @@ public class CommodityConfigDTO implements Serializable {
     @JsonProperty("gst_rate")
     private Double gstRate;
 
+    @JsonProperty("sgst_rate")
+    private Double sgstRate;
+
+    @JsonProperty("cgst_rate")
+    private Double cgstRate;
+
+    @JsonProperty("igst_rate")
+    private Double igstRate;
+
     @JsonProperty("weighing_threshold")
     private Double weighingThreshold;
 
@@ -104,6 +113,12 @@ public class CommodityConfigDTO implements Serializable {
     public void setHamaliEnabled(Boolean hamaliEnabled) { this.hamaliEnabled = hamaliEnabled; }
     public Double getGstRate() { return gstRate; }
     public void setGstRate(Double gstRate) { this.gstRate = gstRate; }
+    public Double getSgstRate() { return sgstRate; }
+    public void setSgstRate(Double sgstRate) { this.sgstRate = sgstRate; }
+    public Double getCgstRate() { return cgstRate; }
+    public void setCgstRate(Double cgstRate) { this.cgstRate = cgstRate; }
+    public Double getIgstRate() { return igstRate; }
+    public void setIgstRate(Double igstRate) { this.igstRate = igstRate; }
     public Double getWeighingThreshold() { return weighingThreshold; }
     public void setWeighingThreshold(Double weighingThreshold) { this.weighingThreshold = weighingThreshold; }
     public String getCreatedBy() { return createdBy; }

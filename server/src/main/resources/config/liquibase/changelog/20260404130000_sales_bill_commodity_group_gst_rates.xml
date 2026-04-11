@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!-- Per-bill GST overrides (aligned with BillingPage CommodityGroup). Nullable for legacy rows. -->
+    <changeSet id="20260404130000-sales-bill-cg-gst-rates" author="mercotrace">
+        <addColumn tableName="sales_bill_commodity_group">
+            <column name="gst_rate" type="numeric(8,2)"/>
+            <column name="sgst_rate" type="numeric(8,2)"/>
+            <column name="cgst_rate" type="numeric(8,2)"/>
+            <column name="igst_rate" type="numeric(8,2)"/>
+        </addColumn>
+    </changeSet>
+
+</databaseChangeLog>

@@ -276,6 +276,10 @@ public class TraderOwnerAuthorityService {
         names.add(AuthoritiesConstants.PRESET_SETTINGS_EDIT);
         names.add(AuthoritiesConstants.PRESET_SETTINGS_DELETE);
 
+        // Print Settings module (Settlement / Billing print format presets)
+        names.add(AuthoritiesConstants.PRINT_SETTINGS_VIEW);
+        names.add(AuthoritiesConstants.PRINT_SETTINGS_EDIT);
+
         // Print Templates module
         names.add(AuthoritiesConstants.PRINT_TEMPLATES_VIEW);
         names.add(AuthoritiesConstants.PRINT_TEMPLATES_CREATE);

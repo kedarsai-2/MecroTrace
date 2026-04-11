@@ -29,6 +29,9 @@ export type FullCommodityConfigDto = {
     billPrefix?: string;
     hamaliEnabled: boolean;
     gstRate?: number;
+    sgstRate?: number;
+    cgstRate?: number;
+    igstRate?: number;
     weighingThreshold?: number;
     createdBy?: string;
     createdDate?: string;
@@ -252,6 +255,12 @@ function mapFullConfigFromApi(raw: Record<string, unknown>): FullCommodityConfig
           billPrefix: (config.bill_prefix ?? config.billPrefix) as string | undefined,
           hamaliEnabled: Boolean(config.hamali_enabled ?? config.hamaliEnabled),
           gstRate: config.gst_rate != null ? Number(config.gst_rate) : (config.gstRate as number | undefined),
+          sgstRate:
+            config.sgst_rate != null ? Number(config.sgst_rate) : (config.sgstRate as number | undefined),
+          cgstRate:
+            config.cgst_rate != null ? Number(config.cgst_rate) : (config.cgstRate as number | undefined),
+          igstRate:
+            config.igst_rate != null ? Number(config.igst_rate) : (config.igstRate as number | undefined),
           weighingThreshold:
             config.weighing_threshold != null ? Number(config.weighing_threshold) : (config.weighingThreshold as number | undefined),
           createdBy: (config.created_by ?? config.createdBy) as string | undefined,
@@ -320,6 +329,9 @@ function mapFullConfigToApi(payload: FullCommodityConfigDto): Record<string, unk
       bill_prefix: payload.config.billPrefix ?? '',
       hamali_enabled: payload.config.hamaliEnabled,
       gst_rate: payload.config.gstRate,
+      sgst_rate: payload.config.sgstRate,
+      cgst_rate: payload.config.cgstRate,
+      igst_rate: payload.config.igstRate,
       weighing_threshold: payload.config.weighingThreshold,
     };
   }

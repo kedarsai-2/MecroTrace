@@ -96,6 +96,10 @@ const MODULE_FEATURE_TO_AUTHORITY: ModuleFeatureAuthorityMap = {
     edit: 'ROLE_PRESET_SETTINGS_EDIT',
     delete: 'ROLE_PRESET_SETTINGS_DELETE',
   },
+  [normalize('Print Settings')]: {
+    view: 'ROLE_PRINT_SETTINGS_VIEW',
+    edit: 'ROLE_PRINT_SETTINGS_EDIT',
+  },
   // Settlement (Patti) module.
   [normalize('Settlement')]: {
     view: 'ROLE_SETTLEMENTS_VIEW',
@@ -144,6 +148,7 @@ export function canWithAuthorities(
 export function getModuleKeyForRoute(pathname: string): ModuleKey | null {
   if (pathname.startsWith('/home')) return 'Home';
   if (pathname.startsWith('/settings/preset-settings')) return 'Preset Settings';
+  if (pathname.startsWith('/settings/print-settings')) return 'Print Settings';
   if (pathname.startsWith('/settings')) return 'Settings';
   if (pathname.startsWith('/contacts')) return 'Contacts';
   if (pathname.startsWith('/commodity-settings')) return 'Commodity Settings';

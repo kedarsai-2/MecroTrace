@@ -166,7 +166,7 @@ public class ArrivalService {
         int sellerSerialPeak = dailySerial.getSellerSerial() != null ? dailySerial.getSellerSerial() : 0;
         Set<Integer> usedSellerSerials = new HashSet<>();
         Set<String> seenSellerKeys = new HashSet<>();
-        int arrivalLotSerial = 0;
+        int lotSerialPeak = currentLotSerialBaseForTrader(traderId, dailySerial);
 
         List<SellerInVehicle> sellerLinks = new ArrayList<>();
         List<Lot> lots = new ArrayList<>();
@@ -217,8 +217,8 @@ public class ArrivalService {
                 if (lotDTO.getVariant() != null && !lotDTO.getVariant().isBlank()) lot.setVariant(lotDTO.getVariant().trim());
                 if (lotDTO.getBrokerTag() != null && !lotDTO.getBrokerTag().isBlank()) lot.setBrokerTag(lotDTO.getBrokerTag().trim());
                 lot.setSellerSerialNo(sellerSerial);
-                arrivalLotSerial = nextLotSerial(arrivalLotSerial);
-                lot.setLotSerialNo(arrivalLotSerial);
+                lotSerialPeak = nextLotSerial(lotSerialPeak);
+                lot.setLotSerialNo(lotSerialPeak);
                 lot.setCreatedAt(now);
                 lots.add(lot);
             }
@@ -233,9 +233,7 @@ public class ArrivalService {
         }
 
         dailySerial.setSellerSerial(sellerSerialPeak);
-        if (dailySerial.getLotSerial() == null) {
-            dailySerial.setLotSerial(0);
-        }
+        dailySerial.setLotSerial(lotSerialPeak);
         dailySerialRepository.save(dailySerial);
 
         FreightMethod fm = request.getFreightMethod() != null ? request.getFreightMethod() : FreightMethod.BY_WEIGHT;
@@ -597,7 +595,7 @@ public class ArrivalService {
             int sellerSerialPeak = dailySerial.getSellerSerial() != null ? dailySerial.getSellerSerial() : 0;
             Set<Integer> usedSellerSerials = new HashSet<>();
             Set<String> seenSellerKeys = new HashSet<>();
-            int arrivalLotSerial = 0;
+            int lotSerialPeak = currentLotSerialBaseForTrader(traderId, dailySerial);
             Long updateBrokerContactId = update.getBrokerContactId();
             for (ArrivalSellerDTO sellerDTO : update.getSellers()) {
                 SellerInVehicle siv = new SellerInVehicle();
@@ -647,18 +645,15 @@ public class ArrivalService {
                     if (lotDTO.getVariant() != null && !lotDTO.getVariant().isBlank()) lot.setVariant(lotDTO.getVariant().trim());
                     if (lotDTO.getBrokerTag() != null && !lotDTO.getBrokerTag().isBlank()) lot.setBrokerTag(lotDTO.getBrokerTag().trim());
                     lot.setSellerSerialNo(requestedSerial);
-                    // Lot serials are arrival-scoped and always re-numbered sequentially (1..N)
-                    // across all sellers in the submitted order.
-                    arrivalLotSerial = nextLotSerial(arrivalLotSerial);
-                    lot.setLotSerialNo(arrivalLotSerial);
+                    // Lot serials are trader-scoped and continue incrementally across arrivals.
+                    lotSerialPeak = nextLotSerial(lotSerialPeak);
+                    lot.setLotSerialNo(lotSerialPeak);
                     lot.setCreatedAt(now);
                     currentLots.add(lot);
                 }
             }
             dailySerial.setSellerSerial(sellerSerialPeak);
-            if (dailySerial.getLotSerial() == null) {
-                dailySerial.setLotSerial(0);
-            }
+            dailySerial.setLotSerial(lotSerialPeak);
             dailySerialRepository.save(dailySerial);
             if (updateBrokerContactId != null) {
                 contactService.ensureTraderUsesPortalContact(traderId, updateBrokerContactId);
@@ -1173,6 +1168,12 @@ public class ArrivalService {
         int maxDaily = lockedDailySerial.getSellerSerial() != null ? lockedDailySerial.getSellerSerial() : 0;
         int base = Math.max(maxAlloc, maxDaily);
         return nextAvailableSellerSerial(base, usedInArrival);
+    }
+
+    private int currentLotSerialBaseForTrader(Long traderId, DailySerial lockedDailySerial) {
+        int maxDaily = lockedDailySerial.getLotSerial() != null ? lockedDailySerial.getLotSerial() : 0;
+        int maxHistorical = lotRepository.findMaxLotSerialNoByTraderId(traderId).orElse(0);
+        return Math.max(maxDaily, maxHistorical);
     }
 
     /**

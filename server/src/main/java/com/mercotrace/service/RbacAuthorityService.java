@@ -362,6 +362,10 @@ public class RbacAuthorityService {
         names.add(AuthoritiesConstants.PRESET_SETTINGS_EDIT);
         names.add(AuthoritiesConstants.PRESET_SETTINGS_DELETE);
 
+        // Print Settings module
+        names.add(AuthoritiesConstants.PRINT_SETTINGS_VIEW);
+        names.add(AuthoritiesConstants.PRINT_SETTINGS_EDIT);
+
         // Print Templates module
         names.add(AuthoritiesConstants.PRINT_TEMPLATES_VIEW);
         names.add(AuthoritiesConstants.PRINT_TEMPLATES_CREATE);
@@ -549,6 +553,15 @@ public class RbacAuthorityService {
                 "create", AuthoritiesConstants.PRESET_SETTINGS_CREATE,
                 "edit", AuthoritiesConstants.PRESET_SETTINGS_EDIT,
                 "delete", AuthoritiesConstants.PRESET_SETTINGS_DELETE
+            )
+        );
+
+        register(
+            modules,
+            "print settings",
+            mapOf(
+                "view", AuthoritiesConstants.PRINT_SETTINGS_VIEW,
+                "edit", AuthoritiesConstants.PRINT_SETTINGS_EDIT
             )
         );
 

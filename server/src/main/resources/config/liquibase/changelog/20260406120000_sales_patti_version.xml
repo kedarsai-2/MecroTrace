@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <changeSet id="20260406120000-1" author="mercotrace">
+        <createTable tableName="sales_patti_version">
+            <column name="id" type="bigint">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="patti_id" type="bigint">
+                <constraints nullable="false"/>
+            </column>
+            <column name="version_number" type="int">
+                <constraints nullable="false"/>
+            </column>
+            <column name="saved_at" type="${datetimeType}">
+                <constraints nullable="false"/>
+            </column>
+            <column name="snapshot_json" type="${clobType}">
+                <constraints nullable="true"/>
+            </column>
+        </createTable>
+        <addForeignKeyConstraint baseTableName="sales_patti_version" baseColumnNames="patti_id"
+                                 referencedTableName="sales_patti" referencedColumnNames="id"
+                                 constraintName="fk_spv_sales_patti" onDelete="CASCADE"/>
+        <createIndex tableName="sales_patti_version" indexName="idx_spv_patti_id">
+            <column name="patti_id"/>
+        </createIndex>
+    </changeSet>
+</databaseChangeLog>

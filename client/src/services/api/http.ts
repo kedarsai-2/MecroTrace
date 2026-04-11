@@ -44,6 +44,8 @@ function getTokenForKind(kind: TokenKind): string | null {
 
 export async function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
   const headers = new Headers(init.headers || {});
+  const method = (init.method ?? 'GET').toUpperCase();
+  const isReadRequest = method === 'GET' || method === 'HEAD';
 
   if (!headers.has('Content-Type') && !(init.body instanceof FormData)) {
     headers.set('Content-Type', 'application/json');
@@ -56,9 +58,16 @@ export async function apiFetch(path: string, init: RequestInit = {}): Promise<Re
     headers.set('Authorization', `Bearer ${token}`);
   }
 
+  // Always revalidate read requests to keep cross-module data fresh after sidebar navigation.
+  if (isReadRequest) {
+    if (!headers.has('Cache-Control')) headers.set('Cache-Control', 'no-cache');
+    if (!headers.has('Pragma')) headers.set('Pragma', 'no-cache');
+  }
+
   return fetch(`${API_BASE}${path}`, {
     ...init,
     headers,
+    cache: isReadRequest ? 'no-store' : init.cache,
     credentials: 'include',
   });
 }

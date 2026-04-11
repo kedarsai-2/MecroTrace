@@ -105,6 +105,21 @@ const VARIANT_OPTIONS = [
   { value: 'Large', label: 'Large' },
 ];
 
+/** Keep Arrivals desktop tab styling aligned with Billing/Settlement toggle language. */
+const arrivalsToggleTabBtn = (active: boolean) =>
+  cn(
+    'shrink-0 px-4 py-2 rounded-xl text-sm font-semibold transition-all inline-flex items-center justify-center gap-2 min-h-10',
+    active
+      ? 'bg-gradient-to-r from-primary to-accent text-white shadow-md'
+      : 'glass-card text-muted-foreground hover:text-foreground',
+  );
+
+/** Reuse the same gradient family used in Settlement table headers. */
+const ARRIVALS_TABLE_HEADER_GRADIENT =
+  'bg-[linear-gradient(90deg,#4B7CF3_0%,#5B8CFF_45%,#7B61FF_100%)]';
+const ARRIVALS_SETTLEMENT_BUTTON_GRADIENT =
+  '!bg-[linear-gradient(90deg,#4B7CF3_0%,#5B8CFF_45%,#7B61FF_100%)] !text-white border border-white/25 shadow-[0_10px_24px_-12px_rgba(91,140,255,0.85)] hover:!brightness-110 hover:border-white/45 hover:shadow-[0_14px_30px_-12px_rgba(123,97,255,0.9)] active:scale-[0.99] transition-all';
+
 function sameArrivalVehicleId(
   a: string | number | undefined | null,
   b: string | number | undefined | null,
@@ -885,6 +900,8 @@ const ArrivalsPage = () => {
   const [arrivalDetails, setArrivalDetails] = useState<ArrivalDetail[]>([]);
   const [editingVehicleId, setEditingVehicleId] = useState<number | string | null>(null);
   const [editLoading, setEditLoading] = useState(false);
+  const submitArrivalInFlightRef = useRef(false);
+  const [isSubmittingArrival, setIsSubmittingArrival] = useState(false);
   const editBaselineSnapshotRef = useRef<string | null>(null);
   type PendingDelete =
     | { kind: 'arrival'; vehicleId: number | string; label: string }
@@ -929,6 +946,8 @@ const ArrivalsPage = () => {
     editingLotIdx?: number;
   };
   const [addLotForm, setAddLotForm] = useState<AddLotFormState | null>(null);
+  const addLotLotNameInputRef = useRef<HTMLInputElement | null>(null);
+  const [addLotLotNameFocusNonce, setAddLotLotNameFocusNonce] = useState(0);
   const prevSellerExpandedRef = useRef<Record<string, boolean>>({});
 
   useEffect(() => {
@@ -1291,7 +1310,7 @@ const ArrivalsPage = () => {
     title: 'Save your progress?',
     description: 'You have unsaved changes. Would you like to save your progress before leaving?',
     continueLabel: 'Save',
-    stayLabel: 'Cancel',
+    stayLabel: 'Discard',
     onBeforeContinue: handlePartialSave,
   });
 
@@ -1824,23 +1843,6 @@ const ArrivalsPage = () => {
     expandOnlySeller(seller.seller_vehicle_id);
 
     setSellers(prev => {
-      const existingLotSerials = new Set(
-        prev
-          .flatMap((entry) => entry.lots)
-          .map((lot) => lot.lot_serial_number)
-          .filter((lotSerialNumber): lotSerialNumber is number => lotSerialNumber != null && lotSerialNumber >= 1)
-      );
-      let candidate = existingLotSerials.size > 0 ? Math.max(...existingLotSerials) : 0;
-      let nextLotSerialNumber: number | null = null;
-      for (let attempt = 0; attempt < 9999; attempt += 1) {
-        candidate = candidate >= 9999 ? 1 : candidate + 1;
-        if (!existingLotSerials.has(candidate)) {
-          nextLotSerialNumber = candidate;
-          break;
-        }
-      }
-      if (nextLotSerialNumber == null) return prev;
-
       return prev.map((s, i) => {
         if (i !== sellerIdx) return s;
         if (!canAddAnotherLot(s)) return s;
@@ -1849,7 +1851,8 @@ const ArrivalsPage = () => {
           lots: [...s.lots, {
             lot_id: crypto.randomUUID(),
             lot_name: '',
-            lot_serial_number: nextLotSerialNumber,
+            // Lot serial is assigned by backend (global across arrivals).
+            lot_serial_number: null,
             quantity: 0,
             commodity_name: commodities[0]?.commodity_name || '',
             broker_tag: '',
@@ -1903,24 +1906,12 @@ const ArrivalsPage = () => {
         variant: "",
         errors: {},
       });
+      setAddLotLotNameFocusNonce(n => n + 1);
       return;
     }
 
-    // Create mode: reuse serial-number logic from addLot
+    // Create mode: lot serial remains backend-assigned.
     setSellers(prev => {
-      const existingLotSerials = new Set(
-        prev.flatMap(e => e.lots)
-          .map(l => l.lot_serial_number)
-          .filter((n): n is number => n != null && n >= 1)
-      );
-      let candidate = existingLotSerials.size > 0 ? Math.max(...existingLotSerials) : 0;
-      let nextSerial: number | null = null;
-      for (let attempt = 0; attempt < 9999; attempt++) {
-        candidate = candidate >= 9999 ? 1 : candidate + 1;
-        if (!existingLotSerials.has(candidate)) { nextSerial = candidate; break; }
-      }
-      if (nextSerial == null) return prev;
-
       return prev.map((s, i) => {
         if (i !== sellerIdx) return s;
         return {
@@ -1928,7 +1919,7 @@ const ArrivalsPage = () => {
           lots: [...s.lots, {
             lot_id: crypto.randomUUID(),
             lot_name: trimmedName,
-            lot_serial_number: nextSerial,
+            lot_serial_number: null,
             quantity: bagsNum,
             commodity_name: addLotForm.commodityName,
             broker_tag: '',
@@ -1950,6 +1941,7 @@ const ArrivalsPage = () => {
       variant: "",
       errors: {},
     });
+    setAddLotLotNameFocusNonce(n => n + 1);
   };
 
   const editFormLot = (si: number, li: number) => {
@@ -2006,6 +1998,18 @@ const ArrivalsPage = () => {
     window.setTimeout(tryBringActiveIntoView, 2500);
     window.setTimeout(tryBringActiveIntoView, 3500);
   }, [sellers, sellerExpanded, scrollSellerLotsToLatest]);
+
+  // After Save Lot / Update, move focus back to Lot Name for the next entry (autoFocus only runs on mount).
+  useLayoutEffect(() => {
+    if (addLotLotNameFocusNonce === 0) return;
+    const input = addLotLotNameInputRef.current;
+    if (!input) return;
+    input.focus({ preventScroll: false });
+    const panel = newArrivalPanelScrollRef.current;
+    if (panel?.contains(input)) {
+      requestAnimationFrame(() => input.scrollIntoView({ block: 'center', behavior: 'auto' }));
+    }
+  }, [addLotLotNameFocusNonce]);
 
   // Scroll + focus the seller card input created by the “Add Seller” button.
   useLayoutEffect(() => {
@@ -2139,49 +2143,57 @@ const ArrivalsPage = () => {
   };
 
   const handleSubmitArrival = async () => {
-    // Submit should never block users with validations.
-    // If required fields for completion aren't present, save as draft (partial) instead.
-    const base = buildPartialPayload();
-    const normalizedForSubmit = sanitizeSubmitPayload(base);
-    const shouldComplete = isCompleteArrivalForSubmit({
-      vehicle_number: normalizedForSubmit.vehicle_number,
-      is_multi_seller: normalizedForSubmit.is_multi_seller,
-      sellers: normalizedForSubmit.sellers,
-    });
+    if (submitArrivalInFlightRef.current) return;
+    submitArrivalInFlightRef.current = true;
+    setIsSubmittingArrival(true);
+    try {
+      // Submit should never block users with validations.
+      // If required fields for completion aren't present, save as draft (partial) instead.
+      const base = buildPartialPayload();
+      const normalizedForSubmit = sanitizeSubmitPayload(base);
+      const shouldComplete = isCompleteArrivalForSubmit({
+        vehicle_number: normalizedForSubmit.vehicle_number,
+        is_multi_seller: normalizedForSubmit.is_multi_seller,
+        sellers: normalizedForSubmit.sellers,
+      });
 
-    if (editingVehicleId != null) {
-      if (!shouldComplete) {
-        await handlePartialSave();
+      if (editingVehicleId != null) {
+        if (!shouldComplete) {
+          await handlePartialSave();
+          return;
+        }
+        await handleUpdateArrival(); // completed update path
         return;
       }
-      await handleUpdateArrival(); // completed update path
-      return;
-    }
 
-    if (!can('Arrivals', 'Create')) {
-      toast.error('You do not have permission to create arrivals.');
-      return;
-    }
-
-    try {
-      const created = await arrivalsApi.create({
-        ...(shouldComplete ? normalizedForSubmit : base),
-        partially_completed: !shouldComplete,
-      });
-      await loadArrivalsFromApi();
-      await loadContactsFromApi();
-      resetForm();
-      setShowAdd(false);
-      setDesktopTab('summary');
-      if (shouldComplete) {
-        toast.success(`✅ Vehicle ${created.vehicleNumber} registered with ${created.sellerCount} seller(s) and ${created.lotCount} lot(s)`);
-      } else {
-        toast.success('Draft saved');
+      if (!can('Arrivals', 'Create')) {
+        toast.error('You do not have permission to create arrivals.');
+        return;
       }
-    } catch (err) {
-      console.error('Submit arrival error:', err);
-      const message = err instanceof Error ? err.message : 'Failed to submit arrival. Please try again.';
-      toast.error(message);
+
+      try {
+        const created = await arrivalsApi.create({
+          ...(shouldComplete ? normalizedForSubmit : base),
+          partially_completed: !shouldComplete,
+        });
+        await loadArrivalsFromApi();
+        await loadContactsFromApi();
+        resetForm();
+        setShowAdd(false);
+        setDesktopTab('summary');
+        if (shouldComplete) {
+          toast.success(`✅ Vehicle ${created.vehicleNumber} registered with ${created.sellerCount} seller(s) and ${created.lotCount} lot(s)`);
+        } else {
+          toast.success('Draft saved');
+        }
+      } catch (err) {
+        console.error('Submit arrival error:', err);
+        const message = err instanceof Error ? err.message : 'Failed to submit arrival. Please try again.';
+        toast.error(message);
+      }
+    } finally {
+      submitArrivalInFlightRef.current = false;
+      setIsSubmittingArrival(false);
     }
   };
 
@@ -2467,44 +2479,44 @@ const ArrivalsPage = () => {
       {/* ═══ DESKTOP: TAB LAYOUT ═══ */}
       {isDesktop && (
         <div className="px-4 sm:px-6 lg:px-8 pb-6 max-w-[100vw] overflow-x-hidden">
+          {/* Desktop hero — mirror Settlement desktop header structure (no card container). */}
+          <div className="mb-4">
+            <h2 className="text-lg font-bold text-foreground flex items-center gap-2">
+              <Truck className="w-5 h-5 text-blue-600 dark:text-blue-400" />
+              Arrivals
+            </h2>
+            <p className="text-sm text-muted-foreground mt-0.5">
+              {apiArrivalsLoading ? '…' : apiArrivals.reduce((sum, item) => sum + item.sellerCount, 0)} sellers · Inward logistics & seller lot intake
+            </p>
+          </div>
+
           {/* Tab Bar */}
-          <div className="flex min-w-0 flex-wrap items-center gap-1 border-b border-border/40 pb-px mb-6 overflow-x-auto [-webkit-overflow-scrolling:touch]">
+          <div className="mb-6 flex min-w-0 flex-wrap items-center gap-2 overflow-x-auto [-webkit-overflow-scrolling:touch]" role="tablist" aria-label="Arrivals main tabs">
             <button
+              type="button"
               onClick={() => {
                 void tryCloseArrivalPanel(() => setDesktopTab('summary'));
               }}
-              className={cn(
-                "px-5 py-3 text-sm font-semibold transition-all relative",
-                desktopTab === 'summary'
-                  ? 'text-foreground'
-                  : 'text-muted-foreground hover:text-foreground'
-              )}
+              className={arrivalsToggleTabBtn(desktopTab === 'summary')}
             >
-              <div className="flex items-center gap-2">
-                <Truck className="w-4 h-4" />
-                Summary
-                <span className="ml-1 px-2 py-0.5 rounded-full bg-muted text-[10px] font-bold">{apiArrivalsLoading ? '…' : apiArrivals.length}</span>
-              </div>
-              {desktopTab === 'summary' && (
-                <motion.div layoutId="desktop-tab-indicator" className="absolute bottom-0 left-0 right-0 h-0.5 bg-[#6075FF] rounded-full" />
-              )}
+              <Truck className="w-4 h-4" />
+              Summary
+              <span
+                className={cn(
+                  'ml-1 rounded-full px-2 py-0.5 text-[10px] font-bold',
+                  desktopTab === 'summary' ? 'bg-white/20 text-white' : 'bg-muted text-foreground',
+                )}
+              >
+                {apiArrivalsLoading ? '…' : apiArrivals.length}
+              </span>
             </button>
             <button
+              type="button"
               onClick={openNewArrivalPanel}
-              className={cn(
-                "px-5 py-3 text-sm font-semibold transition-all relative",
-                desktopTab === 'new-arrival'
-                  ? 'text-foreground'
-                  : 'text-muted-foreground hover:text-foreground'
-              )}
+              className={arrivalsToggleTabBtn(desktopTab === 'new-arrival')}
             >
-              <div className="flex items-center gap-2">
-                <Plus className="w-4 h-4" />
-                New Arrival
-              </div>
-              {desktopTab === 'new-arrival' && (
-                <motion.div layoutId="desktop-tab-indicator" className="absolute bottom-0 left-0 right-0 h-0.5 bg-[#6075FF] rounded-full" />
-              )}
+              <Plus className="w-4 h-4" />
+              New Arrivals
             </button>
           </div>
 
@@ -2612,27 +2624,27 @@ const ArrivalsPage = () => {
                             </div>
                             <h3 className="text-lg font-bold text-foreground mb-1">No Arrivals Yet</h3>
                             <p className="text-sm text-muted-foreground mb-4">Record your first vehicle arrival to start operations</p>
-                            <Button onClick={openNewArrivalPanel} className="bg-gradient-to-r from-blue-500 to-violet-500 text-white rounded-xl shadow-lg">
+                            <Button onClick={openNewArrivalPanel} className={cn("rounded-xl", ARRIVALS_SETTLEMENT_BUTTON_GRADIENT)}>
                               <Plus className="w-4 h-4 mr-2" /> New Arrival
                             </Button>
                           </div>
                         )
                       ) : (
                     <div className="glass-card rounded-2xl overflow-x-auto max-w-full [-webkit-overflow-scrolling:touch] touch-pan-x">
-                      <table className="w-full min-w-[56rem] text-sm">
-                        <thead>
-                          <tr className="border-b border-border/40 bg-muted/30">
-                            <th className="text-left px-4 py-3 font-semibold text-muted-foreground text-xs uppercase">Vehicle | Seller | Qty</th>
-                            <th className="text-left px-4 py-3 font-semibold text-muted-foreground text-xs uppercase">Status</th>
-                            <th className="text-left px-4 py-3 font-semibold text-muted-foreground text-xs uppercase">From</th>
-                            <th className="text-right px-4 py-3 font-semibold text-muted-foreground text-xs uppercase">Bids</th>
-                            <th className="text-right px-4 py-3 font-semibold text-muted-foreground text-xs uppercase">Weighed</th>
-                            <th className="text-right px-4 py-3 font-semibold text-muted-foreground text-xs uppercase">Sellers</th>
-                            <th className="text-right px-4 py-3 font-semibold text-muted-foreground text-xs uppercase">Lots</th>
-                            <th className="text-right px-4 py-3 font-semibold text-muted-foreground text-xs uppercase">Net Wt</th>
-                            <th className="text-right px-4 py-3 font-semibold text-muted-foreground text-xs uppercase">Freight</th>
-                            <th className="text-left px-4 py-3 font-semibold text-muted-foreground text-xs uppercase">Date</th>
-                            <th className="text-center px-4 py-3 font-semibold text-muted-foreground text-xs uppercase w-24">Actions</th>
+                      <table className="w-full min-w-[56rem] text-sm border-separate border-spacing-0">
+                        <thead className={cn(ARRIVALS_TABLE_HEADER_GRADIENT, 'shadow-md')}>
+                          <tr className="border-b border-white/20">
+                            <th className="rounded-tl-xl text-left px-4 py-3 font-semibold text-white/95 text-xs uppercase tracking-wide">Vehicle | Seller | Qty</th>
+                            <th className="text-left px-4 py-3 font-semibold text-white/95 text-xs uppercase tracking-wide">Status</th>
+                            <th className="text-left px-4 py-3 font-semibold text-white/95 text-xs uppercase tracking-wide">From</th>
+                            <th className="text-right px-4 py-3 font-semibold text-white/95 text-xs uppercase tracking-wide">Bids</th>
+                            <th className="text-right px-4 py-3 font-semibold text-white/95 text-xs uppercase tracking-wide">Weighed</th>
+                            <th className="text-right px-4 py-3 font-semibold text-white/95 text-xs uppercase tracking-wide">Sellers</th>
+                            <th className="text-right px-4 py-3 font-semibold text-white/95 text-xs uppercase tracking-wide">Lots</th>
+                            <th className="text-right px-4 py-3 font-semibold text-white/95 text-xs uppercase tracking-wide">Net Wt</th>
+                            <th className="text-right px-4 py-3 font-semibold text-white/95 text-xs uppercase tracking-wide">Freight</th>
+                            <th className="text-left px-4 py-3 font-semibold text-white/95 text-xs uppercase tracking-wide">Date</th>
+                            <th className="rounded-tr-xl text-center px-4 py-3 font-semibold text-white/95 text-xs uppercase tracking-wide w-24">Actions</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -2701,7 +2713,14 @@ const ArrivalsPage = () => {
                                               />
                                               <div className="flex gap-2">
                                                 {can('Arrivals', 'Edit') && (
-                                                  <Button type="button" variant="outline" size="sm" onClick={e => { e.stopPropagation(); handleEditArrival({ vehicleId: expandedDetail.vehicleId }); }}><Pencil className="w-3.5 h-3.5 mr-1" /> Edit</Button>
+                                                  <Button
+                                                    type="button"
+                                                    size="sm"
+                                                    onClick={e => { e.stopPropagation(); handleEditArrival({ vehicleId: expandedDetail.vehicleId }); }}
+                                                    className={cn("h-9 px-3 text-xs font-semibold", ARRIVALS_SETTLEMENT_BUTTON_GRADIENT)}
+                                                  >
+                                                    <Pencil className="w-3.5 h-3.5 mr-1" /> Edit
+                                                  </Button>
                                                 )}
                                                 {can('Arrivals', 'Delete') && (
                                                   <Button type="button" variant="destructive" size="sm" onClick={e => { e.stopPropagation(); setPendingDelete({ kind: 'arrival', vehicleId: expandedDetail.vehicleId, label: expandedDetail.vehicleNumber }); }}><Trash2 className="w-3.5 h-3.5 mr-1" /> Delete</Button>
@@ -3216,6 +3235,7 @@ const ArrivalsPage = () => {
                                   {/* Lot Name */}
                                   <div className="w-[8.5rem] sm:w-[9rem] md:w-[8.5rem] lg:w-[12rem] xl:w-[14rem] flex-none">
                                     <Input
+                                      ref={addLotLotNameInputRef}
                                       placeholder="Lot Name"
                                       value={addLotForm.lotName}
                                       onChange={e => setAddLotForm(prev => prev ? { ...prev, lotName: e.target.value, errors: { ...prev.errors, lotName: undefined } } : null)}
@@ -3273,9 +3293,11 @@ const ArrivalsPage = () => {
                                     </div>
                                     {/* Action buttons */}
                                     <div className="relative z-[8] flex flex-nowrap items-center gap-2 justify-end sm:self-start pl-1">
+                                    <Button type="button" size="sm" onClick={() => saveFormLot(si)} className={cn("h-10 sm:h-10 px-4 shrink-0 whitespace-nowrap text-sm font-semibold", ARRIVALS_SETTLEMENT_BUTTON_GRADIENT)}>
+                                      {addLotForm.editingLotId ? "Update" : "Save Lot"}
+                                    </Button>
                                     <Button
                                       type="button"
-                                      variant="ghost"
                                       size="sm"
                                       onClick={() => setAddLotForm({
                                         sellerId: seller.seller_vehicle_id,
@@ -3285,12 +3307,12 @@ const ArrivalsPage = () => {
                                         variant: "",
                                         errors: {},
                                       })}
-                                      className="h-8 sm:h-9 shrink-0 whitespace-nowrap text-xs"
+                                      className={cn(
+                                        "h-10 sm:h-10 px-4 shrink-0 whitespace-nowrap text-sm font-semibold",
+                                        ARRIVALS_SETTLEMENT_BUTTON_GRADIENT,
+                                      )}
                                     >
                                       Cancel
-                                    </Button>
-                                    <Button type="button" size="sm" onClick={() => saveFormLot(si)} className="h-10 sm:h-10 px-4 shrink-0 whitespace-nowrap text-sm font-semibold bg-[#6075FF] hover:bg-[#5060e8] text-white border border-[#6075FF]">
-                                      {addLotForm.editingLotId ? "Update" : "Save Lot"}
                                     </Button>
                                     </div>
                                   </div>
@@ -3400,15 +3422,24 @@ const ArrivalsPage = () => {
                         size="sm"
                         onClick={openSellerSearchPanel}
                         disabled={(!isMultiSeller && sellers.length >= 1) || hasIncompleteSellerDetails}
-                        className="h-11 sm:h-12 rounded-xl flex-1 text-xs sm:text-sm font-semibold flex items-center justify-center bg-[#6075FF] hover:bg-[#5060e8] text-white border border-[#6075FF] shadow-md shadow-[#6075FF]/25 active:shadow-lg active:shadow-[#6075FF]/35 active:scale-[0.99] transition-all disabled:opacity-60 disabled:bg-[#6075FF] disabled:text-white"
+                        className={cn(
+                          "h-11 sm:h-12 rounded-xl flex-1 text-xs sm:text-sm font-semibold flex items-center justify-center disabled:opacity-60",
+                          ARRIVALS_SETTLEMENT_BUTTON_GRADIENT,
+                        )}
                       >
                         <Users className="w-4 h-4 sm:w-5 sm:h-5" />
                         <span className="ml-1.5 sm:ml-2">Add Seller</span>
                       </Button>
                       <div className="w-2 shrink-0 bg-white dark:bg-card" aria-hidden />
                       <Button
+                        type="button"
                         onClick={handleSubmitArrival}
-                        className="flex-1 h-11 sm:h-12 rounded-xl font-bold text-xs sm:text-sm bg-gradient-to-r from-emerald-500 to-teal-500 text-white shadow-lg shadow-emerald-500/20 active:shadow-xl active:shadow-emerald-500/35 active:scale-[0.99] transition-all disabled:opacity-60 flex items-center justify-center"
+                        disabled={isSubmittingArrival}
+                        aria-busy={isSubmittingArrival}
+                        className={cn(
+                          "flex-1 h-11 sm:h-12 rounded-xl font-bold text-xs sm:text-sm disabled:opacity-60 flex items-center justify-center",
+                          ARRIVALS_SETTLEMENT_BUTTON_GRADIENT,
+                        )}
                       >
                         <FileText className="w-4 h-4 sm:w-5 sm:h-5" />
                         <span className="ml-1.5 sm:ml-2">{editingVehicleId != null ? 'Update Arrival' : 'Submit Arrival'}</span>
@@ -3527,7 +3558,7 @@ const ArrivalsPage = () => {
                 </div>
                 <h3 className="text-lg font-bold text-foreground mb-1">No Arrivals Yet</h3>
                 <p className="text-sm text-muted-foreground mb-4">Record your first vehicle arrival to start operations</p>
-                <Button onClick={() => { resetForm(); setShowAdd(true); }} className="bg-[#6075FF] text-white rounded-xl shadow-lg hover:bg-[#5060e8]">
+                <Button onClick={() => { resetForm(); setShowAdd(true); }} className={cn("rounded-xl", ARRIVALS_SETTLEMENT_BUTTON_GRADIENT)}>
                   <Plus className="w-4 h-4 mr-2" /> New Arrival
                 </Button>
               </motion.div>
@@ -4105,6 +4136,7 @@ const ArrivalsPage = () => {
                                   {/* Lot Name */}
                                   <div className="w-[8.5rem] sm:w-[9rem] md:w-[8.5rem] lg:w-[12rem] xl:w-[14rem] flex-none">
                                     <Input
+                                      ref={addLotLotNameInputRef}
                                       placeholder="Lot Name"
                                       value={addLotForm.lotName}
                                       onChange={e => setAddLotForm(prev => prev ? { ...prev, lotName: e.target.value, errors: { ...prev.errors, lotName: undefined } } : null)}
@@ -4162,9 +4194,11 @@ const ArrivalsPage = () => {
                                     </div>
                                     {/* Action buttons */}
                                     <div className="relative z-[8] flex flex-nowrap items-center gap-2 justify-end sm:self-start pl-1">
+                                    <Button type="button" size="sm" onClick={() => saveFormLot(si)} className={cn("h-10 sm:h-10 px-4 shrink-0 whitespace-nowrap text-sm font-semibold", ARRIVALS_SETTLEMENT_BUTTON_GRADIENT)}>
+                                      {addLotForm.editingLotId ? "Update" : "Save Lot"}
+                                    </Button>
                                     <Button
                                       type="button"
-                                      variant="ghost"
                                       size="sm"
                                       onClick={() => setAddLotForm({
                                         sellerId: seller.seller_vehicle_id,
@@ -4174,12 +4208,12 @@ const ArrivalsPage = () => {
                                         variant: "",
                                         errors: {},
                                       })}
-                                      className="h-8 sm:h-9 shrink-0 whitespace-nowrap text-xs"
+                                      className={cn(
+                                        "h-10 sm:h-10 px-4 shrink-0 whitespace-nowrap text-sm font-semibold",
+                                        ARRIVALS_SETTLEMENT_BUTTON_GRADIENT,
+                                      )}
                                     >
                                       Cancel
-                                    </Button>
-                                    <Button type="button" size="sm" onClick={() => saveFormLot(si)} className="h-10 sm:h-10 px-4 shrink-0 whitespace-nowrap text-sm font-semibold bg-[#6075FF] hover:bg-[#5060e8] text-white border border-[#6075FF]">
-                                      {addLotForm.editingLotId ? "Update" : "Save Lot"}
                                     </Button>
                                     </div>
                                   </div>
@@ -4238,7 +4272,7 @@ const ArrivalsPage = () => {
                                                 <td className="py-1 px-2.5 align-middle text-center">
                                                   {lotSerialLabel !== "-" ? (
                                                     <span className="inline-flex items-center rounded-full bg-blue-500/10 px-1.5 py-0.5 text-[9px] sm:text-[10px] font-semibold leading-none text-blue-700 dark:text-blue-300 whitespace-nowrap ring-1 ring-blue-500/20">
-                                                      {lotSerialLabel} — {vehicleTotalBags} / {sellerTotal}
+                                                      {lotSerialLabel}
                                                     </span>
                                                   ) : (
                                                     <span className="text-muted-foreground font-mono text-[9px] sm:text-[10px]">—</span>
@@ -4296,15 +4330,24 @@ const ArrivalsPage = () => {
                           size="sm"
                           onClick={openSellerSearchPanel}
                           disabled={(!isMultiSeller && sellers.length >= 1) || hasIncompleteSellerDetails}
-                          className="h-12 md:h-14 rounded-xl flex-1 text-xs sm:text-sm font-semibold flex items-center justify-center bg-[#6075FF] hover:bg-[#5060e8] text-white border border-[#6075FF] shadow-md shadow-[#6075FF]/25 active:shadow-lg active:shadow-[#6075FF]/35 active:scale-[0.99] transition-all disabled:opacity-60 disabled:bg-[#6075FF] disabled:text-white"
+                          className={cn(
+                            "h-12 md:h-14 rounded-xl flex-1 text-xs sm:text-sm font-semibold flex items-center justify-center disabled:opacity-60",
+                            ARRIVALS_SETTLEMENT_BUTTON_GRADIENT,
+                          )}
                         >
                           <Users className="w-4 h-4 md:w-5 md:h-5" />
                           <span className="ml-1.5 sm:ml-2">Add Seller</span>
                         </Button>
                         <div className="w-2 shrink-0 bg-white dark:bg-card" aria-hidden />
                         <Button
+                          type="button"
                           onClick={handleSubmitArrival}
-                          className="flex-1 h-12 md:h-14 rounded-xl font-bold text-xs sm:text-sm md:text-base bg-gradient-to-r from-emerald-500 to-teal-500 text-white shadow-lg shadow-emerald-500/20 active:shadow-xl active:shadow-emerald-500/35 active:scale-[0.99] transition-all disabled:opacity-60 flex items-center justify-center"
+                          disabled={isSubmittingArrival}
+                          aria-busy={isSubmittingArrival}
+                          className={cn(
+                            "flex-1 h-12 md:h-14 rounded-xl font-bold text-xs sm:text-sm md:text-base disabled:opacity-60 flex items-center justify-center",
+                            ARRIVALS_SETTLEMENT_BUTTON_GRADIENT,
+                          )}
                         >
                           <FileText className="w-4 h-4 md:w-5 md:h-5" />
                           <span className="ml-1.5 sm:ml-2 truncate">{editingVehicleId != null ? 'Update Arrival' : (sellers.length > 0 ? `Submit (${sellers.length})` : 'Submit Arrival')}</span>

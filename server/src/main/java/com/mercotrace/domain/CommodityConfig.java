@@ -71,6 +71,15 @@ public class CommodityConfig extends AbstractAuditingEntity<Long> implements Ser
     @Column(name = "gst_rate")
     private Double gstRate;
 
+    @Column(name = "sgst_rate")
+    private Double sgstRate;
+
+    @Column(name = "cgst_rate")
+    private Double cgstRate;
+
+    @Column(name = "igst_rate")
+    private Double igstRate;
+
     @Column(name = "weighing_threshold")
     private Double weighingThreshold;
 
@@ -184,6 +193,30 @@ public class CommodityConfig extends AbstractAuditingEntity<Long> implements Ser
 
     public void setGstRate(Double gstRate) {
         this.gstRate = gstRate;
+    }
+
+    public Double getSgstRate() {
+        return sgstRate;
+    }
+
+    public void setSgstRate(Double sgstRate) {
+        this.sgstRate = sgstRate;
+    }
+
+    public Double getCgstRate() {
+        return cgstRate;
+    }
+
+    public void setCgstRate(Double cgstRate) {
+        this.cgstRate = cgstRate;
+    }
+
+    public Double getIgstRate() {
+        return igstRate;
+    }
+
+    public void setIgstRate(Double igstRate) {
+        this.igstRate = igstRate;
     }
 
     public Double getWeighingThreshold() {

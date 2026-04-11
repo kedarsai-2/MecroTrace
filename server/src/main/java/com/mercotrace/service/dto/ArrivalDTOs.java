@@ -18,7 +18,7 @@ public final class ArrivalDTOs {
 
         private String lotName;
 
-        /** Returned by API; recalculated server-side as arrival-scoped sequential (1..N). */
+        /** Returned by API; assigned server-side as trader-scoped incremental serial. */
         private Integer lotSerialNumber;
 
         @Min(1)

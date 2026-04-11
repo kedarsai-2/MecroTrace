@@ -7,10 +7,8 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.mercotrace.domain.BillNumberSequence;
 import com.mercotrace.domain.SalesBill;
 import com.mercotrace.domain.SalesBillCommodityGroup;
-import com.mercotrace.domain.Trader;
 import com.mercotrace.repository.BillNumberSequenceRepository;
 import com.mercotrace.repository.SalesBillRepository;
 import com.mercotrace.repository.TraderRepository;
@@ -40,7 +38,6 @@ import org.springframework.data.domain.PageRequest;
 class SalesBillServiceImplTest {
 
     private static final long TRADER_ID = 101L;
-    private static final String BILL_PREFIX = "GV";
 
     @Mock
     private TraderContextService traderContextService;
@@ -100,6 +97,10 @@ class SalesBillServiceImplTest {
         CommodityGroupDTO group = new CommodityGroupDTO();
         group.setCommodityName("Wheat");
         group.setSubtotal(BigDecimal.valueOf(1000));
+        group.setGstRate(BigDecimal.valueOf(18));
+        group.setSgstRate(BigDecimal.valueOf(9));
+        group.setCgstRate(BigDecimal.valueOf(9));
+        group.setIgstRate(BigDecimal.ZERO);
         group.setItems(List.of(item));
         req.setCommodityGroups(List.of(group));
 
@@ -107,18 +108,8 @@ class SalesBillServiceImplTest {
     }
 
     @Test
-    void create_assignsBillNumberFromTraderPrefix_andCreatesVouchers() {
+    void create_persistsCommodityGstRates_andCreatesVouchers() {
         when(traderContextService.getCurrentTraderId()).thenReturn(TRADER_ID);
-
-        Trader trader = new Trader();
-        trader.setId(TRADER_ID);
-        trader.setBillPrefix(BILL_PREFIX);
-        when(traderRepository.findById(TRADER_ID)).thenReturn(Optional.of(trader));
-
-        BillNumberSequence seq = new BillNumberSequence();
-        seq.setPrefix(BILL_PREFIX);
-        seq.setNextValue(1L);
-        when(billNumberSequenceRepository.findByPrefixForUpdate(BILL_PREFIX)).thenReturn(Optional.of(seq));
 
         when(salesBillRepository.save(any(SalesBill.class))).thenAnswer(inv -> {
             SalesBill b = inv.getArgument(0);
@@ -137,12 +128,16 @@ class SalesBillServiceImplTest {
         SalesBill saved = billCaptor.getValue();
 
         assertThat(saved.getTraderId()).isEqualTo(TRADER_ID);
-        assertThat(saved.getBillNumber()).isEqualTo("GV-00001");
+        assertThat(saved.getBillNumber()).isNull(); // assigned via assignNumber(), not on create
         assertThat(saved.getBuyerName()).isEqualTo("Buyer One");
         assertThat(saved.getCommodityGroups()).hasSize(1);
         assertThat(saved.getCommodityGroups().get(0).getItems()).hasSize(1);
+        assertThat(saved.getCommodityGroups().get(0).getGstRate()).isEqualByComparingTo("18");
+        assertThat(saved.getCommodityGroups().get(0).getSgstRate()).isEqualByComparingTo("9");
+        assertThat(saved.getCommodityGroups().get(0).getCgstRate()).isEqualByComparingTo("9");
+        assertThat(saved.getCommodityGroups().get(0).getIgstRate()).isEqualByComparingTo("0");
 
-        assertThat(dto.getBillNumber()).isEqualTo("GV-00001");
+        assertThat(dto.getBillNumber()).isNull();
         assertThat(dto.getBuyerName()).isEqualTo("Buyer One");
     }
 

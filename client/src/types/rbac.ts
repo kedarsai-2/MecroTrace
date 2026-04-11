@@ -93,4 +93,5 @@ export const AVAILABLE_MODULES: Record<string, string[]> = {
 
   // 20. Preset Settings (Auction margin presets – trader-scoped)
   'Preset Settings': ['View', 'Create', 'Edit', 'Delete'],
+  'Print Settings': ['View', 'Edit'],
 };

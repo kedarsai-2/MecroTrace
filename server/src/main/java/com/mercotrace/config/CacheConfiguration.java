@@ -126,6 +126,8 @@ public class CacheConfiguration {
             // Auction module (Sales Pad)
             createCache(cm, com.mercotrace.domain.AuctionEntry.class.getName(), jcacheConfiguration);
             createCache(cm, com.mercotrace.domain.PresetMarkSetting.class.getName(), jcacheConfiguration);
+            // Print format presets (Settlement / Billing) per trader
+            createCache(cm, com.mercotrace.domain.PrintSetting.class.getName(), jcacheConfiguration);
             // Platform-wide auction presets for traders with preset_enabled=false
             createCache(cm, com.mercotrace.domain.GlobalPresetMarkSetting.class.getName(), jcacheConfiguration);
             // Weighing: entity L2 cache + by-bid lookup (TTL from Redis config)

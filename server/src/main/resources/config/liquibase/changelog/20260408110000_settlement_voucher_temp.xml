@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+                        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <changeSet id="20260408110000-1" author="cursor">
+        <createTable tableName="settlement_voucher_temp">
+            <column name="id" type="bigint">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="trader_id" type="bigint">
+                <constraints nullable="false"/>
+            </column>
+            <column name="seller_id" type="varchar(128)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="voucher_name" type="varchar(200)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="description" type="varchar(1000)"/>
+            <column name="expense_amount" type="numeric(19,2)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="created_by" type="varchar(50)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="created_date" type="${datetimeType}">
+                <constraints nullable="false"/>
+            </column>
+            <column name="last_modified_by" type="varchar(50)"/>
+            <column name="last_modified_date" type="${datetimeType}"/>
+        </createTable>
+
+        <createSequence sequenceName="settlement_voucher_temp_seq" startValue="1" incrementBy="50"/>
+        <addDefaultValue tableName="settlement_voucher_temp" columnName="id" defaultValueSequenceNext="settlement_voucher_temp_seq"/>
+        <createIndex tableName="settlement_voucher_temp" indexName="idx_settlement_voucher_temp_trader_seller">
+            <column name="trader_id"/>
+            <column name="seller_id"/>
+        </createIndex>
+    </changeSet>
+
+</databaseChangeLog>

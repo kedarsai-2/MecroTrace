@@ -34,6 +34,7 @@ interface LocalCommodityConfig {
   hamaliEnabled: boolean;
   billPrefix: string;
   gstApplicable: boolean;
+  taxType: 'GST' | 'IGST';
 }
 
 /** Map API full-config to local UI shape */
@@ -54,6 +55,9 @@ function fullConfigToLocal(commodity: Commodity, full: FullCommodityConfigDto): 
     bill_prefix: cfg?.billPrefix,
     hamali_enabled: cfg?.hamaliEnabled,
     gst_rate: cfg?.gstRate,
+    sgst_rate: cfg?.sgstRate,
+    cgst_rate: cfg?.cgstRate,
+    igst_rate: cfg?.igstRate,
     weighing_threshold: cfg?.weighingThreshold,
     created_at: new Date().toISOString(),
   };
@@ -81,7 +85,38 @@ function fullConfigToLocal(commodity: Commodity, full: FullCommodityConfigDto): 
     hamaliEnabled: cfg?.hamaliEnabled ?? false,
     billPrefix: cfg?.billPrefix ?? '',
     gstApplicable: !!(cfg?.hsnCode && cfg.hsnCode.trim()),
+    taxType: (cfg?.igstRate ?? 0) > 0 ? 'IGST' : 'GST',
   };
+}
+
+function parseOptionalPercentField(raw: number | string | undefined | null): number | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw === 'string') {
+    const s = raw.trim();
+    if (s === '') return undefined;
+    const n = parseFloat(s);
+    return Number.isNaN(n) ? undefined : n;
+  }
+  return raw as number;
+}
+
+function validateOptionalGstSplitPercent(
+  commodityName: string,
+  raw: number | string | undefined,
+  label: string,
+): boolean {
+  const v = parseOptionalPercentField(raw);
+  if (v == null) return true;
+  if (Number.isNaN(v) || v < 0 || v > 100) {
+    toast.error(`${commodityName}: ${label} must be between 0 and 100 when provided`);
+    return false;
+  }
+  const decimalPart = String(raw).split('.')[1];
+  if (decimalPart != null && decimalPart.length > 2) {
+    toast.error(`${commodityName}: ${label} allows max 2 decimal places (e.g. 2.50)`);
+    return false;
+  }
+  return true;
 }
 
 const CommoditySettings = () => {
@@ -118,6 +153,7 @@ const CommoditySettings = () => {
       hamaliEnabled: item.hamaliEnabled,
       billPrefix: item.billPrefix,
       gstApplicable: item.gstApplicable,
+      taxType: item.taxType,
     }));
   }, []);
 
@@ -279,7 +315,7 @@ const CommoditySettings = () => {
           created_at: new Date().toISOString(),
         },
         charges: [], deductionRules: [], hamaliSlabs: [],
-        hamaliEnabled: false, billPrefix: '', gstApplicable: false,
+        hamaliEnabled: false, billPrefix: '', gstApplicable: false, taxType: 'GST',
       };
       setItems(prev => [...prev, newItem]);
       setNewCommodityName('');
@@ -396,9 +432,9 @@ const CommoditySettings = () => {
       gstRateValue = (cfg.gst_rate ?? undefined) as number | undefined;
     }
 
-    if (item.gstApplicable) {
+    if (item.gstApplicable && item.taxType === 'GST') {
       if (gstRateValue == null || Number.isNaN(gstRateValue)) {
-        toast.error(`${commodityName}: GST Rate (%) is required when GST is applicable`); return;
+        toast.error(`${commodityName}: GST (%) is required when GST type is GST`); return;
       }
       if (gstRateValue < 0 || gstRateValue > 100) {
         toast.error(`${commodityName}: GST rate must be between 0 and 100. You entered ${cfg.gst_rate}.`); return;
@@ -409,6 +445,54 @@ const CommoditySettings = () => {
       }
     } else if (gstRateValue != null && (gstRateValue < 0 || gstRateValue > 100)) {
       toast.error(`${commodityName}: GST Rate must be between 0 and 100 when provided`); return;
+    }
+
+    if (item.gstApplicable) {
+      if (!validateOptionalGstSplitPercent(commodityName, cfg.sgst_rate as number | string | undefined, 'SGST (%)')) return;
+      if (!validateOptionalGstSplitPercent(commodityName, cfg.cgst_rate as number | string | undefined, 'CGST (%)')) return;
+      if (!validateOptionalGstSplitPercent(commodityName, cfg.igst_rate as number | string | undefined, 'IGST (%)')) return;
+    }
+
+    const sgstRateValue = item.gstApplicable ? parseOptionalPercentField(cfg.sgst_rate as number | string | undefined) : undefined;
+    const cgstRateValue = item.gstApplicable ? parseOptionalPercentField(cfg.cgst_rate as number | string | undefined) : undefined;
+    const igstRateValue = item.gstApplicable ? parseOptionalPercentField(cfg.igst_rate as number | string | undefined) : undefined;
+
+    let normalizedGstRate = gstRateValue;
+    let normalizedSgstRate: number | undefined = sgstRateValue;
+    let normalizedCgstRate: number | undefined = cgstRateValue;
+    let normalizedIgstRate = igstRateValue;
+
+    if (item.gstApplicable) {
+      if (item.taxType === 'GST') {
+        if (normalizedGstRate == null) {
+          toast.error(`${commodityName}: GST (%) is required when GST type is GST`);
+          return;
+        }
+        if ((normalizedSgstRate == null) !== (normalizedCgstRate == null)) {
+          toast.error(`${commodityName}: Enter both SGST and CGST, or leave both blank`);
+          return;
+        }
+        if (normalizedSgstRate != null && normalizedCgstRate != null) {
+          if (Math.abs((normalizedSgstRate + normalizedCgstRate) - normalizedGstRate) > 0.01) {
+            toast.error(`${commodityName}: SGST + CGST must match GST rate`);
+            return;
+          }
+        }
+        normalizedIgstRate = undefined;
+      } else {
+        if (normalizedIgstRate == null) {
+          toast.error(`${commodityName}: IGST is required when GST type is IGST`);
+          return;
+        }
+        normalizedGstRate = undefined;
+        normalizedSgstRate = undefined;
+        normalizedCgstRate = undefined;
+      }
+    } else {
+      normalizedGstRate = undefined;
+      normalizedSgstRate = undefined;
+      normalizedCgstRate = undefined;
+      normalizedIgstRate = undefined;
     }
 
     const weighingThresholdValue = (cfg.weighing_threshold ?? undefined) as number | undefined;
@@ -460,7 +544,10 @@ const CommoditySettings = () => {
         hsnCode: cfg.hsn_code?.trim() || undefined,
         billPrefix: item.billPrefix?.trim() || undefined,
         hamaliEnabled: item.hamaliEnabled,
-        gstRate: gstRateValue,
+        gstRate: normalizedGstRate,
+        sgstRate: normalizedSgstRate,
+        cgstRate: normalizedCgstRate,
+        igstRate: normalizedIgstRate,
         weighingThreshold: weighingThresholdValue,
         weighingCharge: cfg.weighing_charge,
       },
@@ -763,7 +850,14 @@ const CommoditySettings = () => {
                               const newGst = !item.gstApplicable;
                               updateItem(index, { gstApplicable: newGst });
                               if (!newGst) {
-                                updateConfig(index, { hsn_code: '', gst_rate: undefined as any });
+                                updateConfig(index, {
+                                  hsn_code: '',
+                                  gst_rate: undefined as any,
+                                  sgst_rate: undefined as any,
+                                  cgst_rate: undefined as any,
+                                  igst_rate: undefined as any,
+                                });
+                                updateItem(index, { taxType: 'GST' });
                               }
                             }}
                             className={cn("w-14 h-8 rounded-full transition-all relative shadow-inner", item.gstApplicable ? 'bg-gradient-to-r from-emerald-500 to-green-600 shadow-emerald-500/30' : 'bg-slate-300 dark:bg-slate-600')}
@@ -793,28 +887,121 @@ const CommoditySettings = () => {
                               />
                               <p className="text-[10px] text-muted-foreground mt-1">HSN: 6 digits (goods). SAC: 8 digits (services).</p>
                             </div>
-                            <div>
-                              <label className="text-[10px] text-slate-600/80 dark:text-slate-400/60 mb-1 block font-semibold">
-                                GST Rate (%) <span className="text-red-500">*</span>
-                              </label>
-                              <Input
-                                type="text"
-                                inputMode="decimal"
-                                value={(() => {
-                                  const v = item.config.gst_rate;
-                                  if (v === undefined || v === null) return '';
-                                  if (typeof v === 'string') return v;
-                                  return String(v);
-                                })()}
-                                onChange={e => {
-                                  const v = e.target.value;
-                                  if (v === '') { updateConfig(index, { gst_rate: undefined as any }); return; }
-                                  if (!/^\d*\.?\d*$/.test(v)) return;
-                                  updateConfig(index, { gst_rate: v } as any);
-                                }}
-                                placeholder="e.g. 5, 12, 18 (max 2 decimals)"
-                                className="h-12 rounded-xl bg-white dark:bg-white/10 border-2 border-slate-200 dark:border-slate-700/50 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 text-base"
-                              />
+                            <div className="rounded-lg border border-slate-200/80 dark:border-slate-600/40 bg-slate-50/60 dark:bg-slate-900/25 p-3">
+                              <p className="text-[10px] font-semibold text-slate-600 dark:text-slate-400 uppercase tracking-wider mb-1">
+                                GST Type
+                              </p>
+                              <p className="text-[10px] text-muted-foreground mb-3 leading-snug">
+                                Select one type. GST split will be handled automatically in billing.
+                              </p>
+                              <div className="grid grid-cols-1 lg:grid-cols-12 gap-2 items-end">
+                                <div className="lg:col-span-3 flex items-center gap-4 h-12 px-3 rounded-xl bg-white dark:bg-white/10 border-2 border-slate-200 dark:border-slate-700/50">
+                                  <label className="inline-flex items-center gap-2 text-sm font-medium cursor-pointer">
+                                    <input
+                                      type="radio"
+                                      name={`gst-type-${item.commodity.commodity_id}`}
+                                      checked={item.taxType === 'GST'}
+                                      onChange={() => {
+                                        updateItem(index, { taxType: 'GST' });
+                                        updateConfig(index, { igst_rate: undefined as any });
+                                      }}
+                                      className="h-4 w-4"
+                                    />
+                                    GST
+                                  </label>
+                                  <label className="inline-flex items-center gap-2 text-sm font-medium cursor-pointer">
+                                    <input
+                                      type="radio"
+                                      name={`gst-type-${item.commodity.commodity_id}`}
+                                      checked={item.taxType === 'IGST'}
+                                      onChange={() => {
+                                        updateItem(index, { taxType: 'IGST' });
+                                        updateConfig(index, { sgst_rate: undefined as any, cgst_rate: undefined as any });
+                                      }}
+                                      className="h-4 w-4"
+                                    />
+                                    IGST
+                                  </label>
+                                </div>
+
+                                <div className="lg:col-span-3">
+                                  <label className="text-[10px] text-slate-600/80 dark:text-slate-400/60 mb-1 block font-semibold">
+                                    {item.taxType === 'GST' ? 'GST (%)' : 'IGST (%)'} <span className="text-red-500">*</span>
+                                  </label>
+                                  <Input
+                                    type="text"
+                                    inputMode="decimal"
+                                    value={(() => {
+                                      const v = item.taxType === 'GST' ? item.config.gst_rate : item.config.igst_rate;
+                                      if (v === undefined || v === null) return '';
+                                      if (typeof v === 'string') return v;
+                                      return String(v);
+                                    })()}
+                                    onChange={e => {
+                                      const v = e.target.value;
+                                      if (!/^\d*\.?\d*$/.test(v) && v !== '') return;
+                                      if (item.taxType === 'GST') {
+                                        updateConfig(index, { gst_rate: v === '' ? undefined as any : v } as any);
+                                      } else {
+                                        updateConfig(index, { igst_rate: v === '' ? undefined as any : v } as any);
+                                      }
+                                    }}
+                                    placeholder={item.taxType === 'GST' ? 'e.g. 5, 12, 18' : 'e.g. 5, 12, 18'}
+                                    className="h-12 rounded-xl bg-white dark:bg-white/10 border-2 border-slate-200 dark:border-slate-700/50 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 text-base"
+                                  />
+                                </div>
+
+                                {item.taxType === 'GST' && (
+                                  <>
+                                    <div className="lg:col-span-3">
+                                      <label className="text-[10px] text-slate-600/80 dark:text-slate-400/60 mb-1 block font-semibold">
+                                        SGST (%) <span className="text-muted-foreground font-normal">(optional)</span>
+                                      </label>
+                                      <Input
+                                        type="text"
+                                        inputMode="decimal"
+                                        value={(() => {
+                                          const v = item.config.sgst_rate;
+                                          if (v === undefined || v === null) return '';
+                                          if (typeof v === 'string') return v;
+                                          return String(v);
+                                        })()}
+                                        onChange={e => {
+                                          const v = e.target.value;
+                                          if (v === '') { updateConfig(index, { sgst_rate: undefined as any }); return; }
+                                          if (!/^\d*\.?\d*$/.test(v)) return;
+                                          updateConfig(index, { sgst_rate: v } as any);
+                                        }}
+                                        placeholder="e.g. 2.5"
+                                        className="h-12 rounded-xl bg-white dark:bg-white/10 border-2 border-slate-200 dark:border-slate-700/50 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 text-base"
+                                      />
+                                    </div>
+                                    <div className="lg:col-span-3">
+                                      <label className="text-[10px] text-slate-600/80 dark:text-slate-400/60 mb-1 block font-semibold">
+                                        CGST (%) <span className="text-muted-foreground font-normal">(optional)</span>
+                                      </label>
+                                      <Input
+                                        type="text"
+                                        inputMode="decimal"
+                                        value={(() => {
+                                          const v = item.config.cgst_rate;
+                                          if (v === undefined || v === null) return '';
+                                          if (typeof v === 'string') return v;
+                                          return String(v);
+                                        })()}
+                                        onChange={e => {
+                                          const v = e.target.value;
+                                          if (v === '') { updateConfig(index, { cgst_rate: undefined as any }); return; }
+                                          if (!/^\d*\.?\d*$/.test(v)) return;
+                                          updateConfig(index, { cgst_rate: v } as any);
+                                        }}
+                                        placeholder="e.g. 2.5"
+                                        className="h-12 rounded-xl bg-white dark:bg-white/10 border-2 border-slate-200 dark:border-slate-700/50 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 text-base"
+                                      />
+                                    </div>
+                                  </>
+                                )}
+                              </div>
                             </div>
                           </div>
                         )}

@@ -1,6 +1,6 @@
 import { motion } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
-import { Shield, Cog, ChevronRight, Sparkles, Sliders, Bluetooth } from 'lucide-react';
+import { Shield, Cog, ChevronRight, Sparkles, Sliders, Bluetooth, Printer } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import BottomNav from '@/components/BottomNav';
 import { usePermissions } from '@/lib/permissions';
@@ -38,11 +38,25 @@ const settingsCards = [
     accent: 'from-emerald-400/15 to-teal-500/10',
     iconBg: 'from-emerald-500/20 to-teal-600/15',
   },
+  {
+    icon: Printer,
+    title: 'Print Settings',
+    desc: 'Configure print size and header layout per module',
+    path: '/settings/print-settings',
+    gradient: 'from-violet-500 to-purple-600',
+    glow: 'shadow-violet-500/20',
+    accent: 'from-violet-400/15 to-purple-500/10',
+    iconBg: 'from-violet-500/20 to-purple-600/15',
+  },
 ];
+
+function isTraderOwnerRole(role: string | undefined): boolean {
+  return String(role ?? '').trim().toUpperCase() === 'TRADER_OWNER';
+}
 
 const SettingsPage = () => {
   const navigate = useNavigate();
-  const { trader } = useAuth();
+  const { trader, user } = useAuth();
   const { canAccessModule, can } = usePermissions();
 
   const canViewSettings = canAccessModule('Settings');
@@ -54,12 +68,14 @@ const SettingsPage = () => {
   }
 
   const canViewPresetSettings = can('Preset Settings', 'View');
+  const canViewPrintSettings = can('Print Settings', 'View') || isTraderOwnerRole(user?.role);
 
   const traderCanCustomizePresets = trader?.preset_enabled !== false;
 
   const visibleCards = settingsCards.filter(card => {
     if (card.path === '/settings/rbac') return canManageRoles || canManageUsers;
     if (card.path === '/settings/preset-settings') return canViewPresetSettings && traderCanCustomizePresets;
+    if (card.path === '/settings/print-settings') return canViewPrintSettings;
     return true;
   });
 

@@ -33,7 +33,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -45,6 +47,9 @@ import org.springframework.transaction.annotation.Transactional;
 public class AuctionService {
 
     private static final Logger LOG = LoggerFactory.getLogger(AuctionService.class);
+
+    /** Newest completed auctions first so paginated "all results" clients see recent billing candidates first. */
+    private static final Sort DEFAULT_COMPLETED_AUCTION_SORT = Sort.by(Sort.Order.desc("completedAt"), Sort.Order.desc("id"));
 
     /** Calendar day for temporary-buyer expiry (scribble marks); aligns with primary market timezone. */
     private static final ZoneId BUSINESS_CALENDAR_ZONE = ZoneId.of("Asia/Kolkata");
@@ -734,8 +739,9 @@ public class AuctionService {
             return Page.empty(pageable);
         }
         java.util.List<Long> lotIds = traderLots.getContent().stream().map(Lot::getId).toList();
-        Page<Auction> page = auctionRepository.findByCompletedAtIsNotNullAndLotIdInAndSelfSaleUnitIdIsNull(lotIds, pageable);
-        return buildResultsPage(page, pageable);
+        Pageable sorted = withDefaultCompletedAuctionSort(pageable);
+        Page<Auction> page = auctionRepository.findByCompletedAtIsNotNullAndLotIdInAndSelfSaleUnitIdIsNull(lotIds, sorted);
+        return buildResultsPage(page, sorted);
     }
 
     /**
@@ -757,8 +763,16 @@ public class AuctionService {
         if (filteredLotIds.isEmpty()) {
             return Page.empty(pageable);
         }
-        Page<Auction> page = auctionRepository.findByCompletedAtIsNotNullAndLotIdInAndSelfSaleUnitIdIsNull(filteredLotIds, pageable);
-        return buildResultsPage(page, pageable);
+        Pageable sorted = withDefaultCompletedAuctionSort(pageable);
+        Page<Auction> page = auctionRepository.findByCompletedAtIsNotNullAndLotIdInAndSelfSaleUnitIdIsNull(filteredLotIds, sorted);
+        return buildResultsPage(page, sorted);
+    }
+
+    private Pageable withDefaultCompletedAuctionSort(Pageable pageable) {
+        if (pageable.getSort().isSorted()) {
+            return pageable;
+        }
+        return PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(), DEFAULT_COMPLETED_AUCTION_SORT);
     }
 
     private Page<AuctionResultDTO> buildResultsPage(Page<Auction> page, Pageable pageable) {
@@ -770,12 +784,30 @@ public class AuctionService {
         List<AuctionEntry> entries = auctionEntryRepository.findAllByAuctionIdIn(auctionIds);
         List<Lot> lots = lotRepository.findAllById(auctions.stream().map(Auction::getLotId).toList());
 
+        Set<Long> sellerVehicleIds = lots.stream().map(Lot::getSellerVehicleId).filter(Objects::nonNull).collect(Collectors.toSet());
+        Map<Long, SellerInVehicle> sivById =
+            sellerVehicleIds.isEmpty()
+                ? Map.of()
+                : sellerInVehicleRepository.findAllById(sellerVehicleIds).stream().collect(Collectors.toMap(SellerInVehicle::getId, s -> s));
+        Set<Long> vehicleIds = sivById.values().stream().map(SellerInVehicle::getVehicleId).filter(Objects::nonNull).collect(Collectors.toSet());
+        Set<Long> contactIds = sivById.values().stream().map(SellerInVehicle::getContactId).filter(Objects::nonNull).collect(Collectors.toSet());
+        Map<Long, Vehicle> vehicleById =
+            vehicleIds.isEmpty()
+                ? Map.of()
+                : vehicleRepository.findAllById(vehicleIds).stream().collect(Collectors.toMap(Vehicle::getId, v -> v));
+        Map<Long, Contact> contactById =
+            contactIds.isEmpty()
+                ? Map.of()
+                : contactRepository.findAllById(contactIds).stream().collect(Collectors.toMap(Contact::getId, c -> c));
+
         List<AuctionResultDTO> content = auctions
             .stream()
             .map(a -> {
                 Lot lot = lots.stream().filter(l -> l.getId().equals(a.getLotId())).findFirst().orElse(null);
                 List<AuctionEntry> aEntries = entries.stream().filter(e -> e.getAuctionId().equals(a.getId())).toList();
-                return buildEffectiveLotResultDTO(a, lot, aEntries);
+                AuctionResultDTO dto = buildEffectiveLotResultDTO(a, lot, aEntries);
+                applySellerVehicleToAuctionResult(dto, lot, sivById, vehicleById, contactById);
+                return dto;
             })
             .collect(Collectors.toList());
 
@@ -795,7 +827,9 @@ public class AuctionService {
             return Optional.empty();
         }
         List<AuctionEntry> entries = auctionEntryRepository.findAllByAuctionId(auction.getId());
-        return Optional.of(buildEffectiveLotResultDTO(auction, lot, entries));
+        AuctionResultDTO dto = buildEffectiveLotResultDTO(auction, lot, entries);
+        applySellerVehicleToAuctionResult(dto, lot);
+        return Optional.of(dto);
     }
 
     @Transactional(readOnly = true)
@@ -814,7 +848,47 @@ public class AuctionService {
             return Optional.empty();
         }
         List<AuctionEntry> entries = auctionEntryRepository.findAllByAuctionId(auction.getId());
-        return Optional.of(buildResultDTO(auction, lot, entries));
+        AuctionResultDTO dto = buildResultDTO(auction, lot, entries);
+        applySellerVehicleToAuctionResult(dto, lot);
+        return Optional.of(dto);
+    }
+
+    /**
+     * Fills seller display name and vehicle number on auction results (Billing search, logistics) from lot → seller-in-vehicle →
+     * contact (trader-owned or global) or free-text seller fields.
+     */
+    private void applySellerVehicleToAuctionResult(AuctionResultDTO dto, Lot lot) {
+        if (dto == null || lot == null || lot.getSellerVehicleId() == null) {
+            return;
+        }
+        SellerInVehicle siv = sellerInVehicleRepository.findById(lot.getSellerVehicleId()).orElse(null);
+        if (siv == null) {
+            return;
+        }
+        Contact c = siv.getContactId() != null ? contactRepository.findById(siv.getContactId()).orElse(null) : null;
+        Vehicle v = siv.getVehicleId() != null ? vehicleRepository.findById(siv.getVehicleId()).orElse(null) : null;
+        dto.setSellerName(resolveAuctionSellerName(c, siv));
+        dto.setVehicleNumber(v != null ? v.getVehicleNumber() : null);
+    }
+
+    private void applySellerVehicleToAuctionResult(
+        AuctionResultDTO dto,
+        Lot lot,
+        Map<Long, SellerInVehicle> sivById,
+        Map<Long, Vehicle> vehicleById,
+        Map<Long, Contact> contactById
+    ) {
+        if (dto == null || lot == null || lot.getSellerVehicleId() == null) {
+            return;
+        }
+        SellerInVehicle siv = sivById.get(lot.getSellerVehicleId());
+        if (siv == null) {
+            return;
+        }
+        Contact c = siv.getContactId() != null ? contactById.get(siv.getContactId()) : null;
+        Vehicle v = siv.getVehicleId() != null ? vehicleById.get(siv.getVehicleId()) : null;
+        dto.setSellerName(resolveAuctionSellerName(c, siv));
+        dto.setVehicleNumber(v != null ? v.getVehicleNumber() : null);
     }
 
     private AuctionSessionDTO buildSessionDTO(Auction auction, Lot lot, List<AuctionEntry> entries) {

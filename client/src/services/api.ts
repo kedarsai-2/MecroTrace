@@ -21,6 +21,8 @@ export { chartOfAccountsApi } from './api/chartOfAccounts';
 export { writersPadApi } from './api/writersPad';
 export { presetMarksApi } from './api/presetMarks';
 export type { PresetMarkSettingDTO } from './api/presetMarks';
+export { printSettingsApi } from './api/printSettings';
+export type { PrintSettingDTO, PrintModuleKey, PrintPaperSize } from './api/printSettings';
 export type {
   SellerSettlementDTO,
   SettlementLotDTO,

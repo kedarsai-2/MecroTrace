@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <changeSet id="20260407110000-1" author="codex">
+        <createTable tableName="settlement_quick_expense_state">
+            <column name="id" type="bigint">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="trader_id" type="bigint">
+                <constraints nullable="false"/>
+            </column>
+            <column name="seller_id" type="varchar(128)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="freight_original" type="numeric(19,2)" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+            <column name="unloading_original" type="numeric(19,2)" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+            <column name="weighing_original" type="numeric(19,2)" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+            <column name="gunnies_original" type="numeric(19,2)" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+            <column name="freight_current" type="numeric(19,2)" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+            <column name="unloading_current" type="numeric(19,2)" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+            <column name="weighing_current" type="numeric(19,2)" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+            <column name="gunnies_current" type="numeric(19,2)" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+            <column name="created_by" type="varchar(50)"/>
+            <column name="created_date" type="${datetimeType}"/>
+            <column name="last_modified_by" type="varchar(50)"/>
+            <column name="last_modified_date" type="${datetimeType}"/>
+        </createTable>
+        <addUniqueConstraint
+            tableName="settlement_quick_expense_state"
+            columnNames="trader_id,seller_id"
+            constraintName="uk_settlement_quick_expense_trader_seller"/>
+        <createIndex tableName="settlement_quick_expense_state" indexName="idx_settlement_quick_expense_trader">
+            <column name="trader_id"/>
+        </createIndex>
+        <createIndex tableName="settlement_quick_expense_state" indexName="idx_settlement_quick_expense_seller">
+            <column name="seller_id"/>
+        </createIndex>
+    </changeSet>
+</databaseChangeLog>

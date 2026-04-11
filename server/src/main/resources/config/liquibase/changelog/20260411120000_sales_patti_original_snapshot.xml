@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <changeSet id="20260411120000-1" author="mercotrace">
+        <addColumn tableName="sales_patti">
+            <column name="original_snapshot_json" type="${clobType}"/>
+        </addColumn>
+    </changeSet>
+
+    <changeSet id="20260411120000-2" author="mercotrace" dbms="postgresql">
+        <sql>
+            UPDATE sales_patti sp
+            SET original_snapshot_json = v.snapshot_json
+            FROM (
+                SELECT DISTINCT ON (patti_id) patti_id, snapshot_json
+                FROM sales_patti_version
+                ORDER BY patti_id, version_number ASC
+            ) v
+            WHERE sp.id = v.patti_id
+              AND v.snapshot_json IS NOT NULL
+              AND trim(v.snapshot_json) &lt;&gt; '';
+        </sql>
+    </changeSet>
+
+    <changeSet id="20260411120000-3" author="mercotrace">
+        <dropForeignKeyConstraint baseTableName="sales_patti_version" constraintName="fk_spv_sales_patti"/>
+    </changeSet>
+
+    <changeSet id="20260411120000-4" author="mercotrace">
+        <dropIndex tableName="sales_patti_version" indexName="idx_spv_patti_id"/>
+    </changeSet>
+
+    <changeSet id="20260411120000-5" author="mercotrace">
+        <dropTable tableName="sales_patti_version"/>
+    </changeSet>
+</databaseChangeLog>

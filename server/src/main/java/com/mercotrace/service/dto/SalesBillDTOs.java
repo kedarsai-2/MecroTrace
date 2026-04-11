@@ -82,6 +82,15 @@ public final class SalesBillDTOs {
         private BigDecimal discount;
         private String discountType; // PERCENT | AMOUNT
         private BigDecimal manualRoundOff;
+        /** Per-bill GST % (combined). */
+        private BigDecimal gstRate;
+        private String gstInputMode;
+        private BigDecimal sgstRate;
+        private String sgstInputMode;
+        private BigDecimal cgstRate;
+        private String cgstInputMode;
+        private BigDecimal igstRate;
+        private String igstInputMode;
         @Valid
         private List<BillLineItemDTO> items = new ArrayList<>();
         private BigDecimal subtotal;
@@ -113,6 +122,22 @@ public final class SalesBillDTOs {
         public void setDiscountType(String discountType) { this.discountType = discountType; }
         public BigDecimal getManualRoundOff() { return manualRoundOff; }
         public void setManualRoundOff(BigDecimal manualRoundOff) { this.manualRoundOff = manualRoundOff; }
+        public BigDecimal getGstRate() { return gstRate; }
+        public void setGstRate(BigDecimal gstRate) { this.gstRate = gstRate; }
+        public String getGstInputMode() { return gstInputMode; }
+        public void setGstInputMode(String gstInputMode) { this.gstInputMode = gstInputMode; }
+        public BigDecimal getSgstRate() { return sgstRate; }
+        public void setSgstRate(BigDecimal sgstRate) { this.sgstRate = sgstRate; }
+        public String getSgstInputMode() { return sgstInputMode; }
+        public void setSgstInputMode(String sgstInputMode) { this.sgstInputMode = sgstInputMode; }
+        public BigDecimal getCgstRate() { return cgstRate; }
+        public void setCgstRate(BigDecimal cgstRate) { this.cgstRate = cgstRate; }
+        public String getCgstInputMode() { return cgstInputMode; }
+        public void setCgstInputMode(String cgstInputMode) { this.cgstInputMode = cgstInputMode; }
+        public BigDecimal getIgstRate() { return igstRate; }
+        public void setIgstRate(BigDecimal igstRate) { this.igstRate = igstRate; }
+        public String getIgstInputMode() { return igstInputMode; }
+        public void setIgstInputMode(String igstInputMode) { this.igstInputMode = igstInputMode; }
         public List<BillLineItemDTO> getItems() { return items; }
         public void setItems(List<BillLineItemDTO> items) { this.items = items != null ? items : new ArrayList<>(); }
         public BigDecimal getSubtotal() { return subtotal; }

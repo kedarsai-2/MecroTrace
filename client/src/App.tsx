@@ -66,6 +66,7 @@ import CDNPage from "./pages/CDNPage";
 import PrintsPage from "./pages/PrintsPage";
 import SettingsPage from "./pages/SettingsPage";
 import BluetoothPrinterSettingsPage from "./pages/settings/BluetoothPrinterSettingsPage";
+import PrintSettingsPage from "./pages/settings/PrintSettingsPage";
 import RoleManagementPage from "./pages/admin/settings/RoleManagementPage";
 import UserManagementPage from "./pages/admin/settings/UserManagementPage";
 import RoleAllocationPage from "./pages/admin/settings/RoleAllocationPage";
@@ -162,6 +163,7 @@ const router = createBrowserRouter(
         <Route path="/reports" element={<Navigate to="/home" replace />} />
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="/settings/bluetooth-printers" element={<BluetoothPrinterSettingsPage />} />
+        <Route path="/settings/print-settings" element={<PrintSettingsPage />} />
         <Route path="/settings/rbac" element={<RbacSettingsPage />} />
         <Route path="/settings/preset-settings" element={<PresetSettingsPage />} />
         <Route path="/settings/roles" element={<RoleManagementPage />} />
