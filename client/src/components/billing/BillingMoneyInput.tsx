@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
 import { roundMoney2 } from '@/utils/billingMoney';
@@ -38,8 +38,9 @@ function parseDraftToNumber(raw: string, min?: number): number | null {
 }
 
 /**
- * Money field: shows 00.00 when not focused; while focused allows free typing.
- * Parent state and dependent totals update on every change (not only on blur).
+ * Money field: shows 00.00 when blurred; on focus clears so typing replaces value without select-all.
+ * Blur with no edits restores display from parent (no onCommit). After any edit, blur parses and commits.
+ * Parent state updates per commitMode (live vs blur).
  */
 export function BillingMoneyInput({
   value,
@@ -53,6 +54,8 @@ export function BillingMoneyInput({
   allowEmptyZero,
 }: BillingMoneyInputProps) {
   const [draft, setDraft] = useState<string | null>(null);
+  /** True after any input/paste while focused; false on focus until user edits. */
+  const editedSinceFocusRef = useRef(false);
 
   const display = draft !== null ? draft : roundMoney2(value).toFixed(2);
 
@@ -65,8 +68,12 @@ export function BillingMoneyInput({
       placeholder={placeholder}
       title={title}
       value={display}
-      onFocus={() => setDraft(roundMoney2(value).toFixed(2))}
+      onFocus={() => {
+        editedSinceFocusRef.current = false;
+        setDraft('');
+      }}
       onChange={e => {
+        editedSinceFocusRef.current = true;
         const next = e.target.value;
         setDraft(next);
         if (commitMode === 'live') {
@@ -78,7 +85,14 @@ export function BillingMoneyInput({
       }}
       onBlur={() => {
         const raw = draft ?? '';
+        const trimmed = raw.replace(/,/g, '').trim();
+        if (!editedSinceFocusRef.current && trimmed === '') {
+          setDraft(null);
+          editedSinceFocusRef.current = false;
+          return;
+        }
         setDraft(null);
+        editedSinceFocusRef.current = false;
         let n = parseFloat(raw.replace(/,/g, ''));
         if (!Number.isFinite(n)) {
           onCommit(allowEmptyZero ? 0 : roundMoney2(value));

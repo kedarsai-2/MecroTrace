@@ -15,7 +15,7 @@ import { useDesktopMode } from '@/hooks/use-desktop';
 import { useAuth } from '@/context/AuthContext';
 import { contactApi, arrivalsApi, billingApi, settlementApi, printLogApi } from '@/services/api';
 import { directPrint } from '@/utils/printTemplates';
-import { generateTemplateHTML, type FirmInfo } from '@/utils/printPreviewTemplates';
+import { generateTemplateHTML, isFullDocumentPrintTemplate, type FirmInfo } from '@/utils/printPreviewTemplates';
 import type { ArrivalDetail } from '@/services/api/arrivals';
 import { reportsApi, type DailySalesSummaryDTO } from '@/services/api/reports';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
@@ -194,6 +194,7 @@ const PrintsReportsPage = () => {
   };
 
   const templateHTML = selectedPrint ? generateTemplateHTML(selectedPrint.id, arrivalDetails, firm) : '';
+  const previewFullDocument = Boolean(selectedPrint && isFullDocumentPrintTemplate(selectedPrint.id));
 
   const handleDoPrint = async () => {
     if (!selectedPrint) return;
@@ -207,7 +208,9 @@ const PrintsReportsPage = () => {
     } catch {
       // optional
     }
-    const fullHtml = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>body{margin:0;padding:0;}</style></head><body>${templateHTML}</body></html>`;
+    const fullHtml = previewFullDocument && templateHTML
+      ? templateHTML
+      : `<!DOCTYPE html><html><head><meta charset="utf-8"><style>body{margin:0;padding:0;}</style></head><body>${templateHTML}</body></html>`;
     const ok = await directPrint(fullHtml, { mode: "system" });
     if (ok) {
       toast.success('Sent to printer!');
@@ -444,12 +447,21 @@ const PrintsReportsPage = () => {
           </DialogHeader>
 
           <div className="py-4">
-            <div
-              ref={printRef}
-              className="border border-border rounded-xl p-4 bg-white text-black min-h-[300px] overflow-auto shadow-inner"
-              style={{ colorScheme: 'light' }}
-              dangerouslySetInnerHTML={{ __html: templateHTML }}
-            />
+            {previewFullDocument ? (
+              <iframe
+                title={selectedPrint ? `${selectedPrint.name} preview` : 'Print preview'}
+                srcDoc={templateHTML}
+                className="w-full min-h-[65vh] border border-border rounded-xl bg-white shadow-inner"
+                style={{ colorScheme: 'light' }}
+              />
+            ) : (
+              <div
+                ref={printRef}
+                className="border border-border rounded-xl p-4 bg-white text-black min-h-[300px] overflow-auto shadow-inner"
+                style={{ colorScheme: 'light' }}
+                dangerouslySetInnerHTML={{ __html: templateHTML }}
+              />
+            )}
           </div>
 
           <DialogFooter className="gap-2">

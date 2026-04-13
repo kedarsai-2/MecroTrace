@@ -15,7 +15,7 @@ import { toast } from 'sonner';
 import { useAuth } from '@/context/AuthContext';
 import { arrivalsApi } from '@/services/api';
 import type { ArrivalDetail } from '@/services/api/arrivals';
-import { generateTemplateHTML, type FirmInfo } from '@/utils/printPreviewTemplates';
+import { generateTemplateHTML, isFullDocumentPrintTemplate, type FirmInfo } from '@/utils/printPreviewTemplates';
 
 export type { FirmInfo };
 
@@ -101,10 +101,19 @@ const PrintsPage = () => {
   };
 
   const triggerWindowPrint = () => {
-    const content = printRef.current;
-    if (!content) return;
+    const fullDoc = selectedPrint && isFullDocumentPrintTemplate(selectedPrint.id);
     const printWindow = window.open('', '_blank', 'width=800,height=600');
     if (!printWindow) { toast.error('Pop-up blocked. Please allow pop-ups.'); return; }
+    if (fullDoc && templateHTML) {
+      printWindow.document.open();
+      printWindow.document.write(templateHTML);
+      printWindow.document.close();
+      printWindow.focus();
+      setTimeout(() => { printWindow.print(); printWindow.close(); }, 300);
+      return;
+    }
+    const content = printRef.current;
+    if (!content) return;
     printWindow.document.write(`
       <html><head><title>${selectedPrint?.name || 'Print'}</title>
       <style>body { margin: 0; padding: 0; } @media print { body { margin: 0; } }</style>
@@ -121,7 +130,7 @@ const PrintsPage = () => {
   };
 
   const templateHTML = selectedPrint ? generateTemplateHTML(selectedPrint.id, arrivalDetails, firm) : '';
-
+  const previewFullDocument = Boolean(selectedPrint && isFullDocumentPrintTemplate(selectedPrint.id));
 
   return (
     <div className="min-h-[100dvh] bg-background pb-28 lg:pb-6">
@@ -212,11 +221,21 @@ const PrintsPage = () => {
           </DialogHeader>
 
           <div className="py-2">
-            <div ref={printRef}
-              className="border border-border rounded-xl p-4 bg-white text-black min-h-[300px] overflow-auto shadow-inner"
-              style={{ colorScheme: 'light' }}
-              dangerouslySetInnerHTML={{ __html: templateHTML }}
-            />
+            {previewFullDocument ? (
+              <iframe
+                title={selectedPrint ? `${selectedPrint.name} preview` : 'Print preview'}
+                srcDoc={templateHTML}
+                className="w-full min-h-[65vh] border border-border rounded-xl bg-white shadow-inner"
+                style={{ colorScheme: 'light' }}
+              />
+            ) : (
+              <div
+                ref={printRef}
+                className="border border-border rounded-xl p-4 bg-white text-black min-h-[300px] overflow-auto shadow-inner"
+                style={{ colorScheme: 'light' }}
+                dangerouslySetInnerHTML={{ __html: templateHTML }}
+              />
+            )}
           </div>
 
           <DialogFooter className="gap-2 flex-wrap">
