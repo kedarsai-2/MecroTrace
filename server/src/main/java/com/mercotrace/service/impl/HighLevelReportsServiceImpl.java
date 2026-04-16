@@ -7,7 +7,6 @@ import com.mercotrace.repository.SalesBillRepository.SalesBillAggregate;
 import com.mercotrace.service.HighLevelReportsService;
 import com.mercotrace.service.TraderContextService;
 import com.mercotrace.service.dto.AdminDailySummaryDTO;
-import com.mercotrace.service.dto.DailySalesSummaryDTO;
 import com.mercotrace.service.dto.PartyExposureRowDTO;
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -28,9 +27,6 @@ import org.springframework.transaction.annotation.Transactional;
 @Transactional(readOnly = true)
 public class HighLevelReportsServiceImpl implements HighLevelReportsService {
 
-    /** Daily sales summary cache per trader + date range. */
-    public static final String CACHE_DAILY_SALES_SUMMARY_BY_TRADER_AND_DATE_RANGE = "highLevelReportsDailySalesSummaryByTraderAndDateRange";
-
     /** Party exposure cache per trader + date range. */
     public static final String CACHE_PARTY_EXPOSURE_BY_TRADER_AND_DATE_RANGE = "highLevelReportsPartyExposureByTraderAndDateRange";
 
@@ -49,43 +45,6 @@ public class HighLevelReportsServiceImpl implements HighLevelReportsService {
         this.salesBillRepository = salesBillRepository;
         this.arApDocumentRepository = arApDocumentRepository;
         this.traderContextService = traderContextService;
-    }
-
-    @Override
-    @Cacheable(
-        cacheNames = CACHE_DAILY_SALES_SUMMARY_BY_TRADER_AND_DATE_RANGE,
-        keyGenerator = "reportsKeyGenerator",
-        unless = "#result == null"
-    )
-    public DailySalesSummaryDTO getDailySalesSummary(LocalDate dateFrom, LocalDate dateTo) {
-        LocalDate from = requireDate(dateFrom, "dateFrom");
-        LocalDate to = requireDate(dateTo, "dateTo");
-        if (to.isBefore(from)) {
-            throw new IllegalArgumentException("dateTo must be on or after dateFrom");
-        }
-        Long traderId = traderContextService.getCurrentTraderId();
-        Instant fromInstant = from.atStartOfDay().toInstant(ZoneOffset.UTC);
-        Instant toInstant = to.plusDays(1).atStartOfDay().toInstant(ZoneOffset.UTC).minusMillis(1);
-
-        SalesBillAggregate agg = salesBillRepository.aggregateByTraderAndBillDateRange(traderId, fromInstant, toInstant);
-        long totalBills = agg != null && agg.getTotalBills() != null ? agg.getTotalBills() : 0L;
-        BigDecimal gross = agg != null && agg.getGrossSale() != null ? agg.getGrossSale() : BigDecimal.ZERO;
-        BigDecimal pending = agg != null && agg.getPendingBalance() != null ? agg.getPendingBalance() : BigDecimal.ZERO;
-        BigDecimal totalCollected = gross.subtract(pending != null ? pending : BigDecimal.ZERO);
-
-        DailySalesSummaryDTO dto = new DailySalesSummaryDTO();
-        dto.setTotalBills(totalBills);
-        dto.setTotalBags(0L); // Bags are derived from auctions/arrivals; keep 0 until a dedicated aggregate exists.
-        dto.setGrossSale(gross);
-        dto.setCommission(BigDecimal.ZERO);
-        dto.setUserFee(BigDecimal.ZERO);
-        dto.setCoolie(BigDecimal.ZERO);
-        dto.setNetSales(gross);
-        dto.setCashReceived(BigDecimal.ZERO);
-        dto.setBankReceived(BigDecimal.ZERO);
-        dto.setTotalCollected(totalCollected);
-        dto.setOutstanding(pending);
-        return dto;
     }
 
     @Override

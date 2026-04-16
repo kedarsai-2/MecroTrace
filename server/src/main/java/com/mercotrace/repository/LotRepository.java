@@ -114,5 +114,37 @@ public interface LotRepository extends JpaRepository<Lot, Long> {
         "AND v.traderId = :traderId"
     )
     Optional<Integer> findMaxLotSerialNoByTraderId(@Param("traderId") Long traderId);
+
+    /** Sum of lot bag counts for vehicles whose arrival time falls in the given range. */
+    @Query(
+        "SELECT COALESCE(SUM(l.bagCount), 0) FROM Lot l " +
+        "JOIN SellerInVehicle siv ON l.sellerVehicleId = siv.id " +
+        "JOIN Vehicle v ON siv.vehicleId = v.id " +
+        "WHERE v.traderId = :traderId AND v.arrivalDatetime >= :dateFrom AND v.arrivalDatetime <= :dateTo"
+    )
+    Long sumBagCountByTraderAndArrivalDateRange(
+        @Param("traderId") Long traderId,
+        @Param("dateFrom") java.time.Instant dateFrom,
+        @Param("dateTo") java.time.Instant dateTo
+    );
+
+    /** Per UTC calendar day of vehicle arrival: sum of lot bag_count. */
+    @Query(
+        value =
+            "SELECT CAST((v.arrival_datetime AT TIME ZONE 'UTC') AS date) AS d, " +
+            "COALESCE(SUM(l.bag_count), 0)::bigint " +
+            "FROM lot l " +
+            "JOIN seller_in_vehicle siv ON l.seller_vehicle_id = siv.id " +
+            "JOIN vehicle v ON siv.vehicle_id = v.id " +
+            "WHERE v.trader_id = :traderId AND v.arrival_datetime >= :fromInstant AND v.arrival_datetime <= :toInstant " +
+            "GROUP BY CAST((v.arrival_datetime AT TIME ZONE 'UTC') AS date) " +
+            "ORDER BY d DESC",
+        nativeQuery = true
+    )
+    List<Object[]> sumBagsByUtcArrivalDay(
+        @Param("traderId") Long traderId,
+        @Param("fromInstant") java.time.Instant fromInstant,
+        @Param("toInstant") java.time.Instant toInstant
+    );
 }
 

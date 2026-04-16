@@ -5,6 +5,7 @@
 import type { ArrivalDetail } from '@/services/api/arrivals';
 import type { BillPrintData, BillPrintFirmInfo, PattiPrintData } from '@/utils/printDocumentTemplates';
 import { effectiveGstPercent, gstOnSubtotal, percentOfAmount, roundMoney2 } from '@/utils/billingMoney';
+import type { BidInfo } from '@/utils/printTemplates';
 
 /** Structural twin of `FirmInfo` from printPreviewTemplates (avoid circular imports). */
 export type PrintPreviewFirmInput = {
@@ -57,6 +58,76 @@ export function resolveSampleLots(details: ArrivalDetail[]): SampleLotRow[] {
     { lot_name: 'Tomato Fresh', lot_no: 'TOM/003/26', seller: 'Ramesh Kumar', vehicle: 'MH-12-AB-1234', qty: 20, rate: 600, weight: 1000 },
   ];
 }
+
+/** Same `BidInfo` shape as LogisticsPage → `printTemplates` (vehicle totals mirror live aggregation). */
+export function buildSampleBidInfosForLogisticsPrints(details: ArrivalDetail[]): BidInfo[] {
+  const sampleLots = resolveSampleLots(details);
+  const vehicleTotals = new Map<string, number>();
+  const vehicleSellerTotals = new Map<string, number>();
+  sampleLots.forEach((l) => {
+    const vKey = l.vehicle || '';
+    const qty = Number(l.qty) || 0;
+    vehicleTotals.set(vKey, (vehicleTotals.get(vKey) ?? 0) + qty);
+    const vsKey = `${vKey}||${l.seller || ''}`;
+    vehicleSellerTotals.set(vsKey, (vehicleSellerTotals.get(vsKey) ?? 0) + qty);
+  });
+
+  const sellerOrder: string[] = [];
+  sampleLots.forEach((l) => {
+    const s = l.seller || 'Seller';
+    if (!sellerOrder.includes(s)) sellerOrder.push(s);
+  });
+  const sellerSerialByName = new Map<string, number>();
+  sellerOrder.forEach((name, i) => sellerSerialByName.set(name, i + 1));
+
+  return sampleLots.map((l, idx) => {
+    const vKey = l.vehicle || '';
+    const vsKey = `${vKey}||${l.seller || ''}`;
+    const qty = Number(l.qty) || 0;
+    const sellerName = l.seller || 'Seller';
+    const lotNoRaw = String(l.lot_no ?? '').trim();
+    const lotNumParsed = /^\d+$/.test(lotNoRaw) ? Number(lotNoRaw) : NaN;
+    const lotNumber = Number.isFinite(lotNumParsed) && lotNumParsed > 0 ? lotNumParsed : idx + 1;
+    return {
+      bidNumber: idx + 1,
+      buyerMark: 'VT',
+      buyerName: 'Vijay Traders',
+      quantity: qty,
+      vehicleTotalQty: vehicleTotals.get(vKey) ?? qty,
+      sellerVehicleQty: vehicleSellerTotals.get(vsKey) ?? qty,
+      rate: Number(l.rate) > 0 ? Number(l.rate) : 800,
+      lotId: lotNoRaw || String(idx + 1),
+      lotName: l.lot_name || 'Lot',
+      sellerName,
+      sellerSerial: sellerSerialByName.get(sellerName) ?? 1,
+      lotNumber,
+      vehicleNumber: l.vehicle || 'MH-12-AB-1234',
+      commodityName: l.lot_name || 'Commodity',
+      origin: 'Nashik',
+      godown: 'A1',
+    };
+  });
+}
+
+/** When arrivals yield no lots — still preview sticker/chiti/dispatch with stable demo bids. */
+export const FALLBACK_LOGISTICS_PREVIEW_BID: BidInfo = {
+  bidNumber: 1,
+  buyerMark: 'VT',
+  buyerName: 'Vijay Traders',
+  quantity: 110,
+  vehicleTotalQty: 320,
+  sellerVehicleQty: 110,
+  rate: 825,
+  lotId: 'demo-1',
+  lotName: '110',
+  sellerName: 'Ramesh Kumar',
+  sellerSerial: 1,
+  lotNumber: 110,
+  vehicleNumber: 'MH-12-AB-1234',
+  commodityName: 'Onion A-Grade',
+  origin: 'Nashik',
+  godown: 'A1',
+};
 
 export function firmInputToBillPrintFirm(f: PrintPreviewFirmInput): BillPrintFirmInfo {
   return {

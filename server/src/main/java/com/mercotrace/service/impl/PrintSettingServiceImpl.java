@@ -33,8 +33,6 @@ public class PrintSettingServiceImpl implements PrintSettingService {
     @Override
     public PrintSettingDTO upsert(Long traderId, PrintSettingDTO dto) {
         final String moduleKey = normalizeModuleKey(dto.getModuleKey());
-        final String paperSize = normalizePaperSize(dto.getPaperSize());
-        final boolean includeHeader = Boolean.TRUE.equals(dto.getIncludeHeader());
 
         PrintSetting entity = printSettingRepository.findByTraderIdAndModuleKey(traderId, moduleKey).orElseGet(() -> {
             PrintSetting created = new PrintSetting();
@@ -42,8 +40,20 @@ public class PrintSettingServiceImpl implements PrintSettingService {
             created.setModuleKey(moduleKey);
             return created;
         });
-        entity.setPaperSize(paperSize);
-        entity.setIncludeHeader(includeHeader);
+
+        if ("BILLING_NON_GST".equals(moduleKey)) {
+            String single = firstNonBlank(dto.getPaperSizeWithoutHeader(), dto.getPaperSizeWithHeader(), "A5");
+            String normalized = normalizePaperSize(single);
+            entity.setPaperSizeWithHeader(normalized);
+            entity.setPaperSizeWithoutHeader(normalized);
+            entity.setIncludeHeader(false);
+        } else {
+            String wh = firstNonBlank(dto.getPaperSizeWithHeader(), "A4");
+            String woh = firstNonBlank(dto.getPaperSizeWithoutHeader(), "A4");
+            entity.setPaperSizeWithHeader(normalizePaperSize(wh));
+            entity.setPaperSizeWithoutHeader(normalizePaperSize(woh));
+            entity.setIncludeHeader(Boolean.TRUE.equals(dto.getIncludeHeader()));
+        }
         return toDto(printSettingRepository.save(entity));
     }
 
@@ -51,7 +61,8 @@ public class PrintSettingServiceImpl implements PrintSettingService {
         PrintSettingDTO dto = new PrintSettingDTO();
         dto.setId(entity.getId());
         dto.setModuleKey(entity.getModuleKey());
-        dto.setPaperSize(entity.getPaperSize());
+        dto.setPaperSizeWithHeader(entity.getPaperSizeWithHeader());
+        dto.setPaperSizeWithoutHeader(entity.getPaperSizeWithoutHeader());
         dto.setIncludeHeader(entity.getIncludeHeader());
         return dto;
     }
@@ -70,5 +81,14 @@ public class PrintSettingServiceImpl implements PrintSettingService {
             throw new BadRequestAlertException("Unsupported paper size: " + raw, "printSetting", "paperSizeInvalid");
         }
         return value;
+    }
+
+    private static String firstNonBlank(String... candidates) {
+        for (String c : candidates) {
+            if (c != null && !c.isBlank()) {
+                return c.trim();
+            }
+        }
+        return "";
     }
 }

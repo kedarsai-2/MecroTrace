@@ -9,6 +9,7 @@ import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import BottomNav from '@/components/BottomNav';
 import { toast } from 'sonner';
+import { useAuth } from '@/context/AuthContext';
 import { useAuctionResults } from '@/hooks/useAuctionResults';
 import { printLogApi, arrivalsApi, logisticsApi } from '@/services/api';
 import type { ArrivalDetail } from '@/services/api/arrivals';
@@ -32,18 +33,23 @@ export type { BidInfo };
 type FilterMode = 'LOT' | 'BUYER' | 'SELLER';
 
 const FILTER_TABS: { key: FilterMode; label: string; icon: typeof Layers; desc: string }[] = [
-  { key: 'LOT', label: 'Lot', icon: Layers, desc: 'Sales sticker per lot' },
   { key: 'BUYER', label: 'Buyer', icon: User, desc: 'Consolidated chiti for buyer' },
   { key: 'SELLER', label: 'Seller', icon: Package, desc: 'Chiti for seller lots' },
+  { key: 'LOT', label: 'Lot', icon: Layers, desc: 'Sales sticker per lot' },
 ];
 
 const LogisticsPage = () => {
   const navigate = useNavigate();
   const isDesktop = useDesktopMode();
+  const { trader, user } = useAuth();
   const [bids, setBids] = useState<BidInfo[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
-  const [filterMode, setFilterMode] = useState<FilterMode>('LOT');
-  
+  const [filterMode, setFilterMode] = useState<FilterMode>('BUYER');
+
+  const chitiPrintTraderName = useMemo(
+    () => trader?.business_name?.trim() || user?.name?.trim() || 'Trader',
+    [trader?.business_name, user?.name]
+  );
 
   const { auctionResults: auctionData } = useAuctionResults();
   const [arrivalDetails, setArrivalDetails] = useState<ArrivalDetail[]>([]);
@@ -289,8 +295,8 @@ const LogisticsPage = () => {
     }
     const ok = await directPrint(
       {
-        html: generateBuyerChiti(g.buyerName, g.buyerMark, g.bids),
-        thermalText: generateBuyerChitiThermal(g.buyerName, g.buyerMark, g.bids),
+        html: generateBuyerChiti(g.buyerName, g.buyerMark, g.bids, 'post-auction', chitiPrintTraderName),
+        thermalText: generateBuyerChitiThermal(g.buyerName, g.buyerMark, g.bids, 'post-auction', chitiPrintTraderName),
       },
       { mode: "auto" }
     );
@@ -310,8 +316,8 @@ const LogisticsPage = () => {
     }
     const ok = await directPrint(
       {
-        html: generateSellerChiti(g.name, g.serial, g.bids),
-        thermalText: generateSellerChitiThermal(g.name, g.serial, g.bids),
+        html: generateSellerChiti(g.name, g.serial, g.bids, 'post-auction', chitiPrintTraderName),
+        thermalText: generateSellerChitiThermal(g.name, g.serial, g.bids, 'post-auction', chitiPrintTraderName),
       },
       { mode: "auto" }
     );
@@ -331,9 +337,9 @@ const LogisticsPage = () => {
     }
     const html =
       type === 'SALE_PAD'
-        ? generateSalePadPrint(filteredBids)
+        ? generateSalePadPrint(undefined, chitiPrintTraderName)
         : type === 'TENDER_SLIP'
-          ? generateTenderSlip(filteredBids)
+          ? generateTenderSlip(chitiPrintTraderName)
           : generateDispatchControl(filteredBids);
     const ok = await directPrint(html, { mode: "system" });
     ok ? toast.success('Sent to printer!') : toast.error('Printer not connected.');

@@ -603,3 +603,10 @@
   animation: shine-sweep 3s ease-in-out infinite;
   pointer-events: none;
 }
+
+/* Hide bottom nav when printing (Daily Sales Summary uses template print, not DOM print). */
+@media print {
+  nav.bottom-nav {
+    display: none !important;
+  }
+}

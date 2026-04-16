@@ -59,7 +59,7 @@ const stageBadgeColors: Record<string, string> = {
 const PrintsPage = () => {
   const navigate = useNavigate();
   const isDesktop = useDesktopMode();
-  const { trader } = useAuth();
+  const { trader, user } = useAuth();
   const [search, setSearch] = useState('');
   const [selectedPrint, setSelectedPrint] = useState<typeof printTemplates[0] | null>(null);
   const [showPreview, setShowPreview] = useState(false);
@@ -69,7 +69,7 @@ const PrintsPage = () => {
   const firm: FirmInfo = useMemo(() => {
     const addressParts = [trader?.address, trader?.city, trader?.state, trader?.pin_code].filter(Boolean);
     return {
-      name: trader?.business_name ?? '',
+      name: trader?.business_name?.trim() || user?.name?.trim() || '',
       about: trader?.category ?? '',
       address: addressParts.join(', '),
       apmcCode: '',
@@ -78,7 +78,7 @@ const PrintsPage = () => {
       gstin: '',
       bank: { name: '', acc: '', ifsc: '', branch: '' },
     };
-  }, [trader]);
+  }, [trader, user?.name]);
 
   useEffect(() => {
     arrivalsApi.listDetail(0, 100).then(setArrivalDetails).catch(() => setArrivalDetails([]));

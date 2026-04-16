@@ -169,9 +169,8 @@ public class CacheConfiguration {
             createCache(cm, ReportsServiceImpl.CACHE_BALANCE_SHEET_BY_TRADER, jcacheConfiguration);
             createCache(cm, ReportsServiceImpl.CACHE_AGING_BY_TRADER_AND_TYPE, jcacheConfiguration);
             createCache(cm, ReportsServiceImpl.CACHE_COMMODITY_PROFIT_BY_TRADER_AND_DATE_RANGE, jcacheConfiguration);
-            createCache(cm, HighLevelReportsServiceImpl.CACHE_DAILY_SALES_SUMMARY_BY_TRADER_AND_DATE_RANGE, jcacheConfiguration);
-            createCache(cm, HighLevelReportsServiceImpl.CACHE_PARTY_EXPOSURE_BY_TRADER_AND_DATE_RANGE, jcacheConfiguration);
-            createCache(cm, HighLevelReportsServiceImpl.CACHE_ADMIN_DAILY_SUMMARY_BY_TRADER_AND_DATE_RANGE, jcacheConfiguration);
+        createCache(cm, HighLevelReportsServiceImpl.CACHE_PARTY_EXPOSURE_BY_TRADER_AND_DATE_RANGE, jcacheConfiguration);
+        createCache(cm, HighLevelReportsServiceImpl.CACHE_ADMIN_DAILY_SUMMARY_BY_TRADER_AND_DATE_RANGE, jcacheConfiguration);
             // jhipster-needle-redis-add-entry
         };
     }

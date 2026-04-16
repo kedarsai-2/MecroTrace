@@ -1260,7 +1260,7 @@ const AuctionsPage = () => {
     return counts;
   }, [availableLots, selfSaleLots]);
 
-  /** Buyer-facing total = seller bid + signed preset margin (grid subline when preset is on). */
+  /** Buyer-facing total = seller bid + signed preset margin (stored on entries / API). */
   const calcSellerRate = useCallback((bidRate: number, presetVal: number) => {
     if (presetVal === 0) return bidRate;
     return bidRate + presetVal;
@@ -2783,15 +2783,6 @@ const AuctionsPage = () => {
                     Preset is not configured yet. Please set preset values in Preset Settings.
                   </p>
                 )}
-                {preset !== 0 && highestBid > 0 && (
-                  <motion.p initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="text-[10px] text-muted-foreground mt-2">
-                    Seller <span className="text-foreground font-semibold">₹{highestBid}</span> · Buyer pays{' '}
-                    <span className={cn('font-semibold', preset >= 0 ? 'text-success' : 'text-destructive')}>
-                      ₹{calcSellerRate(highestBid, preset)}
-                    </span>
-                    <span className="ml-1">(₹{highestBid} + margin {preset >= 0 ? '+' : ''}{preset})</span>
-                  </motion.p>
-                )}
               </div>
             )}
           </motion.div>
@@ -3179,11 +3170,6 @@ const AuctionsPage = () => {
                           </td>
                           <td className={cn("align-middle text-center font-semibold text-foreground", isDesktop ? "px-3 py-[12px] text-base" : "px-2 py-[10px] text-sm")}>
                             <div>₹{entry.rate}</div>
-                            {showPresetMargin && (
-                              <div className="text-[10px] font-medium text-muted-foreground">
-                                Buyer ₹{entry.sellerRate}
-                              </div>
-                            )}
                           </td>
                           {showPresetMargin && (
                             <td

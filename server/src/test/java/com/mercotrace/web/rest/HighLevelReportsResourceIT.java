@@ -21,9 +21,9 @@ class HighLevelReportsResourceIT {
     private MockMvc mockMvc;
 
     @Test
-    void dailySalesEndpointReturnsOk() throws Exception {
+    void dailySalesSummaryEndpointReturnsOk() throws Exception {
         mockMvc.perform(
-                get("/api/reports/daily-sales")
+                get("/api/reports/daily-sales-summary")
                     .param("dateFrom", "2025-01-01")
                     .param("dateTo", "2025-01-31")
                     .accept(MediaType.APPLICATION_JSON)

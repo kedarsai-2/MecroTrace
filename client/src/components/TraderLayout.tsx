@@ -29,6 +29,10 @@ const pageTitles: Record<string, string> = {
   '/cdn': 'Consignment Dispatch Note',
   '/prints-reports': 'Print Templates',
   '/prints': 'Print Templates',
+  '/reports': 'Reports',
+  '/reports/daily-sales-summary': 'Daily Sales Summary',
+  '/reports/user-fees-report': 'User Fees Report',
+  '/reports/arrivals-report': 'Arrivals Report',
   '/settings': 'Settings',
   '/settings/roles': 'Role Management',
   '/settings/users': 'User Management',
@@ -48,6 +52,10 @@ const pageGradients: Record<string, string> = {
   '/self-sale': 'from-lime-500/8 to-green-500/5',
   '/stock-purchase': 'from-sky-500/8 to-blue-500/5',
   '/cdn': 'from-orange-500/8 to-amber-500/5',
+  '/reports': 'from-primary/8 to-violet-500/5',
+  '/reports/daily-sales-summary': 'from-blue-500/8 to-cyan-500/5',
+  '/reports/user-fees-report': 'from-violet-500/8 to-purple-500/5',
+  '/reports/arrivals-report': 'from-emerald-500/8 to-teal-500/5',
 };
 
 const TraderLayout = () => {

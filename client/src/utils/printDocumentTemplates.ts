@@ -1359,3 +1359,151 @@ function wrapPrintDocument(body: string, pageSize: 'A4' | 'A5' = 'A4'): string {
   const pageCss = `@page { size: ${pageSize} portrait; margin: 8mm; } .wrap { max-width: ${maxWidth}; }`;
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>${pageCss}${PRINT_STYLES}</style></head><body>${body}</body></html>`;
 }
+
+/** Trader block for Daily Sales Summary print (Billing/Settlement-style firm header). */
+export interface DailySalesSummaryPrintHeader {
+  traderName: string;
+  apmcCode: string;
+  address: string;
+}
+
+/** Firm header block styles (same as printTemplates firmHeaderCSS; kept local to avoid wrong scope). */
+function dailySalesSummaryFirmHeaderCss(): string {
+  return `.firm-header { text-align: center; margin-bottom: 8px; border-bottom: 1px solid #ccc; padding-bottom: 6px; }
+    .firm-name { font-size: 16px; font-weight: 900; text-transform: uppercase; }
+    .firm-line { font-size: 10px; color: #555; }
+    .firm-info-row { display: flex; align-items: baseline; gap: 6px; font-size: 10px; margin-top: 2px; justify-content: center; }
+    .firm-lbl { color: #666; font-size: 9px; text-transform: uppercase; font-weight: 400; flex-shrink: 0; }
+    .firm-val { font-weight: 700; font-size: 10px; }`;
+}
+
+/** Row data is pre-rendered strings (currency already formatted). */
+export interface DailySalesSummaryPrintData {
+  title: string;
+  header: DailySalesSummaryPrintHeader;
+  periodStart?: string;
+  periodEnd?: string;
+  headers: readonly string[];
+  dayRows: string[][];
+  totalsRow: string[];
+}
+
+/**
+ * Daily Sales Summary print HTML — **A5 landscape** (default for this report: wide table uses full sheet).
+ * Does not use the shared PRINT_STYLES bundle: that forces `.wrap { max-width: 400px }` and shrinks the table.
+ * Same print engine as Billing: `directPrint` / iframe / Save as PDF.
+ */
+export function generateDailySalesSummaryPrintHTML(data: DailySalesSummaryPrintData): string {
+  const h = data.header;
+  const addrLines = escapeHtml(h.address || '—').split('\n');
+  const period =
+    data.periodStart && data.periodEnd
+      ? `${escapeHtml(data.periodStart)} → ${escapeHtml(data.periodEnd)}`
+      : '—';
+  const headCells = data.headers.map((col) => `<th>${escapeHtml(col)}</th>`).join('');
+  const bodyRows = data.dayRows
+    .map(
+      (cells) =>
+        `<tr>${cells.map((c) => `<td>${escapeHtml(String(c))}</td>`).join('')}</tr>`
+    )
+    .join('');
+  const footCells = data.totalsRow.map((c) => `<td>${escapeHtml(String(c))}</td>`).join('');
+  /** Self-contained CSS only (no PRINT_STYLES) so layout uses full A5 printable area. */
+  const dssPrintCss = `
+    @page { size: A5 landscape; margin: 5mm; }
+    *, *::before, *::after { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      font-family: Arial, Helvetica, 'Segoe UI', sans-serif;
+      color: #111;
+      background: #fff;
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+    }
+    .dss-print-sheet {
+      width: 100%;
+      max-width: 100%;
+      margin: 0;
+      padding: 0;
+    }
+    ${dailySalesSummaryFirmHeaderCss()}
+    .firm-header { margin-bottom: 5px; padding-bottom: 5px; }
+    .firm-name { font-size: 13pt; }
+    .firm-line { font-size: 9pt; }
+    .firm-info-row { font-size: 9pt; margin-top: 1px; }
+    .firm-lbl { font-size: 8pt; }
+    .firm-val { font-size: 9pt; }
+    .dss-title {
+      text-align: center;
+      font-size: 11pt;
+      font-weight: 800;
+      letter-spacing: 0.05em;
+      margin: 3px 0 1px;
+      text-transform: uppercase;
+    }
+    .dss-period { text-align: center; font-size: 9pt; color: #333; margin: 0 0 5px; }
+    table.dss {
+      width: max-content;
+      min-width: 100%;
+      max-width: none;
+      border-collapse: collapse;
+      table-layout: auto;
+      font-size: 9pt;
+    }
+    table.dss th,
+    table.dss td {
+      border: 1px solid #222;
+      padding: 5px 4px;
+      text-align: center;
+      vertical-align: middle;
+      line-height: 1.25;
+      white-space: nowrap;
+    }
+    table.dss th {
+      font-weight: 800;
+      background: #e2e2e8;
+      text-transform: uppercase;
+      font-size: 7.5pt;
+      letter-spacing: 0.03em;
+    }
+    table.dss td { font-size: 9pt; }
+    table.dss tbody td:first-child { font-size: 8.5pt; font-weight: 600; }
+    table.dss tfoot td {
+      font-weight: 800;
+      background: #e8e8f5;
+      font-size: 9pt;
+      border-top: 2px solid #333;
+    }
+    @media screen {
+      body { padding: 8px; background: #e5e5e5; }
+      .dss-print-sheet { max-width: 210mm; margin: 0 auto; background: #fff; box-shadow: 0 1px 6px rgba(0,0,0,0.12); padding: 6mm; }
+    }
+  `;
+  const body = `
+    <div class="dss-print-sheet">
+      <div class="firm-header">
+        <div class="firm-name">${escapeHtml((h.traderName || 'Trader').trim())}</div>
+        <div class="firm-line">Agricultural Produce Market Committee</div>
+        <div class="firm-line">APMC Market Yard</div>
+        <div class="firm-info-row">
+          <span class="firm-lbl">APMC Code</span>
+          <span class="firm-val">${escapeHtml((h.apmcCode || '—').trim())}</span>
+        </div>
+        <div class="firm-info-row" style="flex-wrap:wrap;justify-content:center;text-align:center;">
+          <span class="firm-lbl">Address</span>
+          <span class="firm-val" style="white-space:normal;">${addrLines.join('<br/>')}</span>
+        </div>
+      </div>
+      <p class="dss-title">${escapeHtml(data.title)}</p>
+      <p class="dss-period">Period: ${period}</p>
+      <table class="dss">
+        <thead><tr>${headCells}</tr></thead>
+        <tbody>${bodyRows}</tbody>
+        <tfoot><tr>${footCells}</tr></tfoot>
+      </table>
+    </div>
+  `;
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>${dssPrintCss}</style></head><body>${body}</body></html>`;
+}

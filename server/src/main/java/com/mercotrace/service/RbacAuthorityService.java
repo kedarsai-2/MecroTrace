@@ -516,7 +516,15 @@ public class RbacAuthorityService {
             )
         );
 
-        register(modules, "billing", mapOf("view", AuthoritiesConstants.BILLING_VIEW, "create", AuthoritiesConstants.BILLING_CREATE));
+        register(
+            modules,
+            "billing",
+            mapOf(
+                "view", AuthoritiesConstants.BILLING_VIEW,
+                "create", AuthoritiesConstants.BILLING_CREATE,
+                "edit", AuthoritiesConstants.BILLING_EDIT
+            )
+        );
 
         // Print Hub / print logs module.
         register(

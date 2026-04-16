@@ -64,6 +64,11 @@ import SelfSalePage from "./pages/SelfSalePage";
 import StockPurchasePage from "./pages/StockPurchasePage";
 import CDNPage from "./pages/CDNPage";
 import PrintsPage from "./pages/PrintsPage";
+import ReportsPage from "./pages/ReportsPage";
+import ReportsRoutesLayout from "./pages/reports/ReportsRoutesLayout";
+import DailySalesSummaryPage from "./pages/reports/DailySalesSummaryPage";
+import UserFeesReportPage from "./pages/reports/UserFeesReportPage";
+import ArrivalsReportPage from "./pages/reports/ArrivalsReportPage";
 import SettingsPage from "./pages/SettingsPage";
 import BluetoothPrinterSettingsPage from "./pages/settings/BluetoothPrinterSettingsPage";
 import PrintSettingsPage from "./pages/settings/PrintSettingsPage";
@@ -160,7 +165,12 @@ const router = createBrowserRouter(
         <Route path="/cdn" element={<CDNPage />} />
         <Route path="/prints-reports" element={<PrintsPage />} />
         <Route path="/prints" element={<PrintsPage />} />
-        <Route path="/reports" element={<Navigate to="/home" replace />} />
+        <Route path="/reports" element={<ReportsRoutesLayout />}>
+          <Route index element={<ReportsPage />} />
+          <Route path="daily-sales-summary" element={<DailySalesSummaryPage />} />
+          <Route path="user-fees-report" element={<UserFeesReportPage />} />
+          <Route path="arrivals-report" element={<ArrivalsReportPage />} />
+        </Route>
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="/settings/bluetooth-printers" element={<BluetoothPrinterSettingsPage />} />
         <Route path="/settings/print-settings" element={<PrintSettingsPage />} />

@@ -17,7 +17,7 @@ import { contactApi, arrivalsApi, billingApi, settlementApi, printLogApi } from 
 import { directPrint } from '@/utils/printTemplates';
 import { generateTemplateHTML, isFullDocumentPrintTemplate, type FirmInfo } from '@/utils/printPreviewTemplates';
 import type { ArrivalDetail } from '@/services/api/arrivals';
-import { reportsApi, type DailySalesSummaryDTO } from '@/services/api/reports';
+import { reportsApi, type DailySalesSummaryReportDTO } from '@/services/api/reports';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
 import { toast } from 'sonner';
 import ForbiddenPage from '@/components/ForbiddenPage';
@@ -77,15 +77,15 @@ const PrintsReportsPage = () => {
   const [arrivalDetails, setArrivalDetails] = useState<ArrivalDetail[]>([]);
   const [bills, setBills] = useState<SalesBillDTO[]>([]);
   const [settlements, setSettlements] = useState<PattiDTO[]>([]);
-  const [dailySummary, setDailySummary] = useState<DailySalesSummaryDTO | null>(null);
+  const [dailySummary, setDailySummary] = useState<DailySalesSummaryReportDTO | null>(null);
   const [dailySummaryLoading, setDailySummaryLoading] = useState(false);
   const printRef = useRef<HTMLDivElement>(null);
 
-  const { trader } = useAuth();
+  const { trader, user } = useAuth();
   const firm: FirmInfo = useMemo(() => {
     const addressParts = [trader?.address, trader?.city, trader?.state, trader?.pin_code].filter(Boolean);
     return {
-      name: trader?.business_name ?? '',
+      name: trader?.business_name?.trim() || user?.name?.trim() || '',
       about: trader?.category ?? '',
       address: addressParts.join(', '),
       apmcCode: '',
@@ -94,7 +94,7 @@ const PrintsReportsPage = () => {
       gstin: '',
       bank: { name: '', acc: '', ifsc: '', branch: '' },
     };
-  }, [trader]);
+  }, [trader, user?.name]);
 
   useEffect(() => {
     contactApi.list().then(setContacts);
@@ -142,7 +142,7 @@ const PrintsReportsPage = () => {
     const load = async () => {
       try {
         setDailySummaryLoading(true);
-        const res = await reportsApi.getDailySalesSummary(dateFrom, dateTo);
+        const res = await reportsApi.getDailySalesSummaryReport(dateFrom, dateTo);
         if (!cancelled) {
           setDailySummary(res);
         }
@@ -330,14 +330,14 @@ const PrintsReportsPage = () => {
               {dailySummary && (
                 <div className={cn("grid gap-3", isDesktop ? "grid-cols-4" : "grid-cols-2")}>
                   {[
-                    { label: 'Total Bills', value: dailySummary.totalBills },
-                    { label: 'Total Bags', value: dailySummary.totalBags ?? 0 },
-                    { label: 'Gross Sale', value: `₹${dailySummary.grossSale.toLocaleString()}` },
-                    { label: 'Commission', value: `₹${dailySummary.commission.toLocaleString()}` },
-                    { label: 'User Fee', value: `₹${dailySummary.userFee.toLocaleString()}` },
-                    { label: 'Coolie', value: `₹${dailySummary.coolie.toLocaleString()}` },
-                    { label: 'Total Collected', value: `₹${dailySummary.totalCollected.toLocaleString()}` },
-                    { label: 'Outstanding', value: `₹${dailySummary.outstanding.toLocaleString()}` },
+                    { label: 'Total Bills', value: dailySummary.totals.totalBills },
+                    { label: 'Total Bags', value: dailySummary.totals.totalBags ?? 0 },
+                    { label: 'Gross Sale', value: `₹${dailySummary.totals.grossSale.toLocaleString()}` },
+                    { label: 'Commission', value: `₹${dailySummary.totals.commission.toLocaleString()}` },
+                    { label: 'User Fee', value: `₹${dailySummary.totals.userFee.toLocaleString()}` },
+                    { label: 'Coolie', value: `₹${dailySummary.totals.coolie.toLocaleString()}` },
+                    { label: 'Total Collected', value: `₹${dailySummary.totals.totalCollected.toLocaleString()}` },
+                    { label: 'Outstanding', value: `₹${dailySummary.totals.outstanding.toLocaleString()}` },
                   ].map(m => (
                     <div key={m.label} className="bg-muted/30 rounded-xl p-3">
                       <p className="text-[10px] text-muted-foreground uppercase tracking-wider">{m.label}</p>

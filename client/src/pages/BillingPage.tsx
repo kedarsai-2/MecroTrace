@@ -502,8 +502,9 @@ type ValidationErrors = Record<string, string>;
 function validateBill(
   b: BillData,
   commodityAvgWeightBounds: Record<string, { min: number; max: number }>,
-): { isValid: boolean; errors: ValidationErrors } {
+): { isValid: boolean; errors: ValidationErrors; warnings: ValidationErrors } {
   const errors: ValidationErrors = {};
+  const warnings: ValidationErrors = {};
 
   const trimmedName = (b.billingName ?? '').trim();
   if (!trimmedName) {
@@ -583,7 +584,7 @@ function validateBill(
       const avgBelowMin = bounds != null && bounds.min > 0 && avgWeight < bounds.min;
       const avgAboveMax = bounds != null && bounds.max > 0 && avgWeight > bounds.max;
       if (avgBelowMin || avgAboveMax) {
-        errors[`items.${gi}.${ii}.avgWeight`] = avgBelowMin
+        warnings[`items.${gi}.${ii}.avgWeight`] = avgBelowMin
           ? `Avg Wt must be >= ${bounds!.min} kg`
           : `Avg Wt must be <= ${bounds!.max} kg`;
       }
@@ -603,7 +604,7 @@ function validateBill(
     });
   });
 
-  return { isValid: Object.keys(errors).length === 0, errors };
+  return { isValid: Object.keys(errors).length === 0, errors, warnings };
 }
 
 const BillingPage = () => {
@@ -624,8 +625,13 @@ const BillingPage = () => {
   const [hasSavedOnce, setHasSavedOnce] = useState(false);
   const [selectedPrintVersion, setSelectedPrintVersion] = useState<'latest' | number>('latest');
   const [showPrint, setShowPrint] = useState(false);
-  const [billingPrintSize, setBillingPrintSize] = useState<'A4' | 'A5'>('A4');
+  const [billingPaperWithHeader, setBillingPaperWithHeader] = useState<'A4' | 'A5'>('A4');
+  const [billingPaperWithoutHeader, setBillingPaperWithoutHeader] = useState<'A4' | 'A5'>('A4');
   const [billingIncludeHeader, setBillingIncludeHeader] = useState(true);
+  const billingEffectivePrintSize = useMemo(
+    () => (billingIncludeHeader ? billingPaperWithHeader : billingPaperWithoutHeader),
+    [billingIncludeHeader, billingPaperWithHeader, billingPaperWithoutHeader],
+  );
   /** Page size used when the bill has no GST on any commodity. Defaults to A5. */
   const [nonGstPrintSize, setNonGstPrintSize] = useState<'A4' | 'A5'>('A5');
 
@@ -660,11 +666,16 @@ const BillingPage = () => {
     const loadPrintSetting = async () => {
       try {
         const list = await printSettingsApi.list();
-        const gstRow    = list.find((item) => item.module_key === 'BILLING');
+        const gstRow = list.find((item) => item.module_key === 'BILLING');
         const nonGstRow = list.find((item) => item.module_key === 'BILLING_NON_GST');
-        if (gstRow?.paper_size === 'A5') setBillingPrintSize('A5');
-        setBillingIncludeHeader(gstRow?.include_header !== false);
-        if (nonGstRow?.paper_size) setNonGstPrintSize(nonGstRow.paper_size);
+        if (gstRow) {
+          setBillingPaperWithHeader(gstRow.paper_size_with_header === 'A5' ? 'A5' : 'A4');
+          setBillingPaperWithoutHeader(gstRow.paper_size_without_header === 'A5' ? 'A5' : 'A4');
+          setBillingIncludeHeader(gstRow.include_header !== false);
+        }
+        if (nonGstRow?.paper_size_without_header) {
+          setNonGstPrintSize(nonGstRow.paper_size_without_header);
+        }
       } catch {
         // keep defaults
       }
@@ -712,9 +723,9 @@ const BillingPage = () => {
   const salesBillPrintHtml = useMemo(() => {
     if (!billPrintPayload) return '';
     if (isGstBill) {
-      // GST (or mixed) bill: respect print settings (page size + header toggle)
+      // GST (or mixed): page size follows default layout (with vs without letterhead) from print settings
       return generateSalesBillPrintHTML(billPrintPayload, {
-        pageSize: billingPrintSize,
+        pageSize: billingEffectivePrintSize,
         includeHeader: billingIncludeHeader,
       });
     }
@@ -722,7 +733,7 @@ const BillingPage = () => {
     return generateNonGstSalesBillPrintHTML(billPrintPayload, {
       pageSize: nonGstPrintSize,
     });
-  }, [billPrintPayload, billingPrintSize, billingIncludeHeader, nonGstPrintSize, isGstBill]);
+  }, [billPrintPayload, billingEffectivePrintSize, billingIncludeHeader, nonGstPrintSize, isGstBill]);
 
   const handleSummaryTableScroll = useCallback(() => {
     const el = summaryTableScrollRef.current;
@@ -788,10 +799,11 @@ const BillingPage = () => {
     () =>
       bill
         ? validateBill(bill, commodityAvgWeightBounds)
-        : { isValid: true as const, errors: {} as ValidationErrors },
+        : { isValid: true as const, errors: {} as ValidationErrors, warnings: {} as ValidationErrors },
     [bill, commodityAvgWeightBounds],
   );
   const validationErrors = billValidation.errors;
+  const validationWarnings = billValidation.warnings;
   const canPersistSalesBill = useMemo(() => {
     if (!bill) return false;
     const canCreate = can('Billing', 'Create');
@@ -2608,12 +2620,17 @@ const BillingPage = () => {
     toast.success('Global charges applied to all line items');
   };
 
-  const buildSavePayload = () => {
+  /** Save path unchanged when options omitted; auto-save before buyer switch may suppress duplicate client validation toast. */
+  type PersistBillOptions = { skipClientValidationErrorToast?: boolean };
+
+  const buildSavePayload = (options?: PersistBillOptions) => {
     if (!bill) return;
     const { isValid, errors } = validateBill(bill, commodityAvgWeightBounds);
     if (!isValid) {
-      const count = Object.keys(errors).length;
-      toast.error(`Please fix ${count} validation ${count === 1 ? 'error' : 'errors'} before saving`);
+      if (!options?.skipClientValidationErrorToast) {
+        const count = Object.keys(errors).length;
+        toast.error(`Please fix ${count} validation ${count === 1 ? 'error' : 'errors'} before saving`);
+      }
       return null;
     }
     const payload = {
@@ -2666,13 +2683,13 @@ const BillingPage = () => {
     return { payload, isUpdate };
   };
 
-  const persistBill = async (): Promise<SalesBillDTO | null> => {
+  const persistBill = async (options?: PersistBillOptions): Promise<SalesBillDTO | null> => {
     if (persistBillPromiseRef.current) {
       return persistBillPromiseRef.current;
     }
     const run = (async (): Promise<SalesBillDTO | null> => {
       setBillPersisting(true);
-    const built = buildSavePayload();
+    const built = buildSavePayload(options);
     if (!built) return null;
     const { payload, isUpdate } = built;
     try {
@@ -2709,10 +2726,20 @@ const BillingPage = () => {
     const hasItems = bill.commodityGroups.some(g => (g.items?.length ?? 0) > 0);
     if (!hasItems) return true;
 
+    const baseline = billDirtyBaselineRef.current;
+    const unchanged =
+      baseline != null && serializeBillForDirty(bill) === baseline;
+    if (unchanged) {
+      return true;
+    }
+
     const currentBuyerLabel = bill.buyerMark || bill.buyerName || 'current buyer';
-    const saved = await persistBill();
+    const saved = await persistBill({ skipClientValidationErrorToast: true });
     if (!saved) {
-      toast.error('Could not auto-save current bill. Please fix highlighted fields and try again.');
+      const { isValid } = validateBill(bill, commodityAvgWeightBounds);
+      if (!isValid) {
+        toast.error('Could not auto-save current bill. Please fix highlighted fields and try again.');
+      }
       return false;
     }
 
@@ -2953,7 +2980,7 @@ const BillingPage = () => {
                   }
                   const printHtml = isGstBill
                     ? generateSalesBillPrintHTML(billPrintPayload!, {
-                        pageSize: billingPrintSize,
+                        pageSize: billingEffectivePrintSize,
                         includeHeader: billingIncludeHeader,
                       })
                     : generateNonGstSalesBillPrintHTML(billPrintPayload!, {
@@ -3636,7 +3663,7 @@ const BillingPage = () => {
                 disabled={!bill && !selectedBuyer}
                 className={cn(arrSolidLg, 'sm:self-end')}
               >
-                Change Buyer
+                Change Bill
               </Button>
             </div>
             <p className="text-xs text-muted-foreground leading-relaxed">
@@ -3986,8 +4013,9 @@ const BillingPage = () => {
                   }
                 >
                   {replaceSelectedContact
-                    ? `Update ${replaceTarget === 'BROKER' ? 'Broker' : 'Buyer'}`
+                    ? `${replaceTarget === 'BROKER' ? 'Update Broker' : 'Change Buyer'}`
                     : `Add ${replaceTarget === 'BROKER' ? 'Broker' : 'Buyer'}`}
+               
                 </Button>
                 <Button type="button" variant="outline" className={cn(arrSolidMd, 'shrink-0')} onClick={clearReplacementInline}>
                   Clear
@@ -4282,9 +4310,9 @@ const BillingPage = () => {
                                         &gt;max {bounds!.max}kg
                                       </p>
                                     )}
-                                    {validationErrors[`items.${gi}.${ii}.avgWeight`] && (
-                                      <p className="mt-0.5 text-[8px] text-destructive text-center">
-                                        {validationErrors[`items.${gi}.${ii}.avgWeight`]}
+                                    {validationWarnings[`items.${gi}.${ii}.avgWeight`] && (
+                                      <p className="mt-0.5 text-[8px] text-amber-700 dark:text-amber-400 text-center">
+                                        {validationWarnings[`items.${gi}.${ii}.avgWeight`]}
                                       </p>
                                     )}
                                   </div>
@@ -4709,11 +4737,11 @@ const BillingPage = () => {
                               >
                                 <div className="flex items-center gap-1.5">
                                   <RadioGroupItem value="GST" id={`gst-mode-${gi}`} />
-                                  <label htmlFor={`gst-mode-${gi}`} className="text-[10px] font-semibold">GST</label>
+                                  <label htmlFor={`gst-mode-${gi}`} className="text-[10px] font-semibold">GST(Local)</label>
                                 </div>
                                 <div className="flex items-center gap-1.5">
                                   <RadioGroupItem value="IGST" id={`igst-mode-${gi}`} />
-                                  <label htmlFor={`igst-mode-${gi}`} className="text-[10px] font-semibold">IGST</label>
+                                  <label htmlFor={`igst-mode-${gi}`} className="text-[10px] font-semibold">IGST(Inter State)</label>
                                 </div>
                               </RadioGroup>
                             )}

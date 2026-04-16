@@ -3,15 +3,15 @@ package com.mercotrace.service.dto;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import java.io.Serializable;
 import java.math.BigDecimal;
+import java.time.LocalDate;
 
-/**
- * DTO for daily sales summary metrics used in analytics reports.
- */
+/** One calendar day (UTC boundary) of sales summary metrics. */
 @JsonInclude(JsonInclude.Include.NON_NULL)
-public class DailySalesSummaryDTO implements Serializable {
+public class DailySalesSummaryDayRowDTO implements Serializable {
 
     private static final long serialVersionUID = 1L;
 
+    private LocalDate date;
     private long totalBills;
     private long totalBags;
     private BigDecimal grossSale;
@@ -19,10 +19,16 @@ public class DailySalesSummaryDTO implements Serializable {
     private BigDecimal userFee;
     private BigDecimal coolie;
     private BigDecimal netSales;
-    private BigDecimal cashReceived;
-    private BigDecimal bankReceived;
     private BigDecimal totalCollected;
     private BigDecimal outstanding;
+
+    public LocalDate getDate() {
+        return date;
+    }
+
+    public void setDate(LocalDate date) {
+        this.date = date;
+    }
 
     public long getTotalBills() {
         return totalBills;
@@ -80,22 +86,6 @@ public class DailySalesSummaryDTO implements Serializable {
         this.netSales = netSales;
     }
 
-    public BigDecimal getCashReceived() {
-        return cashReceived;
-    }
-
-    public void setCashReceived(BigDecimal cashReceived) {
-        this.cashReceived = cashReceived;
-    }
-
-    public BigDecimal getBankReceived() {
-        return bankReceived;
-    }
-
-    public void setBankReceived(BigDecimal bankReceived) {
-        this.bankReceived = bankReceived;
-    }
-
     public BigDecimal getTotalCollected() {
         return totalCollected;
     }
@@ -112,4 +102,3 @@ public class DailySalesSummaryDTO implements Serializable {
         this.outstanding = outstanding;
     }
 }
-

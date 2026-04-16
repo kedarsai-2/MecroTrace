@@ -1753,8 +1753,13 @@ const SettlementPage = () => {
   /** Per seller: `false` = expanded; missing/`true` = collapsed (default collapsed). */
   const [salesReportCollapsedBySellerId, setSalesReportCollapsedBySellerId] = useState<Record<string, boolean>>({});
   const [showPrint, setShowPrint] = useState(false);
-  const [settlementPrintSize, setSettlementPrintSize] = useState<'A4' | 'A5'>('A4');
+  const [settlementPaperWithHeader, setSettlementPaperWithHeader] = useState<'A4' | 'A5'>('A4');
+  const [settlementPaperWithoutHeader, setSettlementPaperWithoutHeader] = useState<'A4' | 'A5'>('A4');
   const [settlementIncludeHeader, setSettlementIncludeHeader] = useState(true);
+  const settlementEffectivePrintSize = useMemo(
+    () => (settlementIncludeHeader ? settlementPaperWithHeader : settlementPaperWithoutHeader),
+    [settlementIncludeHeader, settlementPaperWithHeader, settlementPaperWithoutHeader],
+  );
   /** Prevents overlapping save/update requests (buttons + shortcut). */
   const pattiSaveBusyRef = useRef(false);
   /** After a successful save, re-baseline dirty tracking once `pattiSaveBusy` is false and state has settled. */
@@ -1796,8 +1801,11 @@ const SettlementPage = () => {
       try {
         const list = await printSettingsApi.list();
         const row = list.find((item) => item.module_key === 'SETTLEMENT');
-        if (row?.paper_size === 'A5') setSettlementPrintSize('A5');
-        setSettlementIncludeHeader(row?.include_header !== false);
+        if (row) {
+          setSettlementPaperWithHeader(row.paper_size_with_header === 'A5' ? 'A5' : 'A4');
+          setSettlementPaperWithoutHeader(row.paper_size_without_header === 'A5' ? 'A5' : 'A4');
+          setSettlementIncludeHeader(row.include_header !== false);
+        }
       } catch {
         // keep defaults
       }
@@ -1858,7 +1866,7 @@ const SettlementPage = () => {
   const [sellerFormById, setSellerFormById] = useState<Record<string, SellerRegFormState>>({});
   const [registeredBaselineById, setRegisteredBaselineById] = useState<Record<string, SellerRegFormState>>({});
   const [sellerExpensesById, setSellerExpensesById] = useState<Record<string, SellerExpenseFormState>>({});
-  /** After a blocked save, seller cards to ring-scroll (avg / Unregistered / other validation). */
+  /** After a blocked save, seller cards to ring-scroll (Unregistered / other blocking validation). Avg bounds are UI-only warnings. */
   const [pattiSaveHighlightSellerIds, setPattiSaveHighlightSellerIds] = useState<string[]>([]);
   const [vehicleExpenseModalOpen, setVehicleExpenseModalOpen] = useState(false);
   const [vehicleExpenseLoading, setVehicleExpenseLoading] = useState(false);
@@ -2883,31 +2891,7 @@ const SettlementPage = () => {
           return `${sellerName}: rate must be greater than 0 (extra bid)`;
         }
       }
-      for (const { lot, sid } of visibleLots) {
-        const row = mergeLotDisplayRow(lot, lotOv[sid], getLotDivisor(lot));
-        const bounds = commodityAvgWeightBounds[lot.commodityName || ''];
-        if (bounds != null && row.weight > 0) {
-          if (bounds.min > 0 && row.avg < bounds.min) {
-            return `${sellerName}: avg weight ${row.avg.toFixed(2)} kg is below minimum ${bounds.min} kg (${row.itemLabel})`;
-          }
-          if (bounds.max > 0 && row.avg > bounds.max) {
-            return `${sellerName}: avg weight ${row.avg.toFixed(2)} kg is above maximum ${bounds.max} kg (${row.itemLabel})`;
-          }
-        }
-      }
-      for (const e of extraLots) {
-        const lot = settlementLotFromExtraBid(e);
-        const row = mergeLotDisplayRow(lot, undefined, getLotDivisor(lot));
-        const bounds = commodityAvgWeightBounds[lot.commodityName || ''];
-        if (bounds != null && row.weight > 0) {
-          if (bounds.min > 0 && row.avg < bounds.min) {
-            return `${sellerName}: avg weight ${row.avg.toFixed(2)} kg is below minimum ${bounds.min} kg (${row.itemLabel})`;
-          }
-          if (bounds.max > 0 && row.avg > bounds.max) {
-            return `${sellerName}: avg weight ${row.avg.toFixed(2)} kg is above maximum ${bounds.max} kg (${row.itemLabel})`;
-          }
-        }
-      }
+      // Avg vs commodity min/max: non-blocking (amber UI in item table only); do not gate save/print.
       const allowedQty = Math.round(totalArrivalBagsForSeller(seller));
       let qtyTot = 0;
       for (const { lot, sid } of visibleLots) {
@@ -2937,7 +2921,6 @@ const SettlementPage = () => {
       lotSalesOverridesBySellerId,
       extraBidLotsBySellerId,
       getLotDivisor,
-      commodityAvgWeightBounds,
     ]
   );
 
@@ -4713,7 +4696,10 @@ const SettlementPage = () => {
       /* optional */
     }
     const ok = await directPrint(
-      generateSalesPattiPrintHTML(printPayload, { pageSize: settlementPrintSize, includeHeader: settlementIncludeHeader }),
+      generateSalesPattiPrintHTML(printPayload, {
+        pageSize: settlementEffectivePrintSize,
+        includeHeader: settlementIncludeHeader,
+      }),
       { mode: 'system' },
     );
     if (ok) toast.success('Main patti sent to printer');
@@ -4734,7 +4720,7 @@ const SettlementPage = () => {
     isWeighingMergedIntoFreight,
     sellerFormById,
     vehicleNetPayableFromPatti,
-    settlementPrintSize,
+    settlementEffectivePrintSize,
     settlementIncludeHeader,
     firmInfo,
     displayMainSalesPattiNo,
@@ -4781,7 +4767,10 @@ const SettlementPage = () => {
         firm: firmInfo,
       };
       const ok = await directPrint(
-        generateSalesPattiPrintHTML(payload, { pageSize: settlementPrintSize, includeHeader: settlementIncludeHeader }),
+        generateSalesPattiPrintHTML(payload, {
+          pageSize: settlementEffectivePrintSize,
+          includeHeader: settlementIncludeHeader,
+        }),
         { mode: 'system' },
       );
       if (ok) toast.success('Seller sub-patti sent to printer');
@@ -4799,7 +4788,7 @@ const SettlementPage = () => {
       getSellerValidationError,
       isWeighingEnabledForSeller,
       isWeighingMergedIntoFreight,
-      settlementPrintSize,
+      settlementEffectivePrintSize,
       settlementIncludeHeader,
       firmInfo,
       sellerSalesPattiNumberBySellerId,
@@ -4855,7 +4844,10 @@ const SettlementPage = () => {
       return;
     }
     const ok = await directPrint(
-      generateSalesPattiBatchPrintHTML(payloads, { pageSize: settlementPrintSize, includeHeader: settlementIncludeHeader }),
+      generateSalesPattiBatchPrintHTML(payloads, {
+        pageSize: settlementEffectivePrintSize,
+        includeHeader: settlementIncludeHeader,
+      }),
       { mode: 'system' },
     );
     if (!ok) {
@@ -4877,7 +4869,7 @@ const SettlementPage = () => {
     mainPattiValidationError,
     isWeighingEnabledForSeller,
     isWeighingMergedIntoFreight,
-    settlementPrintSize,
+    settlementEffectivePrintSize,
     settlementIncludeHeader,
     firmInfo,
     sellerSalesPattiNumberBySellerId,
@@ -5549,7 +5541,7 @@ const SettlementPage = () => {
                       : {}),
                     pattiNoDisplay: mainPattiNumberForDisplay(displayMainSalesPattiNo, pattiData.pattiId),
                   },
-                  { pageSize: settlementPrintSize, includeHeader: settlementIncludeHeader },
+                  { pageSize: settlementEffectivePrintSize, includeHeader: settlementIncludeHeader },
                 ),
                 { mode: "system" },
               );
@@ -6760,9 +6752,6 @@ const SettlementPage = () => {
                                           settlementReadOnlyCellClass,
                                           avgWarn &&
                                             'border-amber-500/45 bg-amber-500/[0.12] text-amber-800 dark:text-amber-300',
-                                          showSaveValidationChrome &&
-                                            avgWarn &&
-                                            'border-destructive/70 bg-destructive/[0.12] ring-2 ring-destructive/50 dark:text-destructive-foreground'
                                         )}
                                         title="Weight ÷ quantity (from Billing commodity rules)"
                                       >
@@ -7331,26 +7320,6 @@ const SettlementPage = () => {
                   Viewing original (read-only) — Alt+M to return to modified
                 </span>
               )}
-              {isPattiEditLocked && !isOriginalReferenceMode && (
-                <Button
-                  type="button"
-                  variant="outline"
-                  className={cn(arrSolidTall, 'gap-2 sm:min-w-[10rem]')}
-                  onClick={enableSettlementEdit}
-                >
-                  Enable Edit (Alt+M)
-                </Button>
-              )}
-              {resolveOriginalPayload() != null && !isOriginalReferenceMode && (
-                <Button
-                  type="button"
-                  variant="outline"
-                  className={cn(arrOutlineTall, 'gap-2 sm:min-w-[10rem]')}
-                  onClick={enterOriginalReferenceMode}
-                >
-                  View original (Alt+O)
-                </Button>
-              )}
               <Button
                 type="button"
                 variant="outline"
@@ -7419,9 +7388,6 @@ const SettlementPage = () => {
                 <div className="flex items-center justify-between gap-2 border-b border-border/50 bg-muted/40 px-3 py-2">
                   <p className="min-w-0 text-xs font-bold text-foreground sm:text-sm">
                     Bill vs auction &amp; weights
-                    <span className="ml-1.5 hidden font-normal text-muted-foreground sm:inline">
-                      (after Alt+M; stays on screen during Alt+O)
-                    </span>
                   </p>
                   <Button
                     type="button"

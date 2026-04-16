@@ -102,4 +102,6 @@
     <include file="config/liquibase/changelog/20260410123000_settlement_voucher_temp_for_who_name.xml" relativeToChangelogFile="false"/>
     <include file="config/liquibase/changelog/20260410140000_sales_patti_extension_json.xml" relativeToChangelogFile="false"/>
     <include file="config/liquibase/changelog/20260411120000_sales_patti_original_snapshot.xml" relativeToChangelogFile="false"/>
+    <include file="config/liquibase/changelog/20260414120000_print_setting_dual_paper_sizes.xml" relativeToChangelogFile="false"/>
+    <include file="config/liquibase/changelog/20260415120000_daily_sales_report_indexes.xml" relativeToChangelogFile="false"/>
 </databaseChangeLog>

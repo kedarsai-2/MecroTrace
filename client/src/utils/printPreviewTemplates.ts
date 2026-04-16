@@ -10,8 +10,18 @@ import {
   generateSalesPattiPrintHTML,
 } from '@/utils/printDocumentTemplates';
 import {
+  generateBuyerChiti,
+  generateDispatchControl,
+  generateSalePadPrint,
+  generateSalesSticker,
+  generateSellerChiti,
+  generateTenderSlip,
+} from '@/utils/printTemplates';
+import {
   buildSampleBillPrintData,
+  buildSampleBidInfosForLogisticsPrints,
   buildSamplePattiPrintPayloads,
+  FALLBACK_LOGISTICS_PREVIEW_BID,
   resolveSampleLots,
   type PrintPreviewFirmInput,
 } from '@/utils/printPreviewSamplePayloads';
@@ -24,6 +34,13 @@ const FULL_DOC_TEMPLATE_IDS = new Set([
   'seller_invoice',
   'main_invoice',
   'invoice_a5',
+  'sale_pad',
+  /** Same full HTML documents as `printTemplates` / LogisticsPage direct print */
+  'sales_sticker',
+  'tender_slip',
+  'chiti_buyer',
+  'chiti_seller',
+  'dispatch_coolie',
 ]);
 
 /** True → full HTML document (`iframe` / `directPrint`); false → fragment for `dangerouslySetInnerHTML`. */
@@ -47,6 +64,7 @@ function numberToWords(n: number): string {
 export function generateTemplateHTML(templateId: string, arrivalDetails: ArrivalDetail[], firm: FirmInfo): string {
   const today = new Date().toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: 'numeric' });
   const sampleLots = resolveSampleLots(arrivalDetails);
+  const logisticsTraderTitle = (firm.name ?? '').trim() || 'Trader';
 
   if (templateId === 'gst_bill') {
     return generateSalesBillPrintHTML(buildSampleBillPrintData(arrivalDetails, firm, 'gst'), {
@@ -73,6 +91,48 @@ export function generateTemplateHTML(templateId: string, arrivalDetails: Arrival
       includeHeader: true,
     });
   }
+  if (templateId === 'sale_pad') {
+    return generateSalePadPrint([], logisticsTraderTitle);
+  }
+
+  const sampleBidsLogistics =
+    buildSampleBidInfosForLogisticsPrints(arrivalDetails);
+  const bidsForLogisticsPreview =
+    sampleBidsLogistics.length > 0 ? sampleBidsLogistics : [FALLBACK_LOGISTICS_PREVIEW_BID];
+
+  if (templateId === 'sales_sticker') {
+    return generateSalesSticker(bidsForLogisticsPreview[0]);
+  }
+  if (templateId === 'tender_slip') {
+    return generateTenderSlip(logisticsTraderTitle);
+  }
+  if (templateId === 'chiti_buyer') {
+    return generateBuyerChiti(
+      'Vijay Traders',
+      'VT',
+      bidsForLogisticsPreview,
+      'post-auction',
+      logisticsTraderTitle,
+    );
+  }
+  if (templateId === 'chiti_seller') {
+    const firstSeller = bidsForLogisticsPreview[0]?.sellerName || 'Seller';
+    const sellerBids = bidsForLogisticsPreview.filter((b) => b.sellerName === firstSeller);
+    const serial =
+      sellerBids[0]?.sellerSerial && sellerBids[0].sellerSerial > 0
+        ? sellerBids[0].sellerSerial
+        : 1;
+    return generateSellerChiti(
+      firstSeller,
+      serial,
+      sellerBids.length ? sellerBids : bidsForLogisticsPreview,
+      'post-auction',
+      logisticsTraderTitle,
+    );
+  }
+  if (templateId === 'dispatch_coolie') {
+    return generateDispatchControl(bidsForLogisticsPreview);
+  }
 
   const commonHeader = `
     <div style="text-align:center; border-bottom:2px solid #222; padding-bottom:10px; margin-bottom:14px">
@@ -97,41 +157,6 @@ export function generateTemplateHTML(templateId: string, arrivalDetails: Arrival
   const tdStyle = 'border:1px solid #e0e4ec; padding:5px';
 
   switch (templateId) {
-    case 'sale_pad':
-      return `<div style="font-family:'Segoe UI',Arial,sans-serif; max-width:420px; margin:auto; padding:16px; font-size:12px">
-        ${commonHeader}
-        <div style="text-align:center; font-weight:bold; font-size:15px; margin-bottom:14px; color:#1a1a2e">SALE PAD</div>
-        <div style="font-size:11px; margin-bottom:8px; color:#555">Date: ${today}</div>
-        <table style="${tableStyle}">
-          <tr><th style="${thStyle}">Vehicle</th><th style="${thStyle}">Qty</th></tr>
-          ${sampleLots.map((l: any) => `<tr><td style="${tdStyle}">${l.vehicle}</td><td style="${tdStyle}; text-align:right">${l.qty}</td></tr>`).join('')}
-        </table>
-        <table style="${tableStyle}; margin-top:12px">
-          <tr><th style="${thStyle}">Slr No</th><th style="${thStyle}">Seller Name</th><th style="${thStyle}">Qty</th></tr>
-          ${sampleLots.map((l: any, i: number) => `<tr><td style="${tdStyle}">${i + 1}</td><td style="${tdStyle}">${l.seller}</td><td style="${tdStyle}; text-align:right">${l.qty}</td></tr>`).join('')}
-        </table>
-        <table style="${tableStyle}; margin-top:12px">
-          <tr><th style="${thStyle}">Lot No</th><th style="${thStyle}">Lot Name</th></tr>
-          ${sampleLots.map((l: any) => `<tr><td style="${tdStyle}">${l.lot_no}</td><td style="${tdStyle}">${l.lot_name}</td></tr>`).join('')}
-        </table>
-        ${footer}
-      </div>`;
-
-    case 'sales_sticker': {
-      const lot = sampleLots[0] || { lot_name: 'Onion', lot_no: 'ONI/001', seller: 'Seller', vehicle: 'MH-12-AB-1234', qty: 10 };
-      const shortOrigin = 'Origin';
-      return `<div style="font-family:'Segoe UI',Arial,sans-serif; width:150mm; padding:10px; font-size:11px; border:2px dashed #999">
-        <div style="text-align:center; font-weight:800; font-size:11px; letter-spacing:1px; text-transform:uppercase; color:#1a1a2e">${firm.name || '—'}</div>
-        <div style="text-align:center; font-size:16px; font-weight:900; margin-top:4px">${lot.seller}</div>
-        <div style="text-align:center; font-size:10px; color:#666; font-weight:700; margin-top:2px">${shortOrigin}</div>
-        <div style="display:grid; grid-template-columns:1fr 1fr; gap:2px 2px; margin-top:4px">
-          <div><strong>Slr Sr No:</strong> 1</div><div><strong>Qty:</strong> ${lot.qty}</div>
-          <div><strong>Lot Name / No:</strong> ${lot.lot_name} / ${lot.lot_no}</div><div><strong>Lot No:</strong> ${lot.lot_no}</div>
-          <div><strong>V.No:</strong> ${lot.vehicle || 'MH-12-AB-1234'}</div><div><strong>Godown:</strong> A1</div>
-        </div>
-      </div>`;
-    }
-
     case 'tender_form':
       return `<div style="font-family:'Segoe UI',Arial,sans-serif; max-width:700px; margin:auto; padding:20px; font-size:12px">
         ${commonHeader}
@@ -141,65 +166,6 @@ export function generateTemplateHTML(templateId: string, arrivalDetails: Arrival
           <tr><th style="${thStyle}">Lot No</th><th style="${thStyle}">Bags</th><th style="${thStyle}">Farmer's Name</th><th style="${thStyle}">Purchaser</th></tr>
           ${sampleLots.map((l: any) => `<tr><td style="${tdStyle}">${l.lot_no}</td><td style="${tdStyle}; text-align:right">${l.qty}</td><td style="${tdStyle}">${l.seller}</td><td style="${tdStyle}"></td></tr>`).join('')}
         </table>
-        ${footer}
-      </div>`;
-
-    case 'tender_slip':
-      return `<div style="font-family:'Segoe UI',Arial,sans-serif; max-width:900px; margin:auto; padding:20px; font-size:11px">
-        ${commonHeader}
-        <div style="text-align:center; font-weight:bold; font-size:15px; margin-bottom:12px; color:#1a1a2e">TENDER SLIP FOR BUYERS (Triplicate)</div>
-        <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px">
-          ${[1, 2, 3].map(c => `<div style="border:1px solid #d0d8e8; padding:10px; border-radius:6px; background:#fafbff">
-            <div style="font-weight:bold; font-size:10px; text-align:center; margin-bottom:6px; color:#5B8CFF">Copy ${c}</div>
-            <div style="font-size:10px; text-align:center; font-weight:700">${firm.name || '—'}</div>
-            <div style="font-size:9px; text-align:center; color:#666">${firm.about || ''}</div>
-            <div style="font-size:9px; text-align:center; color:#666">${firm.address || ''}</div>
-            <div style="font-size:9px; text-align:center; color:#888">APMC: ${firm.apmcCode || ''}</div>
-            <div style="font-size:9px; margin-top:4px">Date: ${today}</div>
-            <table style="width:100%; border-collapse:collapse; font-size:9px; margin-top:4px">
-              <tr style="background:#f0f4ff"><th style="border:1px solid #ddd; padding:3px">Lot</th><th style="border:1px solid #ddd; padding:3px">Qty</th><th style="border:1px solid #ddd; padding:3px">Rate</th></tr>
-              ${sampleLots.slice(0, 3).map((l: any) => `<tr><td style="border:1px solid #ddd; padding:3px">${l.lot_no}</td><td style="border:1px solid #ddd; padding:3px">${l.qty}</td><td style="border:1px solid #ddd; padding:3px"></td></tr>`).join('')}
-            </table>
-          </div>`).join('')}
-        </div>
-        ${footer}
-      </div>`;
-
-    case 'chiti_buyer':
-      return `<div style="font-family:'Segoe UI',Arial,sans-serif; width:80mm; padding:10px; font-size:10px; border:2px dashed #999">
-        <div style="text-align:center; font-weight:800; font-size:13px; color:#1a1a2e">${firm.name || '—'}</div>
-        <div style="margin-top:6px"><strong>Buyer's Mark:</strong> ${sampleBuyer.mark}</div>
-        <table style="width:100%; border-collapse:collapse; font-size:9px; margin-top:8px">
-          <tr style="background:#f0f4ff"><th style="border:1px solid #ddd; padding:4px">Lot Name/No</th><th style="border:1px solid #ddd; padding:4px">Godown</th><th style="border:1px solid #ddd; padding:4px">Qty</th><th style="border:1px solid #ddd; padding:4px">Rate/50kg</th><th style="border:1px solid #ddd; padding:4px">Weight</th><th style="border:1px solid #ddd; padding:4px">Amount</th></tr>
-          ${sampleLots.map((l: any) => `<tr>
-            <td style="border:1px solid #ddd; padding:3px">${l.lot_name}<br/><small style="color:#888">${l.lot_no}</small></td>
-            <td style="border:1px solid #ddd; padding:3px">A1</td>
-            <td style="border:1px solid #ddd; padding:3px; text-align:right">${l.qty}</td>
-            <td style="border:1px solid #ddd; padding:3px; text-align:right">₹${l.rate || 800}</td>
-            <td style="border:1px solid #ddd; padding:3px; text-align:right">${l.weight || l.qty * 50}</td>
-            <td style="border:1px solid #ddd; padding:3px; text-align:right">₹${((l.rate || 800) * (l.weight || l.qty * 50) / 50).toLocaleString()}</td>
-          </tr>`).join('')}
-        </table>
-        <div style="font-weight:bold; margin-top:8px; text-align:right">Total Bids: ${sampleLots.length}</div>
-        <div style="text-align:center; font-size:8px; margin-top:10px; color:#aaa">Delivered by MERCOTRACE</div>
-        <div style="border-top:2px dashed #ccc; margin-top:10px; text-align:center; font-size:8px; color:#bbb; padding-top:4px">--- CUT HERE ---</div>
-      </div>`;
-
-    case 'dispatch_coolie':
-      return `<div style="font-family:'Segoe UI',Arial,sans-serif; max-width:420px; margin:auto; padding:16px; font-size:11px">
-        ${commonHeader}
-        <div style="text-align:center; font-weight:bold; font-size:14px; margin-bottom:12px; color:#1a1a2e">DISPATCH CONTROL — COOLIE</div>
-        <div style="margin-bottom:10px; font-size:11px; color:#555"><strong>Vehicle:</strong> MH-12-AB-1234 &nbsp; <strong>Qty:</strong> 75 bags &nbsp; <strong>Godown:</strong> A1</div>
-        <table style="${tableStyle}">
-          <tr><th style="${thStyle}">Slr No</th><th style="${thStyle}">Seller Name</th><th style="${thStyle}">Qty</th><th style="${thStyle}">Lot No</th><th style="${thStyle}">Lot Name</th></tr>
-          ${sampleLots.map((l: any, i: number) => `<tr><td style="${tdStyle}">${i + 1}</td><td style="${tdStyle}">${l.seller}</td><td style="${tdStyle}; text-align:right">${l.qty}</td><td style="${tdStyle}">${l.lot_no}</td><td style="${tdStyle}">${l.lot_name}</td></tr>`).join('')}
-        </table>
-        <div style="margin-top:14px; font-size:10px; font-weight:600"><strong>Buyer Mark & Quantity:</strong></div>
-        <table style="${tableStyle}; margin-top:4px">
-          <tr><th style="${thStyle}">Buyer Mark</th><th style="${thStyle}">Quantity</th></tr>
-          <tr><td style="${tdStyle}">${sampleBuyer.mark}</td><td style="${tdStyle}; text-align:right">30</td></tr>
-        </table>
-        <div style="font-size:9px; color:#aaa; margin-top:8px; text-align:center">Post Auction – Pre Weighing</div>
         ${footer}
       </div>`;
 
@@ -217,33 +183,6 @@ export function generateTemplateHTML(templateId: string, arrivalDetails: Arrival
         <div style="text-align:right; font-weight:bold; margin-top:10px">For ${firm.name || '—'}</div>
         ${footer}
       </div>`;
-
-    case 'chiti_seller': {
-      const firstSeller = sampleLots[0]?.seller || 'Ramesh Kumar';
-      const sellerLots = sampleLots.filter((l: any) => l.seller === firstSeller);
-      const totalQty = sellerLots.reduce((s: number, l: any) => s + (l.qty || 0), 0);
-      const totalAmt = sellerLots.reduce((s: number, l: any) => s + ((l.rate || 800) * (l.weight || l.qty * 50) / 50), 0);
-      return `<div style="font-family:'Segoe UI',Arial,sans-serif; width:80mm; padding:10px; font-size:10px; border:2px dashed #999">
-        <div style="text-align:center; font-weight:800; font-size:13px; color:#1a1a2e">${firm.name || '—'}</div>
-        <div style="margin-top:6px"><strong>Seller:</strong> ${firstSeller} &nbsp; <strong>Slr Sr No:</strong> 1</div>
-        <table style="width:100%; border-collapse:collapse; font-size:9px; margin-top:8px">
-          <tr style="background:#f0f4ff"><th style="border:1px solid #ddd; padding:4px">Lot Name/No</th><th style="border:1px solid #ddd; padding:4px">Qty</th><th style="border:1px solid #ddd; padding:4px">Rate/50kg</th><th style="border:1px solid #ddd; padding:4px">Weight</th></tr>
-          ${sellerLots.map((l: any) => `<tr>
-            <td style="border:1px solid #ddd; padding:3px">${l.lot_name}<br/><small style="color:#888">${l.lot_no}</small></td>
-            <td style="border:1px solid #ddd; padding:3px; text-align:right">${l.qty}</td>
-            <td style="border:1px solid #ddd; padding:3px; text-align:right">₹${l.rate || 800}</td>
-            <td style="border:1px solid #ddd; padding:3px; text-align:right">${l.weight || l.qty * 50}</td>
-          </tr>`).join('')}
-        </table>
-        <div style="font-weight:bold; margin-top:8px; display:flex; justify-content:space-between; font-size:9px">
-          <span>Total Lots: ${sellerLots.length}</span>
-          <span>Total Qty: ${totalQty}</span>
-          <span>₹${totalAmt.toLocaleString()}</span>
-        </div>
-        <div style="text-align:center; font-size:8px; margin-top:10px; color:#aaa">Delivered by MERCOTRACE</div>
-        <div style="border-top:2px dashed #ccc; margin-top:10px; text-align:center; font-size:8px; color:#bbb; padding-top:4px">--- CUT HERE ---</div>
-      </div>`;
-    }
 
     case 'market_fee':
       return `<div style="font-family:'Segoe UI',Arial,sans-serif; max-width:700px; margin:auto; padding:20px; font-size:12px">

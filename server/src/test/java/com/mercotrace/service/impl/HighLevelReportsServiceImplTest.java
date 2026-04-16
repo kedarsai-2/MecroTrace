@@ -8,12 +8,9 @@ import com.mercotrace.domain.ArApDocument;
 import com.mercotrace.domain.Contact;
 import com.mercotrace.repository.ArApDocumentRepository;
 import com.mercotrace.repository.SalesBillRepository;
-import com.mercotrace.repository.SalesBillRepository.SalesBillAggregate;
 import com.mercotrace.service.TraderContextService;
-import com.mercotrace.service.dto.DailySalesSummaryDTO;
 import com.mercotrace.service.dto.PartyExposureRowDTO;
 import java.math.BigDecimal;
-import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
@@ -48,36 +45,6 @@ class HighLevelReportsServiceImplTest {
     void setUp() {
         service = new HighLevelReportsServiceImpl(salesBillRepository, arApDocumentRepository, traderContextService);
         when(traderContextService.getCurrentTraderId()).thenReturn(TRADER_ID);
-    }
-
-    @Test
-    void getDailySalesSummaryUsesSalesBillAggregate() {
-        LocalDate from = LocalDate.of(2025, 3, 1);
-        LocalDate to = LocalDate.of(2025, 3, 31);
-        SalesBillAggregate agg = new SalesBillAggregate() {
-            @Override
-            public Long getTotalBills() {
-                return 5L;
-            }
-
-            @Override
-            public BigDecimal getGrossSale() {
-                return BigDecimal.valueOf(250000);
-            }
-
-            @Override
-            public BigDecimal getPendingBalance() {
-                return BigDecimal.valueOf(50000);
-            }
-        };
-        when(salesBillRepository.aggregateByTraderAndBillDateRange(eq(TRADER_ID), any(Instant.class), any(Instant.class)))
-            .thenReturn(agg);
-
-        DailySalesSummaryDTO dto = service.getDailySalesSummary(from, to);
-
-        assertThat(dto.getTotalBills()).isEqualTo(5L);
-        assertThat(dto.getGrossSale()).isEqualByComparingTo(BigDecimal.valueOf(250000));
-        assertThat(dto.getOutstanding()).isEqualByComparingTo(BigDecimal.valueOf(50000));
     }
 
     @Test

@@ -8,7 +8,8 @@ export type PrintPaperSize = 'A4' | 'A5';
 export interface PrintSettingDTO {
   id?: number;
   module_key: PrintModuleKey;
-  paper_size: PrintPaperSize;
+  paper_size_with_header: PrintPaperSize;
+  paper_size_without_header: PrintPaperSize;
   include_header: boolean;
 }
 

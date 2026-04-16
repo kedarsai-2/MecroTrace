@@ -39,8 +39,13 @@ public class PrintSetting implements Serializable {
 
     @NotBlank
     @Pattern(regexp = "^(A4|A5)$")
-    @Column(name = "paper_size", length = 2, nullable = false)
-    private String paperSize;
+    @Column(name = "paper_size_with_header", length = 2, nullable = false)
+    private String paperSizeWithHeader;
+
+    @NotBlank
+    @Pattern(regexp = "^(A4|A5)$")
+    @Column(name = "paper_size_without_header", length = 2, nullable = false)
+    private String paperSizeWithoutHeader;
 
     @NotNull
     @Column(name = "include_header", nullable = false)
@@ -70,12 +75,20 @@ public class PrintSetting implements Serializable {
         this.moduleKey = moduleKey;
     }
 
-    public String getPaperSize() {
-        return paperSize;
+    public String getPaperSizeWithHeader() {
+        return paperSizeWithHeader;
     }
 
-    public void setPaperSize(String paperSize) {
-        this.paperSize = paperSize;
+    public void setPaperSizeWithHeader(String paperSizeWithHeader) {
+        this.paperSizeWithHeader = paperSizeWithHeader;
+    }
+
+    public String getPaperSizeWithoutHeader() {
+        return paperSizeWithoutHeader;
+    }
+
+    public void setPaperSizeWithoutHeader(String paperSizeWithoutHeader) {
+        this.paperSizeWithoutHeader = paperSizeWithoutHeader;
     }
 
     public Boolean getIncludeHeader() {

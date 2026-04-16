@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <changeSet id="20260414120000-1" author="mercotrace">
+        <addColumn tableName="print_setting">
+            <column name="paper_size_with_header" type="varchar(2)"/>
+            <column name="paper_size_without_header" type="varchar(2)"/>
+        </addColumn>
+    </changeSet>
+    <changeSet id="20260414120000-2" author="mercotrace">
+        <sql>UPDATE print_setting SET paper_size_with_header = paper_size, paper_size_without_header = paper_size</sql>
+    </changeSet>
+    <changeSet id="20260414120000-3" author="mercotrace">
+        <addNotNullConstraint tableName="print_setting" columnName="paper_size_with_header" constraintName="nn_print_setting_ps_wh"/>
+        <addNotNullConstraint tableName="print_setting" columnName="paper_size_without_header" constraintName="nn_print_setting_ps_woh"/>
+    </changeSet>
+    <changeSet id="20260414120000-4" author="mercotrace">
+        <dropColumn tableName="print_setting" columnName="paper_size"/>
+    </changeSet>
+</databaseChangeLog>

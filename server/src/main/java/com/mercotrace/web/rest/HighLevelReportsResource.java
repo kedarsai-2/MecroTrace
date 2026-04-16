@@ -3,7 +3,6 @@ package com.mercotrace.web.rest;
 import com.mercotrace.security.AuthoritiesConstants;
 import com.mercotrace.service.HighLevelReportsService;
 import com.mercotrace.service.dto.AdminDailySummaryDTO;
-import com.mercotrace.service.dto.DailySalesSummaryDTO;
 import com.mercotrace.service.dto.PartyExposureRowDTO;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -33,17 +32,6 @@ public class HighLevelReportsResource {
 
     public HighLevelReportsResource(HighLevelReportsService highLevelReportsService) {
         this.highLevelReportsService = highLevelReportsService;
-    }
-
-    @GetMapping("/api/reports/daily-sales")
-    @PreAuthorize("hasAuthority(\"" + AuthoritiesConstants.REPORTS_VIEW + "\")")
-    @Operation(summary = "Daily sales summary", description = "High-level daily sales metrics for the trader.")
-    public ResponseEntity<DailySalesSummaryDTO> getDailySalesSummary(
-        @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate dateFrom,
-        @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate dateTo
-    ) {
-        LOG.debug("REST request to get daily sales summary: dateFrom={}, dateTo={}", dateFrom, dateTo);
-        return ResponseEntity.ok(highLevelReportsService.getDailySalesSummary(dateFrom, dateTo));
     }
 
     @GetMapping("/api/reports/party-exposure")

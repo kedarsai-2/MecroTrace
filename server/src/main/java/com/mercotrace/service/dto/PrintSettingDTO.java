@@ -16,10 +16,13 @@ public class PrintSettingDTO {
     @JsonProperty("module_key")
     private String moduleKey;
 
-    @NotBlank
     @Pattern(regexp = "^(A4|A5)$")
-    @JsonProperty("paper_size")
-    private String paperSize;
+    @JsonProperty("paper_size_with_header")
+    private String paperSizeWithHeader;
+
+    @Pattern(regexp = "^(A4|A5)$")
+    @JsonProperty("paper_size_without_header")
+    private String paperSizeWithoutHeader;
 
     @NotNull
     @JsonProperty("include_header")
@@ -41,12 +44,20 @@ public class PrintSettingDTO {
         this.moduleKey = moduleKey;
     }
 
-    public String getPaperSize() {
-        return paperSize;
+    public String getPaperSizeWithHeader() {
+        return paperSizeWithHeader;
     }
 
-    public void setPaperSize(String paperSize) {
-        this.paperSize = paperSize;
+    public void setPaperSizeWithHeader(String paperSizeWithHeader) {
+        this.paperSizeWithHeader = paperSizeWithHeader;
+    }
+
+    public String getPaperSizeWithoutHeader() {
+        return paperSizeWithoutHeader;
+    }
+
+    public void setPaperSizeWithoutHeader(String paperSizeWithoutHeader) {
+        this.paperSizeWithoutHeader = paperSizeWithoutHeader;
     }
 
     public Boolean getIncludeHeader() {
