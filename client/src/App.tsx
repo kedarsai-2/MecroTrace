@@ -56,11 +56,6 @@ import ScribblePadPage from "./pages/ScribblePadPage";
 import LogisticsPage from "./pages/LogisticsPage";
 import SettlementPage from "./pages/SettlementPage";
 import BillingPage from "./pages/BillingPage";
-import AccountingPage from "./pages/AccountingPage";
-import VouchersPage from "./pages/VouchersPage";
-import LedgerViewPage from "./pages/LedgerViewPage";
-import ContactLedgerViewPage from "./pages/ContactLedgerViewPage";
-import SelfSalePage from "./pages/SelfSalePage";
 import StockPurchasePage from "./pages/StockPurchasePage";
 import CDNPage from "./pages/CDNPage";
 import PrintsPage from "./pages/PrintsPage";
@@ -155,12 +150,7 @@ const router = createBrowserRouter(
         <Route path="/logistics" element={<LogisticsPage />} />
         <Route path="/settlement" element={<SettlementPage />} />
         <Route path="/billing" element={<BillingPage />} />
-        <Route path="/accounting" element={<AccountingPage />} />
-        <Route path="/vouchers" element={<VouchersPage />} />
-        <Route path="/ledger-view/:ledgerId" element={<LedgerViewPage />} />
-        <Route path="/contact-ledger/:contactId" element={<ContactLedgerViewPage />} />
         <Route path="/financial-reports" element={<Navigate to="/home" replace />} />
-        <Route path="/self-sale" element={<SelfSalePage />} />
         <Route path="/stock-purchase" element={<StockPurchasePage />} />
         <Route path="/cdn" element={<CDNPage />} />
         <Route path="/prints-reports" element={<PrintsPage />} />

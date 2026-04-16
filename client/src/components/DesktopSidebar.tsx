@@ -2,9 +2,9 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Home, Settings, Users, Truck, Gavel, Printer,
-  FileText, Receipt, BookOpen, CreditCard, User, Scale,
-  ChevronLeft, ChevronRight, Moon, Sun, LogOut, ShieldCheck,
-  ShoppingBag, Box, Send
+  FileText, Receipt, User,
+  ChevronLeft, ChevronRight, Moon, Sun,
+  Box, Send, BarChart3,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { MercotraceIcon } from '@/components/MercotraceLogo';
@@ -37,7 +37,6 @@ const navSections = [
   {
     label: 'Trading',
     items: [
-      { icon: ShoppingBag, title: 'Self-Sale', path: '/self-sale' },
       { icon: Box, title: 'Stock Purchase', path: '/stock-purchase' },
       { icon: Send, title: 'CDN', path: '/cdn' },
     ],
@@ -47,8 +46,7 @@ const navSections = [
     items: [
       { icon: Receipt, title: 'Billing', path: '/billing' },
       { icon: FileText, title: 'Settlement', path: '/settlement' },
-      { icon: BookOpen, title: 'Chart of Accounts', path: '/accounting' },
-      { icon: CreditCard, title: 'Vouchers & Payments', path: '/vouchers' },
+      { icon: BarChart3, title: 'Reports', path: '/reports' },
       { icon: Printer, title: 'Print Templates', path: '/prints' },
     ],
   },

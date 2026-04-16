@@ -157,13 +157,10 @@ export function getModuleKeyForRoute(pathname: string): ModuleKey | null {
   if (pathname.startsWith('/weighing')) return 'Weighing';
   if (pathname.startsWith('/writers-pad') || pathname.startsWith('/scribble-pad')) return "Writer's Pad";
   if (pathname.startsWith('/logistics')) return 'Print Hub';
-  if (pathname.startsWith('/self-sale')) return 'Self-Sale';
   if (pathname.startsWith('/stock-purchase')) return 'Stock Purchase';
   if (pathname.startsWith('/cdn')) return 'CDN';
   if (pathname.startsWith('/settlement')) return 'Settlement';
   if (pathname.startsWith('/billing')) return 'Billing';
-  if (pathname.startsWith('/accounting')) return 'Chart of Accounts';
-  if (pathname.startsWith('/vouchers')) return 'Vouchers & Payments';
   if (pathname.startsWith('/financial-reports')) return 'Financial Reports';
   if (pathname.startsWith('/prints-reports') || pathname.startsWith('/prints')) return 'Print Templates';
   if (pathname.startsWith('/reports')) return 'Reports';

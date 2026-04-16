@@ -17,9 +17,7 @@ import imgAuctions from '@/assets/modules/auctions.png';
 import imgLogistics from '@/assets/modules/logistics.png';
 import imgSettlement from '@/assets/modules/settlement.png';
 import imgBilling from '@/assets/modules/billing.png';
-import imgAccounting from '@/assets/modules/accounting.png';
-import imgVouchers from '@/assets/modules/vouchers.png';
-import imgSelfSale from '@/assets/modules/self-sale.png';
+import imgReports from '@/assets/modules/reports.png';
 import imgStockPurchase from '@/assets/modules/stock-purchase.png';
 import imgCdn from '@/assets/modules/cdn.png';
 import imgPrints from '@/assets/modules/prints.png';
@@ -33,9 +31,7 @@ const modules = [
   { image: imgLogistics, title: 'Print Hub', desc: 'Print stickers & chiti', path: '/logistics', accent: 'from-sky-400 to-indigo-500' },
   { image: imgSettlement, title: 'Settlement (Patti)', desc: 'Seller payment & deductions', path: '/settlement', accent: 'from-lime-400 to-green-500' },
   { image: imgBilling, title: 'Billing (Sales Bill)', desc: 'Buyer invoicing & bills', path: '/billing', accent: 'from-blue-400 to-indigo-600' },
-  { image: imgAccounting, title: 'Chart of Accounts', desc: 'Ledgers & double-entry COA', path: '/accounting', accent: 'from-teal-400 to-cyan-600' },
-  { image: imgVouchers, title: 'Vouchers & Payments', desc: 'Receipt, payment & journal', path: '/vouchers', accent: 'from-orange-400 to-red-500' },
-  { image: imgSelfSale, title: 'Self-Sale', desc: 'Close lots within entity', path: '/self-sale', accent: 'from-pink-400 to-rose-500' },
+  { image: imgReports, title: 'Reports', desc: 'Sales summary, fees & arrivals', path: '/reports', accent: 'from-violet-400 to-purple-600' },
   { image: imgStockPurchase, title: 'Stock Purchase', desc: 'Vendor purchases & inventory', path: '/stock-purchase', accent: 'from-yellow-400 to-amber-500' },
   { image: imgCdn, title: 'CDN', desc: 'Consignment dispatch notes', path: '/cdn', accent: 'from-emerald-400 to-green-600' },
   { image: imgPrints, title: 'Print Templates', desc: 'Stage-wise document printing', path: '/prints', accent: 'from-purple-400 to-fuchsia-500' },
