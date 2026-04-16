@@ -1693,6 +1693,8 @@ const SettlementPage = () => {
   const [settlementFormMode, setSettlementFormMode] = useState<'idle' | 'new' | 'in-progress' | 'saved'>('idle');
   /** Bumps when dirty baseline ref is synced so `isSettlementDirty` recomputes (refs alone do not render). */
   const [settlementDirtyNonce, setSettlementDirtyNonce] = useState(0);
+  /** Bumps when async patti hydration finishes so baseline effect can capture a full workspace snapshot once. */
+  const [settlementWorkspaceHydrateEpoch, setSettlementWorkspaceHydrateEpoch] = useState(0);
   /** Bumps after multi-seller patti load hydrates per-seller `originalData` into session ref (refs alone do not render). */
   const [pattiOriginalHydrationNonce, setPattiOriginalHydrationNonce] = useState(0);
 
@@ -1725,6 +1727,8 @@ const SettlementPage = () => {
   /** Expand/collapse for saved-patti workspace vs original compare footer (after Alt+M unlock). */
   const [originalCompareFooterExpanded, setOriginalCompareFooterExpanded] = useState(true);
   const settlementDirtyBaselineRef = useRef<string | null>(null);
+  /** True while `openPattiForEdit` is applying multi-step / awaited hydration — blocks premature dirty baseline capture. */
+  const settlementWorkspaceHydratingRef = useRef(false);
   /** Latest workspace JSON for deferred dirty baseline sync after save (must match `settlementWorkspaceSnapshot`). */
   const settlementWorkspaceSnapshotRef = useRef<string>('');
   /** Fresh arrival-freight totals when applying expense auto-pull (avoid re-running the effect when only this changes). */
@@ -1972,6 +1976,13 @@ const SettlementPage = () => {
       wOn: settlementWeighingEnabledBySellerId,
       mergeF: settlementWeighingMergeIntoFreightBySellerId,
       gunnies: gunniesAmount,
+      vehExp: vehicleExpenseRows,
+      vehExpOrig: vehicleExpenseOriginalByRowId,
+      draftMain: draftMainPattiNo,
+      draftNoBySeller: draftPattiNoBySellerId,
+      dbIds: existingPattiIdBySellerId,
+      vouchers: addVoucherSellerId != null ? { sellerId: addVoucherSellerId, rows: addVoucherRows } : null,
+      invoiceNameSearch,
     });
   }, [
     pattiData,
@@ -1987,6 +1998,14 @@ const SettlementPage = () => {
     settlementWeighingEnabledBySellerId,
     settlementWeighingMergeIntoFreightBySellerId,
     gunniesAmount,
+    vehicleExpenseRows,
+    vehicleExpenseOriginalByRowId,
+    draftMainPattiNo,
+    draftPattiNoBySellerId,
+    existingPattiIdBySellerId,
+    addVoucherSellerId,
+    addVoucherRows,
+    invoiceNameSearch,
   ]);
   settlementWorkspaceSnapshotRef.current = settlementWorkspaceSnapshot;
 
@@ -2342,11 +2361,14 @@ const SettlementPage = () => {
     ) => {
     try {
       settlementDirtyBaselineRef.current = null;
+      settlementWorkspaceHydratingRef.current = true;
       setDraftMainPattiNo('');
       setDraftPattiNoBySellerId({});
       const dto = await settlementApi.getPattiById(id);
       if (!dto) {
         toast.error('Patti not found');
+        settlementWorkspaceHydratingRef.current = false;
+        setSettlementWorkspaceHydrateEpoch(e => e + 1);
         return;
       }
       setSettlementFormMode(opts?.formContext ?? (dto.inProgress ? 'in-progress' : 'saved'));
@@ -2551,9 +2573,13 @@ const SettlementPage = () => {
           lots: [],
         }
       );
+      settlementWorkspaceHydratingRef.current = false;
+      setSettlementWorkspaceHydrateEpoch(e => e + 1);
       setPattiOriginalHydrationNonce(n => n + 1);
     } catch {
       toast.error('Failed to load patti');
+      settlementWorkspaceHydratingRef.current = false;
+      setSettlementWorkspaceHydrateEpoch(e => e + 1);
     }
   },
   [sellers, savedPattis, commodityList, fullCommodityConfigs, getLotDivisor]);
@@ -2732,11 +2758,18 @@ const SettlementPage = () => {
       settlementDirtyBaselineRef.current = null;
       return;
     }
-    if (settlementDirtyBaselineRef.current == null && settlementWorkspaceSnapshot) {
-      settlementDirtyBaselineRef.current = settlementWorkspaceSnapshot;
+    if (settlementWorkspaceHydratingRef.current) return;
+    if (settlementDirtyBaselineRef.current != null) return;
+    if (!settlementWorkspaceSnapshot) return;
+    /** Defer so later workspace effects (seller form seeding, etc.) run first — avoids a stale baseline string. */
+    const t = window.setTimeout(() => {
+      if (settlementWorkspaceHydratingRef.current) return;
+      if (settlementDirtyBaselineRef.current != null) return;
+      settlementDirtyBaselineRef.current = settlementWorkspaceSnapshotRef.current;
       setSettlementDirtyNonce(n => n + 1);
-    }
-  }, [selectedSeller, pattiData, settlementWorkspaceSnapshot]);
+    }, 0);
+    return () => window.clearTimeout(t);
+  }, [selectedSeller, pattiData, settlementWorkspaceSnapshot, settlementWorkspaceHydrateEpoch]);
 
   /** After save, deduction/gross effects may update `pattiData` on the next frame — defer baseline sync so leave/save prompts do not flicker or stay stuck “dirty”. */
   useEffect(() => {
@@ -3285,6 +3318,7 @@ const SettlementPage = () => {
   ]);
 
   const clearActiveSettlementScreen = useCallback(() => {
+    settlementWorkspaceHydratingRef.current = false;
     setSelectedSeller(null);
     setSelectedArrivalSellerIds([]);
     setPattiData(null);
@@ -3304,14 +3338,12 @@ const SettlementPage = () => {
   const isSettlementDirty = useMemo(() => {
     if (!selectedSeller || !pattiData || showPrint) return false;
     if (isOriginalReferenceMode) return false;
-    if (!isLatestEditUnlocked) return false;
     if (!settlementDirtyBaselineRef.current) return false;
     return settlementWorkspaceSnapshot !== settlementDirtyBaselineRef.current;
   }, [
     selectedSeller,
     pattiData,
     showPrint,
-    isLatestEditUnlocked,
     isOriginalReferenceMode,
     settlementWorkspaceSnapshot,
     settlementDirtyNonce,
@@ -3933,6 +3965,7 @@ const SettlementPage = () => {
 
   useEffect(() => {
     if (!selectedSeller || !pattiData) return;
+    if (isSettlementFormReadOnly) return;
     setSellerFormById(prev => {
       let changed = false;
       const next = { ...prev };
@@ -3966,7 +3999,7 @@ const SettlementPage = () => {
       }
       return changed ? next : prev;
     });
-  }, [arrivalSellersForPatti, selectedSeller, pattiData]);
+  }, [arrivalSellersForPatti, selectedSeller, pattiData, isSettlementFormReadOnly]);
 
   /**
    * Pull unloading / weighing (same slab + per-bag split as Quick Adjustment), freight by weight share, cash advance from API.
@@ -4097,6 +4130,7 @@ const SettlementPage = () => {
   /** Main patti deduction lines mirror primary seller expenses + weighing toggles. */
   useEffect(() => {
     if (!selectedSeller || !pattiData) return;
+    if (isSettlementFormReadOnly) return;
     const exp = sellerExpensesById[selectedSeller.sellerId] ?? defaultSellerExpenses();
     const deds = buildDeductionItemsFromSellerExpenses(
       exp,
@@ -4119,11 +4153,13 @@ const SettlementPage = () => {
     settlementWeighingEnabledBySellerId,
     isWeighingEnabledForSeller,
     isWeighingMergedIntoFreight,
+    isSettlementFormReadOnly,
   ]);
 
   /** Keep main patti rate clusters / gross in sync with lot row edits (primary seller only). */
   useEffect(() => {
     if (!selectedSeller) return;
+    if (isSettlementFormReadOnly) return;
     const hasApiLots = (selectedSeller.lots?.length ?? 0) > 0;
     const hasExtras = (extraBidLotsBySellerId[selectedSeller.sellerId]?.length ?? 0) > 0;
     if (!hasApiLots && !hasExtras) return;
@@ -4139,7 +4175,14 @@ const SettlementPage = () => {
       if (sameGross && sameClusters) return prev;
       return { ...prev, rateClusters: clusters, grossAmount: gross, netPayable: gross - prev.totalDeductions };
     });
-  }, [selectedSeller, removedLotsBySellerId, lotSalesOverridesBySellerId, extraBidLotsBySellerId, getLotDivisor]);
+  }, [
+    selectedSeller,
+    removedLotsBySellerId,
+    lotSalesOverridesBySellerId,
+    extraBidLotsBySellerId,
+    getLotDivisor,
+    isSettlementFormReadOnly,
+  ]);
 
   const runSellerContactSearch = useCallback(async (sellerId: string, query: string) => {
     setSellerContactSearchLoading(prev => ({ ...prev, [sellerId]: true }));

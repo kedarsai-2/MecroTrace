@@ -2,6 +2,13 @@ import { useRef, useState } from 'react';
 import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
 import { roundMoney2 } from '@/utils/billingMoney';
+import {
+  allowOnlyNumbers,
+  applyNumericPaste,
+  filterSignedDecimalString,
+  filterUnsignedIntegerString,
+  numericGuardModeForBillingMoney,
+} from '@/utils/numericInputGuards';
 
 type BillingMoneyInputProps = {
   value: number;
@@ -17,6 +24,8 @@ type BillingMoneyInputProps = {
   min?: number;
   /** If invalid/empty on blur, commit 0 instead of reverting to previous value. */
   allowEmptyZero?: boolean;
+  /** Whole numbers only (e.g. bag qty); still uses money rounding on blur when not integer-focused. */
+  integerOnly?: boolean;
 };
 
 /**
@@ -52,36 +61,49 @@ export function BillingMoneyInput({
   title,
   min,
   allowEmptyZero,
+  integerOnly = false,
 }: BillingMoneyInputProps) {
   const [draft, setDraft] = useState<string | null>(null);
   /** True after any input/paste while focused; false on focus until user edits. */
   const editedSinceFocusRef = useRef(false);
 
   const display = draft !== null ? draft : roundMoney2(value).toFixed(2);
+  const guardMode = numericGuardModeForBillingMoney(integerOnly);
+
+  const pushDraft = (next: string) => {
+    editedSinceFocusRef.current = true;
+    setDraft(next);
+    if (commitMode === 'live') {
+      const live = parseDraftToNumber(next, min);
+      if (live !== null) {
+        onCommit(live);
+      }
+    }
+  };
 
   return (
     <Input
       data-billing-money
       type="text"
-      inputMode="decimal"
+      inputMode={integerOnly ? 'numeric' : 'decimal'}
       disabled={disabled}
       placeholder={placeholder}
       title={title}
       value={display}
+      onKeyDown={e => allowOnlyNumbers(e, guardMode)}
+      onPaste={e =>
+        applyNumericPaste(e, guardMode, next => {
+          pushDraft(next);
+        })
+      }
       onFocus={() => {
         editedSinceFocusRef.current = false;
         setDraft('');
       }}
       onChange={e => {
-        editedSinceFocusRef.current = true;
-        const next = e.target.value;
-        setDraft(next);
-        if (commitMode === 'live') {
-          const live = parseDraftToNumber(next, min);
-          if (live !== null) {
-            onCommit(live);
-          }
-        }
+        const raw = e.target.value;
+        const next = integerOnly ? filterUnsignedIntegerString(raw) : filterSignedDecimalString(raw);
+        pushDraft(next);
       }}
       onBlur={() => {
         const raw = draft ?? '';

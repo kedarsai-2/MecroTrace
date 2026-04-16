@@ -12,6 +12,11 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { cn } from "@/lib/utils";
+
+/** Shared Mercotrace-style actions for unsaved-changes dialog (Close / Discard / Save). */
+const UNSAVED_GUARD_BTN =
+  "inline-flex h-10 min-h-10 shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-md px-4 py-2 text-sm font-medium !text-[#FFFFFF] !border-[rgba(255,255,255,0.25)] !bg-[linear-gradient(90deg,#4B7CF3_0%,#5B8CFF_45%,#7B61FF_100%)] shadow-[0_4px_18px_rgba(91,140,255,0.85)] transition-[box-shadow,opacity] hover:!text-[#FFFFFF] hover:!border-[rgba(255,255,255,0.25)] hover:!bg-[linear-gradient(90deg,#4B7CF3_0%,#5B8CFF_45%,#7B61FF_100%)] hover:shadow-[0_6px_24px_rgba(123,97,255,0.9)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/35 focus-visible:ring-offset-0 disabled:pointer-events-none disabled:opacity-50 [&_svg]:size-4 [&_svg]:shrink-0 [&_svg]:text-[#FFFFFF]";
 
 type UseUnsavedChangesGuardOptions = {
   when: boolean;
@@ -19,6 +24,8 @@ type UseUnsavedChangesGuardOptions = {
   description?: string;
   continueLabel?: string;
   stayLabel?: string;
+  /** Stays on the page and keeps the dialog open intent cancelled (reset route blocker / abort leave). */
+  closeLabel?: string;
   /** Async callback invoked before proceeding. Return false to abort navigation. */
   onBeforeContinue?: () => Promise<boolean>;
 };
@@ -34,6 +41,7 @@ export default function useUnsavedChangesGuard(options: UseUnsavedChangesGuardOp
     description = DEFAULT_DESCRIPTION,
     continueLabel = "Yes",
     stayLabel = "Discard",
+    closeLabel = "Close",
     onBeforeContinue,
   } = options;
 
@@ -124,13 +132,24 @@ export default function useUnsavedChangesGuard(options: UseUnsavedChangesGuardOp
             <AlertDialogTitle>{title}</AlertDialogTitle>
             <AlertDialogDescription>{description}</AlertDialogDescription>
           </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel onClick={handleDiscard} disabled={saving}>
-              {stayLabel}
+          <AlertDialogFooter className="gap-2 sm:flex-wrap sm:justify-end">
+            <AlertDialogCancel
+              type="button"
+              disabled={saving}
+              className={cn(UNSAVED_GUARD_BTN, "!mt-0")}
+              onClick={e => {
+                e.preventDefault();
+                handleStay();
+              }}
+            >
+              {closeLabel}
             </AlertDialogCancel>
+            <button type="button" disabled={saving} className={UNSAVED_GUARD_BTN} onClick={handleDiscard}>
+              {stayLabel}
+            </button>
             <AlertDialogAction
               disabled={saving}
-              className="gap-2"
+              className={cn(UNSAVED_GUARD_BTN, "gap-2")}
               onClick={e => {
                 e.preventDefault();
                 void handleContinue();
@@ -149,7 +168,19 @@ export default function useUnsavedChangesGuard(options: UseUnsavedChangesGuardOp
         </AlertDialogContent>
       </AlertDialog>
     );
-  }, [isOpen, handleOpenChange, title, description, stayLabel, continueLabel, handleDiscard, handleContinue, saving]);
+  }, [
+    isOpen,
+    handleOpenChange,
+    title,
+    description,
+    closeLabel,
+    stayLabel,
+    continueLabel,
+    handleStay,
+    handleDiscard,
+    handleContinue,
+    saving,
+  ]);
 
   return { confirmIfDirty, UnsavedChangesDialog };
 }

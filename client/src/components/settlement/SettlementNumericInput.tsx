@@ -1,6 +1,13 @@
 import { useRef, useState } from 'react';
 import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
+import {
+  allowOnlyNumbers,
+  applyNumericPaste,
+  filterUnsignedDecimalString,
+  filterUnsignedIntegerString,
+  numericGuardModeForSettlement,
+} from '@/utils/numericInputGuards';
 
 const DEFAULT_MAX = 10_000_000;
 
@@ -84,6 +91,19 @@ export function SettlementNumericInput({
 
   const blurred = formatBlurred(value, fractionDigits, emptyWhenZero);
   const display = draft !== null ? draft : blurred;
+  const guardMode = numericGuardModeForSettlement(integerOnly);
+
+  const pushDraft = (next: string) => {
+    editedSinceFocusRef.current = true;
+    setDraft(next);
+    onRawChange?.(next);
+    if (commitMode === 'live') {
+      const live = parseDraft(next, integerOnly, min, max);
+      if (live !== null) {
+        onCommit(live);
+      }
+    }
+  };
 
   return (
     <Input
@@ -95,22 +115,21 @@ export function SettlementNumericInput({
       placeholder={placeholder}
       aria-label={ariaLabel}
       value={display}
+      onKeyDown={e => allowOnlyNumbers(e, guardMode)}
+      onPaste={e =>
+        applyNumericPaste(e, guardMode, next => {
+          pushDraft(next);
+        })
+      }
       onFocus={() => {
         editedSinceFocusRef.current = false;
         setDraft('');
         onRawChange?.('');
       }}
       onChange={e => {
-        editedSinceFocusRef.current = true;
-        const next = e.target.value;
-        setDraft(next);
-        onRawChange?.(next);
-        if (commitMode === 'live') {
-          const live = parseDraft(next, integerOnly, min, max);
-          if (live !== null) {
-            onCommit(live);
-          }
-        }
+        const raw = e.target.value;
+        const next = integerOnly ? filterUnsignedIntegerString(raw) : filterUnsignedDecimalString(raw);
+        pushDraft(next);
       }}
       onBlur={() => {
         const raw = draft ?? '';

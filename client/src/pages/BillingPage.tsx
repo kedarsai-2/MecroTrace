@@ -887,6 +887,8 @@ const BillingPage = () => {
   const [pendingDeleteTarget, setPendingDeleteTarget] = useState<{ commIdx: number; itemIdx: number } | null>(null);
   const billDirtyBaselineRef = useRef<string | null>(null);
   const billDirtyIdentityRef = useRef<string | null>(null);
+  /** Assigned after `useUnsavedChangesGuard` so earlier handlers (shortcuts, tab clicks) can await the same prompt. */
+  const billingTabConfirmIfDirtyRef = useRef<() => Promise<boolean>>(() => Promise.resolve(true));
 
   useEffect(() => {
     commodityApi.list().then(setCommodities);
@@ -1064,9 +1066,24 @@ const BillingPage = () => {
       if (k === 'x' || k === 'y' || k === 'z' || k === 'e' || k === 's' || k === 'p' || k === 'n' || k === 'v') {
         e.preventDefault();
       }
-      if (k === 'x') setBillingMainTab('create');
-      if (k === 'y') setBillingMainTab('progress');
-      if (k === 'z') setBillingMainTab('saved');
+      if (k === 'x') {
+        void (async () => {
+          if (!(await billingTabConfirmIfDirtyRef.current())) return;
+          setBillingMainTab('create');
+        })();
+      }
+      if (k === 'y') {
+        void (async () => {
+          if (!(await billingTabConfirmIfDirtyRef.current())) return;
+          setBillingMainTab('progress');
+        })();
+      }
+      if (k === 'z') {
+        void (async () => {
+          if (!(await billingTabConfirmIfDirtyRef.current())) return;
+          setBillingMainTab('saved');
+        })();
+      }
       if (k === 'l') {
         e.preventDefault();
         if (billingMainTab === 'create' && bill) {
@@ -1538,6 +1555,7 @@ const BillingPage = () => {
   const serializeBillForDirty = useCallback((b: BillData): string => {
     return JSON.stringify({
       billId: b.billId,
+      billNumber: b.billNumber,
       buyerName: b.buyerName,
       buyerMark: b.buyerMark,
       buyerContactId: b.buyerContactId,
@@ -2771,10 +2789,11 @@ const BillingPage = () => {
 
   const isBillingDirty = useMemo(() => {
     if (!bill || showPrint) return false;
-    if (isBackendBillId(bill.billId)) return false;
     if (!billDirtyBaselineRef.current) return false;
-    return serializeBillForDirty(bill) !== billDirtyBaselineRef.current;
-  }, [bill, showPrint, serializeBillForDirty]);
+    if (serializeBillForDirty(bill) === billDirtyBaselineRef.current) return false;
+    if (isBackendBillId(bill.billId) && editLocked) return false;
+    return true;
+  }, [bill, showPrint, serializeBillForDirty, editLocked]);
   const handleBillingPartialSave = async (): Promise<boolean> => {
     if (!bill) return true;
     const hasItems = bill.commodityGroups.some(g => (g.items?.length ?? 0) > 0);
@@ -2798,6 +2817,14 @@ const BillingPage = () => {
     stayLabel: 'Discard',
     onBeforeContinue: handleBillingPartialSave,
   });
+  billingTabConfirmIfDirtyRef.current = confirmIfDirty;
+
+  const requestBillingMainTab = useCallback((next: BillingMainTab) => {
+    void (async () => {
+      if (!(await billingTabConfirmIfDirtyRef.current())) return;
+      setBillingMainTab(next);
+    })();
+  }, []);
 
   /** Opens print preview only — does not persist. Use Save/Update first. */
   const canPrintBill = useMemo(
@@ -3029,26 +3056,32 @@ const BillingPage = () => {
   };
 
   const handleCreateNewBill = () => {
-    setBill(null);
-    setHasSavedOnce(false);
-    setSelectedPrintVersion('latest');
-    setEditLocked(false);
-    setBillingMainTab('create');
+    void (async () => {
+      if (!(await billingTabConfirmIfDirtyRef.current())) return;
+      setBill(null);
+      setHasSavedOnce(false);
+      setSelectedPrintVersion('latest');
+      setEditLocked(false);
+      setBillingMainTab('create');
+    })();
   };
 
   const openBillFromList = (b: SalesBillDTO) => {
-    setSelectedBuyer({
-      buyerMark: b.buyerMark,
-      buyerName: b.buyerName,
-      buyerContactId: b.buyerContactId ?? null,
-      entries: [],
-      tokenAdvanceTotal: 0,
-    });
-    setBill(recalcGrandTotal(normalizeBillFromApi(b, fullConfigs, commodities) as BillData));
-    setHasSavedOnce(isBackendBillId(String(b.billId)));
-    setSelectedPrintVersion('latest');
-    setEditLocked(false);
-    setBillingMainTab('create');
+    void (async () => {
+      if (!(await billingTabConfirmIfDirtyRef.current())) return;
+      setSelectedBuyer({
+        buyerMark: b.buyerMark,
+        buyerName: b.buyerName,
+        buyerContactId: b.buyerContactId ?? null,
+        entries: [],
+        tokenAdvanceTotal: 0,
+      });
+      setBill(recalcGrandTotal(normalizeBillFromApi(b, fullConfigs, commodities) as BillData));
+      setHasSavedOnce(isBackendBillId(String(b.billId)));
+      setSelectedPrintVersion('latest');
+      setEditLocked(false);
+      setBillingMainTab('create');
+    })();
   };
 
   const tabHint = (code: string) => (isDesktop ? ` (${code})` : '');
@@ -3284,6 +3317,7 @@ const BillingPage = () => {
                 <BillingMoneyInput
                   value={Number(addBidQty) || 0}
                   min={0}
+                  integerOnly
                   onCommit={n => setAddBidQty(n > 0 ? String(roundMoney2(n)) : '')}
                   placeholder={String(addBidRemainingQty)}
                   className={cn('h-10 sm:h-9 rounded-lg text-sm', numberInputNoSpinnerClass)}
@@ -3528,17 +3562,17 @@ const BillingPage = () => {
             </div>
 
             <div className="flex gap-2 mb-3 overflow-x-auto pb-1 -mx-1 px-1 touch-pan-x" role="tablist" aria-label="Billing views">
-              <button type="button" onClick={() => setBillingMainTab('create')}
+              <button type="button" onClick={() => requestBillingMainTab('create')}
                 className={billingToggleTabBtnOnHero(billingMainTab === 'create')}>
                 <Plus className="w-4 h-4 shrink-0 hidden sm:block" />
                 <span>Create New Bill{tabHint('Alt X')}</span>
               </button>
-              <button type="button" onClick={() => setBillingMainTab('progress')}
+              <button type="button" onClick={() => requestBillingMainTab('progress')}
                 className={billingToggleTabBtnOnHero(billingMainTab === 'progress')}>
                 <Clock className="w-4 h-4 shrink-0 hidden sm:block" />
                 <span>Bill In Progress{tabHint('Alt Y')}</span>
               </button>
-              <button type="button" onClick={() => setBillingMainTab('saved')}
+              <button type="button" onClick={() => requestBillingMainTab('saved')}
                 className={billingToggleTabBtnOnHero(billingMainTab === 'saved')}>
                 <FileText className="w-4 h-4 shrink-0 hidden sm:block" />
                 <span>Bills Saved{tabHint('Alt Z')}</span>
@@ -3569,13 +3603,13 @@ const BillingPage = () => {
 
           <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:gap-4 mb-4">
             <div className="flex items-center gap-2 w-full lg:w-auto overflow-x-auto" role="tablist" aria-label="Billing views">
-              <button type="button" onClick={() => setBillingMainTab('create')} className={billingToggleTabBtn(billingMainTab === 'create')}>
+              <button type="button" onClick={() => requestBillingMainTab('create')} className={billingToggleTabBtn(billingMainTab === 'create')}>
                 <Plus className="w-4 h-4" /> Create New Bill{tabHint('Alt X')}
               </button>
-              <button type="button" onClick={() => setBillingMainTab('progress')} className={billingToggleTabBtn(billingMainTab === 'progress')}>
+              <button type="button" onClick={() => requestBillingMainTab('progress')} className={billingToggleTabBtn(billingMainTab === 'progress')}>
                 <Clock className="w-4 h-4" /> Bill In Progress{tabHint('Alt Y')}
               </button>
-              <button type="button" onClick={() => setBillingMainTab('saved')} className={billingToggleTabBtn(billingMainTab === 'saved')}>
+              <button type="button" onClick={() => requestBillingMainTab('saved')} className={billingToggleTabBtn(billingMainTab === 'saved')}>
                 <FileText className="w-4 h-4" /> Bills Saved{tabHint('Alt Z')}
               </button>
             </div>
