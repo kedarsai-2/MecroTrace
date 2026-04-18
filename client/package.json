@@ -13,6 +13,7 @@
     "test:watch": "vitest",
     "cap:add": "cap add",
     "cap:sync": "cap sync",
+    "cap:assets": "npx @capacitor/assets generate",
     "cap:copy": "cap copy",
     "cap:update": "cap update",
     "cap:open": "cap open",
@@ -98,6 +99,7 @@
     "zod": "^3.25.76"
   },
   "devDependencies": {
+    "@capacitor/assets": "^3.0.5",
     "@eslint/js": "^9.32.0",
     "@tailwindcss/typography": "^0.5.16",
     "@testing-library/jest-dom": "^6.6.0",

@@ -221,27 +221,52 @@ function ArrivalSummaryVehicleSellerQty({
   vehicleNumber,
   primarySellerName,
   totalBags,
-}: Pick<ArrivalSummary, 'vehicleNumber' | 'primarySellerName' | 'totalBags'>) {
+  layout = 'inline',
+}: Pick<ArrivalSummary, 'vehicleNumber' | 'primarySellerName' | 'totalBags'> & {
+  layout?: 'inline' | 'stack';
+}) {
   const seller = primarySellerName ?? '-';
   const qty = totalBags ?? 0;
+  const vehicle = vehicleNumber?.trim() ? vehicleNumber : '—';
+
+  if (layout === 'stack') {
+    return (
+      <div className="flex min-w-0 flex-col gap-1 text-left">
+        <span
+          className={cn(ARRIVAL_SUMMARY_PRIMARY_PILL_CLASS, 'max-w-full self-start truncate')}
+          title={vehicleNumber?.trim() ? vehicleNumber : undefined}
+        >
+          {vehicle}
+        </span>
+        <span className="truncate text-sm font-semibold text-foreground" title={seller}>
+          {seller}
+        </span>
+        <span className="text-xs text-muted-foreground">
+          Bags{' '}
+          <span className="font-semibold tabular-nums text-foreground">{qty}</span>
+        </span>
+      </div>
+    );
+  }
+
   return (
-    <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-1 min-w-0 max-w-full">
+    <span className="inline-flex max-w-full min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
       <span
         className={cn(ARRIVAL_SUMMARY_PRIMARY_PILL_CLASS, 'max-w-[min(100%,10rem)] truncate')}
         title={vehicleNumber?.trim() ? vehicleNumber : undefined}
       >
-        {vehicleNumber?.trim() ? vehicleNumber : '—'}
+        {vehicle}
       </span>
-      <span className="text-muted-foreground text-xs shrink-0" aria-hidden>
+      <span className="shrink-0 text-xs text-muted-foreground" aria-hidden>
         |
       </span>
       <span
-        className="min-w-0 max-w-[min(100%,14rem)] sm:max-w-[min(100%,18rem)] truncate text-foreground text-xs font-medium"
+        className="max-w-[min(100%,14rem)] min-w-0 truncate text-xs font-medium text-foreground sm:max-w-[min(100%,18rem)]"
         title={seller}
       >
         {seller}
       </span>
-      <span className="text-muted-foreground text-xs shrink-0" aria-hidden>
+      <span className="shrink-0 text-xs text-muted-foreground" aria-hidden>
         |
       </span>
       <span className={ARRIVAL_SUMMARY_PRIMARY_PILL_CLASS}>{qty}</span>
@@ -980,12 +1005,69 @@ const ArrivalsPage = () => {
     lotsScrollRefs.current[sellerId] = el;
   }, []);
 
+  /** Mobile new-arrival: horizontal pages of 3 list-style lots + dot = active page (billing-style). */
+  const MOBILE_ARRIVAL_LOTS_PER_PAGE = 3;
+  const mobileArrivalLotsCarouselRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  /** Per seller: index of visible page (0 = lots 0–2, 1 = lots 3–5, …). */
+  const [activeArrivalLotSlideBySeller, setActiveArrivalLotSlideBySeller] = useState<Record<string, number>>({});
+
+  const handleArrivalLotsCarouselScroll = useCallback((sellerId: string, lotCount: number) => {
+    const el = mobileArrivalLotsCarouselRefs.current[sellerId];
+    if (!el || lotCount <= 0) return;
+    const pageCount = Math.max(1, Math.ceil(lotCount / MOBILE_ARRIVAL_LOTS_PER_PAGE));
+    const w = el.clientWidth;
+    if (w <= 0) return;
+    if (pageCount <= 1) {
+      setActiveArrivalLotSlideBySeller(prev => (prev[sellerId] === 0 ? prev : { ...prev, [sellerId]: 0 }));
+      return;
+    }
+    const pageIdx = Math.max(0, Math.min(pageCount - 1, Math.round(el.scrollLeft / w)));
+    setActiveArrivalLotSlideBySeller(prev => (prev[sellerId] === pageIdx ? prev : { ...prev, [sellerId]: pageIdx }));
+  }, []);
+
+  useEffect(() => {
+    if (!addLotForm?.editingLotId || !addLotForm.sellerId) return;
+    const sellerId = addLotForm.sellerId;
+    const sellerRow = sellers.find(s => s.seller_vehicle_id === sellerId);
+    if (!sellerRow) return;
+    const lotIdx = sellerRow.lots.findIndex(l => String(l.lot_id) === String(addLotForm.editingLotId));
+    if (lotIdx < 0) return;
+    const el = mobileArrivalLotsCarouselRefs.current[sellerId];
+    if (!el) return;
+    const w = el.clientWidth;
+    if (w <= 0) return;
+    const pageIdx = Math.floor(lotIdx / MOBILE_ARRIVAL_LOTS_PER_PAGE);
+    requestAnimationFrame(() => {
+      el.scrollTo({ left: pageIdx * w, behavior: 'smooth' });
+      setActiveArrivalLotSlideBySeller(prev => ({ ...prev, [sellerId]: pageIdx }));
+    });
+  }, [addLotForm?.editingLotId, addLotForm?.sellerId, sellers]);
+
   const scrollSellerLotsToLatest = useCallback((sellerId: string) => {
     const tryScroll = (attempt: number) => {
       const el = lotsScrollRefs.current[sellerId];
       if (!el) {
         if (attempt < 5) {
           requestAnimationFrame(() => tryScroll(attempt + 1));
+        }
+        return;
+      }
+
+      const mobileCarousel = el.querySelector('[data-arrival-mobile-lots-carousel="1"]') as HTMLDivElement | null;
+      if (mobileCarousel) {
+        requestAnimationFrame(() => {
+          const cw = mobileCarousel.clientWidth;
+          const maxLeft = Math.max(0, mobileCarousel.scrollWidth - cw);
+          mobileCarousel.scrollTo({ left: maxLeft, behavior: 'smooth' });
+        });
+        el.scrollTop = el.scrollHeight;
+        el.scrollIntoView({ block: 'nearest', behavior: 'auto' });
+        const panel = newArrivalPanelScrollRef.current;
+        if (panel && panel.contains(el)) {
+          const panelRect = panel.getBoundingClientRect();
+          const elRect = el.getBoundingClientRect();
+          const nextTop = panel.scrollTop + (elRect.top - panelRect.top) - 12;
+          panel.scrollTo({ top: Math.max(0, nextTop), behavior: 'auto' });
         }
         return;
       }
@@ -3512,19 +3594,19 @@ const ArrivalsPage = () => {
               />
             </div>
             {summaryMode === 'arrivals' && (
-              <div className="flex gap-2 overflow-x-auto pb-1 -mx-1 px-1 text-[11px]">
+              <div className="-mx-1 flex flex-nowrap items-center gap-2 overflow-x-auto px-1 pb-1 text-[11px] [-webkit-overflow-scrolling:touch]">
                 {SUMMARY_STATUS_FILTERS.map(s => (
                   <button
                     key={s}
                     type="button"
                     onClick={() => setStatusFilter(s)}
                     className={cn(
-                      'flex-shrink-0 px-4 py-1 rounded-full font-medium transition-colors',
+                      'inline-flex min-h-[44px] shrink-0 items-center rounded-full px-4 py-2 font-medium transition-colors',
                       statusFilter === s
                         ? s === 'PARTIALLY_COMPLETED'
                           ? 'bg-orange-500 text-white shadow-sm'
                           : 'bg-[#6075FF] text-white shadow-sm'
-                        : 'bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400 hover:bg-zinc-200 dark:hover:bg-zinc-700',
+                        : 'bg-zinc-100 text-zinc-500 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-700',
                     )}
                   >
                     {s === 'ALL' ? 'All' : statusLabel(s)} ({statusCounts[s]})
@@ -3533,7 +3615,7 @@ const ArrivalsPage = () => {
               </div>
             )}
           </div>
-          <div className="px-4 space-y-2.5">
+          <div className="px-4 space-y-2.5 md:space-y-1.5 md:px-6">
             {activeArrivalsLoading ? (
               <div className="glass-card p-8 rounded-2xl text-center">
                 <p className="text-muted-foreground">Loading arrivals…</p>
@@ -3616,37 +3698,159 @@ const ArrivalsPage = () => {
               return filteredArrivals.map((a, i) => {
                 const status = getArrivalStatus(a);
                 const isExpanded = sameArrivalVehicleId(expandedDetail?.vehicleId, a.vehicleId);
+                const godownLabel = a.godown?.trim();
+                const showMobileArrivalActions = can('Arrivals', 'Edit') || can('Arrivals', 'Delete');
                 return (
                   <motion.div key={a.vehicleId + '-' + i} initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: i * 0.04 }}>
-                    <div className="glass-card rounded-2xl overflow-x-hidden overflow-y-visible max-w-full">
-                      <div className="w-full p-3.5 min-w-0">
-                        <button
-                          type="button"
-                          onClick={() => loadExpandedDetail(a.vehicleId)}
-                          className="flex w-full min-w-0 flex-1 items-start gap-3 text-left touch-manipulation"
-                        >
-                          <div className="w-10 h-10 rounded-xl bg-[#6075FF] flex items-center justify-center shadow-sm shadow-[#6075FF]/20 flex-shrink-0">
-                            <Truck className="w-4 h-4 text-white" />
-                          </div>
-                          <div className="min-w-0 flex-1">
-                            <div className="flex flex-wrap items-center gap-1.5 gap-y-1 min-w-0">
-                              <ArrivalSummaryVehicleSellerQty
-                                vehicleNumber={a.vehicleNumber}
-                                primarySellerName={a.primarySellerName}
-                                totalBags={a.totalBags}
-                              />
-                              <ArrivalStatusBadge status={status} />
+                    <div className="glass-card max-w-full overflow-x-hidden overflow-y-visible rounded-2xl md:rounded-xl md:shadow-sm md:max-w-4xl md:mx-auto">
+                      <button
+                        type="button"
+                        onClick={() => loadExpandedDetail(a.vehicleId)}
+                        className="flex w-full min-w-0 touch-manipulation items-start gap-3 p-3.5 text-left md:items-center md:gap-2 md:p-2.5 md:pr-2"
+                      >
+                        {/* Phone: stacked card (unchanged below md) */}
+                        <div className="min-w-0 flex-1 space-y-2 md:hidden">
+                          <ArrivalSummaryVehicleSellerQty
+                            layout="stack"
+                            vehicleNumber={a.vehicleNumber}
+                            primarySellerName={a.primarySellerName}
+                            totalBags={a.totalBags}
+                          />
+                          <ArrivalStatusBadge status={status} size="md" />
+                          <div className="grid grid-cols-2 gap-x-3 gap-y-2 border-t border-border/25 pt-2">
+                            <div>
+                              <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">Sellers</p>
+                              <p className="text-sm font-semibold tabular-nums text-foreground">{a.sellerCount}</p>
                             </div>
-                            <p className="text-xs text-muted-foreground mt-1 break-words">{a.sellerCount} seller(s) · {a.lotCount} lot(s) · {a.netWeight}kg · Bids: {a.bidsCount ?? 0} · Weighed: {a.weighedCount ?? 0}</p>
+                            <div>
+                              <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">Lots</p>
+                              <p className="text-sm font-semibold tabular-nums text-foreground">{a.lotCount}</p>
+                            </div>
+                            <div className={godownLabel ? undefined : 'col-span-2'}>
+                              <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">Net weight</p>
+                              <p className="text-sm font-semibold tabular-nums text-foreground">{a.netWeight} kg</p>
+                            </div>
+                            {godownLabel ? (
+                              <div className="min-w-0">
+                                <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">From</p>
+                                <p className="flex min-w-0 items-center gap-1.5 text-sm font-medium text-foreground">
+                                  <MapPin className="h-3.5 w-3.5 shrink-0 text-[#6075FF]" aria-hidden />
+                                  <span className="truncate" title={godownLabel}>
+                                    {godownLabel}
+                                  </span>
+                                </p>
+                              </div>
+                            ) : null}
                           </div>
-                          <div className="flex flex-col items-end gap-1 shrink-0 pt-0.5">
-                            <span className="text-xs text-muted-foreground whitespace-nowrap">{new Date(a.arrivalDatetime).toLocaleDateString()}</span>
-                            <span className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg bg-muted/30" aria-hidden>
-                              {isExpanded ? <ChevronUp className="h-5 w-5 text-muted-foreground" /> : <ChevronDown className="h-5 w-5 text-muted-foreground" />}
+                          <div className="hidden min-[380px]:flex flex-wrap items-center justify-between gap-2 border-t border-border/20 pt-2 text-xs text-muted-foreground">
+                            <span>
+                              Bids: <span className="font-medium text-foreground">{a.bidsCount ?? 0}</span>
+                            </span>
+                            <span>
+                              Weighed: <span className="font-medium text-foreground">{a.weighedCount ?? 0}</span>
                             </span>
                           </div>
-                        </button>
-                      </div>
+                        </div>
+                        <div className="flex shrink-0 flex-col items-end gap-1 self-start pt-0.5 md:hidden">
+                          <span className="whitespace-nowrap text-xs text-muted-foreground">
+                            {new Date(a.arrivalDatetime).toLocaleDateString()}
+                          </span>
+                          <span
+                            className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg bg-muted/30"
+                            aria-hidden
+                          >
+                            {isExpanded ? (
+                              <ChevronUp className="h-5 w-5 text-muted-foreground" />
+                            ) : (
+                              <ChevronDown className="h-5 w-5 text-muted-foreground" />
+                            )}
+                          </span>
+                        </div>
+
+                        {/* Tablet (md–lg): single dense row — hidden at lg+ where desktop table is used */}
+                        <div className="hidden w-full min-w-0 items-center gap-2 md:flex">
+                          <div className="min-w-0 flex-1 overflow-x-auto [-webkit-overflow-scrolling:touch]">
+                            <ArrivalSummaryVehicleSellerQty
+                              layout="inline"
+                              vehicleNumber={a.vehicleNumber}
+                              primarySellerName={a.primarySellerName}
+                              totalBags={a.totalBags}
+                            />
+                          </div>
+                          <div className="flex min-w-0 shrink-0 items-center gap-1.5 sm:gap-2">
+                            <span
+                              className="inline-flex max-w-[6.5rem] shrink-0 origin-left scale-[0.92] sm:max-w-[7.5rem] sm:scale-100"
+                              title={status === 'PARTIALLY_COMPLETED' ? 'Partially completed' : undefined}
+                            >
+                              <ArrivalStatusBadge status={status} size="sm" />
+                            </span>
+                            <span className="text-[10px] tabular-nums text-muted-foreground whitespace-nowrap">
+                              S{a.sellerCount}·L{a.lotCount}·{a.netWeight}
+                              <span className="text-muted-foreground/80">kg</span>
+                            </span>
+                            {godownLabel ? (
+                              <span
+                                className="hidden min-w-0 max-w-[6rem] truncate text-[10px] text-muted-foreground min-[800px]:inline md:max-w-[7rem]"
+                                title={godownLabel}
+                              >
+                                <MapPin className="mr-0.5 inline h-3 w-3 shrink-0 text-[#6075FF]" aria-hidden />
+                                {godownLabel}
+                              </span>
+                            ) : null}
+                            <span
+                              className="text-[10px] tabular-nums text-muted-foreground whitespace-nowrap"
+                              title="Bids / Weighed lots"
+                            >
+                              B{a.bidsCount ?? 0}/{a.weighedCount ?? 0}
+                            </span>
+                            <span className="text-[10px] tabular-nums text-muted-foreground whitespace-nowrap">
+                              {new Date(a.arrivalDatetime).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
+                            </span>
+                            <span
+                              className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-muted/30"
+                              aria-hidden
+                            >
+                              {isExpanded ? (
+                                <ChevronUp className="h-4 w-4 text-muted-foreground" />
+                              ) : (
+                                <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                              )}
+                            </span>
+                          </div>
+                        </div>
+                      </button>
+                      {showMobileArrivalActions && !isExpanded && (
+                        <div className="flex w-full gap-2 border-t border-border/30 px-3 py-2.5 md:px-2.5 md:py-2">
+                          {can('Arrivals', 'Edit') && (
+                            <button
+                              type="button"
+                              onClick={e => {
+                                e.stopPropagation();
+                                void handleEditArrival(a);
+                              }}
+                              className="inline-flex min-h-[44px] min-w-0 flex-1 touch-manipulation items-center justify-center gap-1.5 rounded-xl bg-muted/50 px-2 text-xs font-semibold text-foreground"
+                            >
+                              <Pencil className="h-4 w-4 shrink-0" /> Edit
+                            </button>
+                          )}
+                          {can('Arrivals', 'Delete') && (
+                            <button
+                              type="button"
+                              onClick={e => {
+                                e.stopPropagation();
+                                setPendingDelete({
+                                  kind: 'arrival',
+                                  vehicleId: a.vehicleId,
+                                  label: a.vehicleNumber,
+                                });
+                              }}
+                              className="inline-flex min-h-[44px] min-w-0 flex-1 touch-manipulation items-center justify-center gap-1.5 rounded-xl bg-red-50 px-2 text-xs font-semibold text-red-600 dark:bg-red-950/20"
+                            >
+                              <Trash2 className="h-4 w-4 shrink-0" /> Delete
+                            </button>
+                          )}
+                        </div>
+                      )}
                       <AnimatePresence>
                         {isExpanded && (
                           <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="overflow-hidden border-t border-border/30">
@@ -3660,32 +3864,38 @@ const ArrivalsPage = () => {
                                     sellers={mapSellerInfoRows(expandedDetail.sellers)}
                                     hidePrint
                                   />
-                                  <div className="flex gap-2 pt-1">
-                                    {can('Arrivals', 'Edit') && (
-                                      <button
-                                        type="button"
-                                        onClick={() => handleEditArrival({ vehicleId: expandedDetail.vehicleId })}
-                                        className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl bg-muted/50 text-xs font-semibold"
-                                      >
-                                        <Pencil className="w-3.5 h-3.5" /> Edit
-                                      </button>
-                                    )}
-                                    {can('Arrivals', 'Delete') && (
-                                      <button
-                                        type="button"
-                                        onClick={() =>
-                                          setPendingDelete({
-                                            kind: 'arrival',
-                                            vehicleId: expandedDetail.vehicleId,
-                                            label: expandedDetail.vehicleNumber ?? a.vehicleNumber,
-                                          })
-                                        }
-                                        className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl bg-red-50 dark:bg-red-950/20 text-xs font-semibold text-red-600"
-                                      >
-                                        <Trash2 className="w-3.5 h-3.5" /> Delete
-                                      </button>
-                                    )}
-                                  </div>
+                                  {showMobileArrivalActions && (
+                                    <div className="flex w-full gap-2 pt-1">
+                                      {can('Arrivals', 'Edit') && (
+                                        <button
+                                          type="button"
+                                          onClick={e => {
+                                            e.stopPropagation();
+                                            void handleEditArrival({ vehicleId: expandedDetail.vehicleId });
+                                          }}
+                                          className="inline-flex min-h-[44px] min-w-0 flex-1 touch-manipulation items-center justify-center gap-1.5 rounded-xl bg-muted/50 px-2 text-xs font-semibold text-foreground"
+                                        >
+                                          <Pencil className="h-4 w-4 shrink-0" /> Edit
+                                        </button>
+                                      )}
+                                      {can('Arrivals', 'Delete') && (
+                                        <button
+                                          type="button"
+                                          onClick={e => {
+                                            e.stopPropagation();
+                                            setPendingDelete({
+                                              kind: 'arrival',
+                                              vehicleId: expandedDetail.vehicleId,
+                                              label: expandedDetail.vehicleNumber ?? a.vehicleNumber,
+                                            });
+                                          }}
+                                          className="inline-flex min-h-[44px] min-w-0 flex-1 touch-manipulation items-center justify-center gap-1.5 rounded-xl bg-red-50 px-2 text-xs font-semibold text-red-600 dark:bg-red-950/20"
+                                        >
+                                          <Trash2 className="h-4 w-4 shrink-0" /> Delete
+                                        </button>
+                                      )}
+                                    </div>
+                                  )}
                                 </>
                               ) : null}
                             </div>
@@ -3727,7 +3937,7 @@ const ArrivalsPage = () => {
                   style={{ WebkitBackdropFilter: 'blur(24px)' }}
                 >
                 <div ref={newArrivalPanelScrollRef} className="w-full max-w-[480px] md:max-w-full overflow-y-auto">
-                  <div className="bg-gradient-to-br from-blue-400 via-blue-500 to-violet-500 pt-[max(1.5rem,env(safe-area-inset-top))] pb-4 px-4 sticky top-0 z-10">
+                  <div className="bg-gradient-to-br from-blue-400 via-blue-500 to-violet-500 pt-[max(1.5rem,env(safe-area-inset-top))] pb-4 px-4 sticky top-0 z-20">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-3">
                         <button
@@ -3767,7 +3977,7 @@ const ArrivalsPage = () => {
                       <div className="flex-1 h-px bg-border/30" />
                     </div>
 
-                    <div className="glass-card rounded-2xl p-4 relative z-20 overflow-visible">
+                    <div className="glass-card rounded-2xl p-4 relative overflow-visible">
                       <label className="text-xs font-bold text-muted-foreground uppercase tracking-wider mb-2 block">Arrival Type</label>
                       <div className="flex gap-2">
                         <button onClick={() => setIsMultiSeller(true)}
@@ -4004,16 +4214,13 @@ const ArrivalsPage = () => {
                       return (
                       <motion.div key={seller.seller_vehicle_id} initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }}
                         className="glass-card rounded-2xl overflow-x-hidden overflow-y-visible max-w-full">
-                        <div className="p-3 sm:p-4 flex items-center justify-between gap-2 sm:gap-3 bg-gradient-to-r from-emerald-50 to-teal-50 dark:from-emerald-950/20 dark:to-teal-950/20 border-b border-border/30 min-w-0">
-                          <div className="flex items-center gap-2 min-w-0 flex-1 sm:min-w-[12rem]">
-                            <div className="w-9 h-9 sm:w-8 sm:h-8 rounded-lg bg-gradient-to-br from-emerald-500 to-teal-500 flex items-center justify-center shrink-0">
-                              <span className="text-white text-lg sm:text-xl font-extrabold tabular-nums leading-none">{sellerSerialLabel ?? '#'}</span>
-                            </div>
-                            <div className="min-w-0 flex-1 w-0">
+                        <div className="min-w-0 border-b border-border/30 bg-gradient-to-r from-emerald-50 to-teal-50 p-3 dark:from-emerald-950/20 dark:to-teal-950/20 sm:p-4">
+                          <div className="flex flex-col gap-3">
+                            <div className="w-full min-w-0">
                               {seller.contact_id !== '' ? (
-                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 sm:gap-2 min-w-0">
-                                  <div className="min-w-0 flex items-center">
-                                    <p className="font-semibold text-xs sm:text-sm text-foreground truncate">
+                                <div className="grid min-w-0 grid-cols-2 gap-2">
+                                  <div className="flex min-w-0 items-center">
+                                    <p className="truncate text-xs font-semibold text-foreground sm:text-sm">
                                       {seller.seller_name}
                                     </p>
                                   </div>
@@ -4023,16 +4230,16 @@ const ArrivalsPage = () => {
                                       value={seller.seller_mark}
                                       onChange={e => updateSeller(si, { seller_mark: e.target.value })}
                                       className={cn(
-                                        "h-11 sm:h-10 w-full min-w-0 rounded-lg text-xs md:h-9",
+                                        "h-11 w-full min-w-0 rounded-lg text-xs sm:h-10 md:h-9",
                                         isSellerMarkInvalid(seller, si) && "border-red-500 ring-2 ring-red-500/30 bg-red-50 dark:bg-red-950/20"
                                       )}
                                       maxLength={20}
                                     />
-                                    {isSellerMarkInvalid(seller, si) && <p className="text-[9px] text-red-500 mt-0.5">{getSellerMarkError(seller, si) ?? '2–20 if set'}</p>}
+                                    {isSellerMarkInvalid(seller, si) && <p className="mt-0.5 text-[9px] text-red-500">{getSellerMarkError(seller, si) ?? '2–20 if set'}</p>}
                                   </div>
                                 </div>
                               ) : (
-                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 sm:gap-2 min-w-0">
+                                <div className="grid min-w-0 grid-cols-2 gap-2">
                                   <div
                                     className="min-w-0"
                                     ref={el => {
@@ -4056,12 +4263,12 @@ const ArrivalsPage = () => {
                                       }}
                                       inputMode="text"
                                       className={cn(
-                                        "h-11 sm:h-10 w-full min-w-0 rounded-lg text-xs md:h-9",
+                                        "h-11 w-full min-w-0 rounded-lg text-xs sm:h-10 md:h-9",
                                         isSellerNameInvalid(seller) && "border-red-500 ring-2 ring-red-500/30 bg-red-50 dark:bg-red-950/20"
                                       )}
                                       maxLength={100}
                                     />
-                                    {isSellerNameInvalid(seller) && <p className="text-[9px] text-red-500 mt-0.5">2–100 characters</p>}
+                                    {isSellerNameInvalid(seller) && <p className="mt-0.5 text-[9px] text-red-500">2–100 characters</p>}
                                   </div>
                                   <div className="min-w-0">
                                     <Input
@@ -4069,51 +4276,65 @@ const ArrivalsPage = () => {
                                       value={seller.seller_mark}
                                       onChange={e => updateSeller(si, { seller_mark: e.target.value })}
                                       className={cn(
-                                        "h-11 sm:h-10 w-full min-w-0 rounded-lg text-xs md:h-9",
+                                        "h-11 w-full min-w-0 rounded-lg text-xs sm:h-10 md:h-9",
                                         isSellerMarkInvalid(seller, si) && "border-red-500 ring-2 ring-red-500/30 bg-red-50 dark:bg-red-950/20"
                                       )}
                                       maxLength={20}
                                     />
-                                    {isSellerMarkInvalid(seller, si) && <p className="text-[9px] text-red-500 mt-0.5">{getSellerMarkError(seller, si) ?? '2–20 if set'}</p>}
+                                    {isSellerMarkInvalid(seller, si) && <p className="mt-0.5 text-[9px] text-red-500">{getSellerMarkError(seller, si) ?? '2–20 if set'}</p>}
                                   </div>
                                 </div>
                               )}
                             </div>
-                          </div>
-                          <div className="flex items-center gap-2 shrink-0 sm:pl-2">
-                            <div className="px-2.5 sm:px-3 py-1.5 rounded-lg sm:rounded-xl bg-emerald-600/10 text-emerald-700 dark:text-emerald-300 font-extrabold shadow-sm ring-1 ring-emerald-600/20">
-                              <span className="text-lg sm:text-xl leading-none whitespace-nowrap tabular-nums">{sellerTotal}</span>
+                            <div className="flex w-full min-w-0 items-center justify-between gap-2 border-t border-border/25 pt-2.5">
+                              <div className="flex min-w-0 flex-1 items-center gap-2">
+                                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-emerald-500 to-teal-500 sm:h-8 sm:w-8">
+                                  <span className="text-lg font-extrabold tabular-nums leading-none text-white sm:text-xl">{sellerSerialLabel ?? '#'}</span>
+                                </div>
+                                <div className="rounded-lg bg-emerald-600/10 px-2.5 py-1.5 shadow-sm ring-1 ring-emerald-600/20 sm:rounded-xl sm:px-3">
+                                  <span className="text-lg font-extrabold tabular-nums leading-none text-emerald-700 dark:text-emerald-300 sm:text-xl">{sellerTotal}</span>
+                                  <span className="ml-1 text-[9px] font-medium text-emerald-700/80 dark:text-emerald-300/80">bags</span>
+                                </div>
+                              </div>
+                              <div className="flex shrink-0 items-center gap-1">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const nextExpanded = !expanded;
+                                    if (nextExpanded) {
+                                      expandOnlySeller(seller.seller_vehicle_id);
+                                    } else {
+                                      setSellerExpanded(prev => ({ ...prev, [seller.seller_vehicle_id]: false }));
+                                    }
+                                    if (!nextExpanded) return;
+                                    setAddLotForm({
+                                      sellerId: seller.seller_vehicle_id,
+                                      lotName: "",
+                                      bags: "",
+                                      commodityName: commodities[0]?.commodity_name || "",
+                                      variant: "",
+                                      errors: {},
+                                    });
+                                  }}
+                                  aria-label={expanded ? 'Collapse lots' : 'Edit lots'}
+                                  title={expanded ? 'Collapse lots' : 'Edit lots'}
+                                  className={cn(
+                                    "flex min-h-[44px] min-w-[44px] touch-manipulation items-center justify-center rounded-lg transition-colors",
+                                    expanded ? "bg-muted/40 text-muted-foreground hover:bg-muted/50" : "bg-muted/20 text-muted-foreground hover:bg-muted/40",
+                                  )}
+                                >
+                                  {expanded ? <ChevronUp className="h-5 w-5" /> : <Pencil className="h-4 w-4" />}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setPendingDelete({ kind: 'seller', idx: si, label: seller.seller_name || `Seller ${si + 1}` })}
+                                  className="flex min-h-[44px] min-w-[44px] touch-manipulation items-center justify-center rounded-lg text-red-400 transition-colors hover:bg-red-50 dark:hover:bg-red-950/20"
+                                  aria-label="Remove seller"
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </button>
+                              </div>
                             </div>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                const nextExpanded = !expanded;
-                                if (nextExpanded) {
-                                  expandOnlySeller(seller.seller_vehicle_id);
-                                } else {
-                                  setSellerExpanded(prev => ({ ...prev, [seller.seller_vehicle_id]: false }));
-                                }
-                                if (!nextExpanded) return;
-                                setAddLotForm({
-                                  sellerId: seller.seller_vehicle_id,
-                                  lotName: "",
-                                  bags: "",
-                                  commodityName: commodities[0]?.commodity_name || "",
-                                  variant: "",
-                                  errors: {},
-                                });
-                              }}
-                              aria-label={expanded ? 'Collapse seller lots' : 'Expand seller lots'}
-                              className={cn(
-                                "min-h-[44px] min-w-[44px] rounded-lg flex items-center justify-center transition-colors touch-manipulation",
-                                expanded ? "bg-muted/40 hover:bg-muted/50" : "bg-muted/20 hover:bg-muted/40"
-                              )}
-                            >
-                              {expanded ? <ChevronUp className="w-5 h-5 text-muted-foreground" /> : <ChevronDown className="w-5 h-5 text-muted-foreground" />}
-                            </button>
-                            <button type="button" onClick={() => setPendingDelete({ kind: 'seller', idx: si, label: seller.seller_name || `Seller ${si + 1}` })} className="min-h-[44px] min-w-[44px] rounded-lg flex items-center justify-center text-red-400 hover:bg-red-50 dark:hover:bg-red-950/20 transition-colors touch-manipulation">
-                              <Trash2 className="w-4 h-4" />
-                            </button>
                           </div>
                         </div>
                         <AnimatePresence initial={false}>
@@ -4126,98 +4347,102 @@ const ArrivalsPage = () => {
                               transition={{ duration: 0.15 }}
                               className="overflow-hidden"
                             >
-                              <div className="p-3 border-t border-border/30 space-y-2 bg-muted/10">
-                                <p className="text-[10px] font-bold text-blue-600 dark:text-blue-400 uppercase tracking-wider">{addLotForm.editingLotId ? "Edit Lot" : "New Lot"}</p>
-                                <AddLotHorizontalScrollPanel>
-                                  <div className="min-w-max flex flex-nowrap items-start gap-2">
-                                    <div className="min-w-0 flex-1">
-                                    <LotFieldsHorizontalScroll>
-                                      <div className="flex flex-nowrap items-start gap-2 overflow-x-auto overflow-y-visible lot-fields-x-scroll [-webkit-overflow-scrolling:touch] touch-auto">
-                                  {/* Lot Name */}
-                                  <div className="w-[8.5rem] sm:w-[9rem] md:w-[8.5rem] lg:w-[12rem] xl:w-[14rem] flex-none">
-                                    <Input
-                                      ref={addLotLotNameInputRef}
-                                      placeholder="Lot Name"
-                                      value={addLotForm.lotName}
-                                      onChange={e => setAddLotForm(prev => prev ? { ...prev, lotName: e.target.value, errors: { ...prev.errors, lotName: undefined } } : null)}
-                                      onFocus={() => handleLotEntryFieldFocus(seller.seller_vehicle_id)}
-                                      className={cn("h-10 sm:h-9 text-sm rounded-lg focus-visible:ring-0 focus-visible:ring-offset-0 focus-visible:border-primary focus-visible:shadow-[0_0_0_2px_hsl(var(--ring)/0.25)]", addLotForm.errors.lotName && "border-red-500 ring-2 ring-red-500/30 bg-red-50 dark:bg-red-950/20")}
-                                      maxLength={50}
-                                      autoFocus
-                                    />
-                                    {addLotForm.errors.lotName && <p className="text-[10px] text-red-500 mt-0.5">{addLotForm.errors.lotName}</p>}
-                                  </div>
-                                  {/* Bags */}
-                                  <div className="w-[5.5rem] sm:w-[6rem] md:w-[5.5rem] lg:w-[7rem] xl:w-[8rem] flex-none">
-                                    <Input
-                                      type="number"
-                                      placeholder="Bags"
-                                      value={addLotForm.bags}
-                                      onChange={e => setAddLotForm(prev => prev ? { ...prev, bags: e.target.value, errors: { ...prev.errors, bags: undefined } } : null)}
-                                      onFocus={() => handleLotEntryFieldFocus(seller.seller_vehicle_id)}
-                                      className={cn("h-10 sm:h-9 text-sm rounded-lg focus-visible:ring-0 focus-visible:ring-offset-0 focus-visible:border-primary focus-visible:shadow-[0_0_0_2px_hsl(var(--ring)/0.25)]", addLotForm.errors.bags && "border-red-500 ring-2 ring-red-500/30 bg-red-50 dark:bg-red-950/20")}
-                                      min={1}
-                                      max={100000}
-                                    />
-                                    {addLotForm.errors.bags && <p className="text-[10px] text-red-500 mt-0.5">{addLotForm.errors.bags}</p>}
-                                  </div>
-                                  {/* Commodity */}
-                                  <div className="w-[8.5rem] sm:w-[9rem] md:w-[8.5rem] lg:w-[12rem] xl:w-[14rem] flex-none">
+                              <div className="space-y-3 border-t border-border/30 bg-muted/10 p-3">
+                                <p className="text-[10px] font-bold uppercase tracking-wider text-blue-600 dark:text-blue-400">{addLotForm.editingLotId ? "Edit Lot" : "New Lot"}</p>
+                                <div className="grid min-w-0 grid-cols-2 gap-2">
+                                  <div className="min-w-0 space-y-1">
+                                    <label className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Commodity</label>
                                     <select
                                       value={addLotForm.commodityName}
                                       onChange={e => setAddLotForm(prev => prev ? { ...prev, commodityName: e.target.value, variant: '', errors: { ...prev.errors, commodity: undefined } } : null)}
                                       onFocus={() => handleLotEntryFieldFocus(seller.seller_vehicle_id)}
-                                      className={cn("h-10 sm:h-9 w-full rounded-lg bg-background border border-input text-sm px-2 focus:outline-none focus:ring-0 focus:border-primary focus:shadow-[0_0_0_2px_hsl(var(--ring)/0.25)]", addLotForm.errors.commodity && "border-red-500 ring-2 ring-red-500/30")}
+                                      autoFocus
+                                      className={cn(
+                                        "h-11 w-full min-w-0 rounded-xl border border-input bg-background px-2 text-xs focus:border-primary focus:outline-none focus:ring-0 focus:shadow-[0_0_0_2px_hsl(var(--ring)/0.25)] sm:text-sm",
+                                        addLotForm.errors.commodity && "border-red-500 ring-2 ring-red-500/30",
+                                      )}
                                     >
-                                      <option value="" disabled>Select Commodity</option>
+                                      <option value="" disabled>Select</option>
                                       {commodities.map((c: any) => (
                                         <option key={c.commodity_id} value={c.commodity_name}>{c.commodity_name}</option>
                                       ))}
                                     </select>
-                                    {addLotForm.errors.commodity && <p className="text-[10px] text-red-500 mt-0.5">{addLotForm.errors.commodity}</p>}
+                                    {addLotForm.errors.commodity && <p className="text-[9px] leading-tight text-red-500">{addLotForm.errors.commodity}</p>}
                                   </div>
-                                  {/* Variant */}
-                                  <div className="w-[7rem] sm:w-[7.5rem] md:w-[7rem] lg:w-[10rem] xl:w-[12rem] flex-none">
+                                  <div className="min-w-0 space-y-1">
+                                    <label className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Variant</label>
                                     <select
                                       value={addLotForm.variant}
                                       onChange={e => setAddLotForm(prev => prev ? { ...prev, variant: e.target.value } : null)}
                                       onFocus={() => handleLotEntryFieldFocus(seller.seller_vehicle_id)}
-                                      className="h-10 sm:h-9 w-full rounded-lg bg-background border border-input text-sm px-2 focus:outline-none focus:ring-0 focus:border-primary focus:shadow-[0_0_0_2px_hsl(var(--ring)/0.25)]"
+                                      className="h-11 w-full min-w-0 rounded-xl border border-input bg-background px-2 text-xs focus:border-primary focus:outline-none focus:ring-0 focus:shadow-[0_0_0_2px_hsl(var(--ring)/0.25)] sm:text-sm"
                                     >
                                       {VARIANT_OPTIONS.map(opt => (
                                         <option key={opt.value || 'none'} value={opt.value}>{opt.label}</option>
                                       ))}
                                     </select>
                                   </div>
-                                      </div>
-                                    </LotFieldsHorizontalScroll>
-                                    </div>
-                                    {/* Action buttons */}
-                                    <div className="relative z-[8] flex flex-nowrap items-center gap-2 justify-end sm:self-start pl-1">
-                                    <Button type="button" size="sm" onClick={() => saveFormLot(si)} className={cn("h-10 sm:h-10 px-4 shrink-0 whitespace-nowrap text-sm font-semibold", ARRIVALS_SETTLEMENT_BUTTON_GRADIENT)}>
-                                      {addLotForm.editingLotId ? "Update" : "Save Lot"}
-                                    </Button>
-                                    <Button
-                                      type="button"
-                                      size="sm"
-                                      onClick={() => setAddLotForm({
+                                  <div className="min-w-0 space-y-1">
+                                    <label className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Lot name</label>
+                                    <Input
+                                      ref={addLotLotNameInputRef}
+                                      placeholder="Lot name"
+                                      value={addLotForm.lotName}
+                                      onChange={e => setAddLotForm(prev => prev ? { ...prev, lotName: e.target.value, errors: { ...prev.errors, lotName: undefined } } : null)}
+                                      onFocus={() => handleLotEntryFieldFocus(seller.seller_vehicle_id)}
+                                      className={cn(
+                                        "h-11 w-full min-w-0 rounded-xl text-sm focus-visible:border-primary focus-visible:shadow-[0_0_0_2px_hsl(var(--ring)/0.25)] focus-visible:ring-0 focus-visible:ring-offset-0",
+                                        addLotForm.errors.lotName && "border-red-500 bg-red-50 ring-2 ring-red-500/30 dark:bg-red-950/20",
+                                      )}
+                                      maxLength={50}
+                                    />
+                                    {addLotForm.errors.lotName && <p className="text-[9px] leading-tight text-red-500">{addLotForm.errors.lotName}</p>}
+                                  </div>
+                                  <div className="min-w-0 space-y-1">
+                                    <label className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Bags</label>
+                                    <Input
+                                      type="number"
+                                      placeholder="Bags"
+                                      value={addLotForm.bags}
+                                      onChange={e => setAddLotForm(prev => prev ? { ...prev, bags: e.target.value, errors: { ...prev.errors, bags: undefined } } : null)}
+                                      onFocus={() => handleLotEntryFieldFocus(seller.seller_vehicle_id)}
+                                      className={cn(
+                                        "h-11 w-full min-w-0 rounded-xl text-sm focus-visible:border-primary focus-visible:shadow-[0_0_0_2px_hsl(var(--ring)/0.25)] focus-visible:ring-0 focus-visible:ring-offset-0",
+                                        addLotForm.errors.bags && "border-red-500 bg-red-50 ring-2 ring-red-500/30 dark:bg-red-950/20",
+                                      )}
+                                      min={1}
+                                      max={100000}
+                                    />
+                                    {addLotForm.errors.bags && <p className="text-[9px] leading-tight text-red-500">{addLotForm.errors.bags}</p>}
+                                  </div>
+                                </div>
+                                <div className="grid grid-cols-2 gap-2 pt-0.5">
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    onClick={() => saveFormLot(si)}
+                                    className={cn("h-11 min-h-11 w-full rounded-xl text-sm font-semibold", ARRIVALS_SETTLEMENT_BUTTON_GRADIENT)}
+                                  >
+                                    {addLotForm.editingLotId ? "Update" : "Save"}
+                                  </Button>
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    onClick={() =>
+                                      setAddLotForm({
                                         sellerId: seller.seller_vehicle_id,
                                         lotName: "",
                                         bags: "",
                                         commodityName: commodities[0]?.commodity_name || "",
                                         variant: "",
                                         errors: {},
-                                      })}
-                                      className={cn(
-                                        "h-10 sm:h-10 px-4 shrink-0 whitespace-nowrap text-sm font-semibold",
-                                        ARRIVALS_SETTLEMENT_BUTTON_GRADIENT,
-                                      )}
-                                    >
-                                      Cancel
-                                    </Button>
-                                    </div>
-                                  </div>
-                                </AddLotHorizontalScrollPanel>
+                                      })
+                                    }
+                                    className={cn("h-11 min-h-11 w-full rounded-xl text-sm font-semibold", ARRIVALS_SETTLEMENT_BUTTON_GRADIENT)}
+                                  >
+                                    Cancel
+                                  </Button>
+                                </div>
                               </div>
                             </motion.div>
                           )}
@@ -4238,75 +4463,135 @@ const ArrivalsPage = () => {
                                 showEdgeHints
                                 contentLayoutKey={seller.lots.length}
                                 showScrollAffordanceFooter={seller.lots.length > 0}
-                                scrollAffordanceHint="Swipe here to scroll lots"
-                                className="min-h-[11rem] max-h-[min(28rem,52dvh)] overflow-y-auto overflow-x-auto lg:overflow-x-hidden overscroll-contain [-webkit-overflow-scrolling:touch] touch-auto border-t border-border/30 pb-6"
+                                scrollAffordanceHint="Scroll for more lots"
+                                className="min-h-[11rem] max-h-[min(28rem,52dvh)] overflow-y-auto overflow-x-visible overscroll-contain [-webkit-overflow-scrolling:touch] touch-auto border-t border-border/30 pb-6"
                               >
                                   {seller.lots.length === 0 ? (
                                     <p className="text-xs text-muted-foreground text-center py-3 italic px-3">No lots added yet.</p>
                                   ) : (
-                                    <LotFieldsHorizontalScroll>
-                                      <table className="w-[42rem] md:w-full text-sm sm:text-base table-fixed">
-                                        <thead className="sticky top-0 z-[3] bg-background">
-                                          <tr className="border-b border-border/20">
-                                            <th className="bg-muted/95 backdrop-blur text-center py-2 px-3 text-muted-foreground font-semibold w-1/6">SL. NO</th>
-                                            <th className="bg-muted/95 backdrop-blur text-center py-2 px-3 text-muted-foreground font-semibold w-1/6">Lot Name</th>
-                                            <th className="bg-muted/95 backdrop-blur text-center py-2 px-3 text-muted-foreground font-semibold w-1/6">Bags</th>
-                                            <th className="bg-muted/95 backdrop-blur text-center py-2 px-3 text-muted-foreground font-semibold w-1/6">Commodity</th>
-                                            <th className="bg-muted/95 backdrop-blur text-center py-2 px-3 text-muted-foreground font-semibold hidden md:table-cell md:w-1/6">Variant</th>
-                                            <th className="bg-muted/95 backdrop-blur text-center py-2 px-3 text-muted-foreground font-semibold w-1/6">Actions</th>
-                                          </tr>
-                                        </thead>
-                                        <tbody>
-                                          {seller.lots.map((lot, li) => {
-                                            const lotSerialLabel = lot.lot_serial_number != null && lot.lot_serial_number > 0 ? String(lot.lot_serial_number) : "-";
-                                            const isBeingEdited = addLotForm?.editingLotId === lot.lot_id;
-                                            return (
-                                              <tr
-                                                key={lot.lot_id}
-                                                onClick={() => editFormLot(si, li)}
-                                                className={cn(
-                                                  "border-b border-border/10 transition-colors cursor-pointer",
-                                                  isBeingEdited ? "bg-blue-50 dark:bg-blue-950/20" : "hover:bg-muted/20"
-                                                )}
-                                              >
-                                                <td className="py-1 px-2.5 align-middle text-center">
-                                                  {lotSerialLabel !== "-" ? (
-                                                    <span className="inline-flex items-center rounded-full bg-blue-500/10 px-1.5 py-0.5 text-[9px] sm:text-[10px] font-semibold leading-none text-blue-700 dark:text-blue-300 whitespace-nowrap ring-1 ring-blue-500/20">
-                                                      {lotSerialLabel}
-                                                    </span>
-                                                  ) : (
-                                                    <span className="text-muted-foreground font-mono text-[9px] sm:text-[10px]">—</span>
-                                                  )}
-                                                </td>
-                                                <td className="py-1 px-2.5 align-middle text-center">
-                                                  <span className="inline-flex max-w-none whitespace-nowrap px-1.5 py-0.5 rounded bg-blue-100 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300 text-[10px] sm:text-xs font-bold leading-none">
-                                                    {lot.lot_name || "-"}
-                                                  </span>
-                                                </td>
-                                                <td className="py-2 px-3 align-middle text-center font-medium text-foreground">{lot.quantity}</td>
-                                                <td className="py-2 px-3 align-middle text-center text-foreground truncate">{lot.commodity_name || "-"}</td>
-                                                <td className="py-2 px-3 align-middle text-center text-muted-foreground hidden md:table-cell">{lot.variant || "None"}</td>
-                                                <td className="py-2 px-3 align-middle text-center">
-                                                  <div className="flex justify-center gap-1">
-                                                    <button
-                                                      type="button"
-                                                      onClick={(e) => {
-                                                        e.stopPropagation();
-                                                        setPendingDelete({ kind: "lot", sellerIdx: si, lotIdx: li, label: lot.lot_name || "Lot " + (li + 1) });
-                                                      }}
-                                                      className="w-9 h-9 sm:w-8 sm:h-8 rounded-md flex items-center justify-center text-red-400 hover:bg-red-50 dark:hover:bg-red-950/20 transition-colors flex-shrink-0"
-                                                      aria-label="Delete lot"
-                                                    >
-                                                      <Trash2 className="w-4 h-4 sm:w-4 sm:h-4" />
-                                                    </button>
+                                    <div className="w-full max-w-full px-1 pt-1">
+                                      {(() => {
+                                        const lotPageCount = Math.ceil(seller.lots.length / MOBILE_ARRIVAL_LOTS_PER_PAGE);
+                                        return (
+                                          <>
+                                            {lotPageCount > 1 && (
+                                              <div className="mb-1.5 flex items-center justify-center gap-1.5">
+                                                {Array.from({ length: lotPageCount }, (_, pageIdx) => (
+                                                  <button
+                                                    key={`arrival-lot-page-dot-${seller.seller_vehicle_id}-${pageIdx}`}
+                                                    type="button"
+                                                    onClick={() => {
+                                                      const el = mobileArrivalLotsCarouselRefs.current[seller.seller_vehicle_id];
+                                                      if (!el) return;
+                                                      const w = el.clientWidth;
+                                                      if (w <= 0) return;
+                                                      el.scrollTo({ left: pageIdx * w, behavior: 'smooth' });
+                                                    }}
+                                                    className={cn(
+                                                      'rounded-full transition-all bg-muted-foreground/40',
+                                                      (activeArrivalLotSlideBySeller[seller.seller_vehicle_id] ?? 0) === pageIdx ? 'h-2 w-4 bg-primary' : 'h-2 w-2',
+                                                    )}
+                                                    aria-label={`Lots page ${pageIdx + 1} of ${lotPageCount}`}
+                                                  />
+                                                ))}
+                                              </div>
+                                            )}
+                                            <div
+                                              ref={el => {
+                                                mobileArrivalLotsCarouselRefs.current[seller.seller_vehicle_id] = el;
+                                              }}
+                                              data-arrival-mobile-lots-carousel="1"
+                                              onScroll={() => handleArrivalLotsCarouselScroll(seller.seller_vehicle_id, seller.lots.length)}
+                                              className="flex w-full max-w-full overflow-x-auto pb-1 [-webkit-overflow-scrolling:touch] snap-x snap-mandatory touch-pan-x"
+                                            >
+                                              {Array.from({ length: lotPageCount }, (_, pageIdx) => {
+                                                const start = pageIdx * MOBILE_ARRIVAL_LOTS_PER_PAGE;
+                                                const chunk = seller.lots.slice(start, start + MOBILE_ARRIVAL_LOTS_PER_PAGE);
+                                                return (
+                                                  <div
+                                                    key={`arrival-lot-page-${seller.seller_vehicle_id}-${pageIdx}`}
+                                                    className="min-w-full max-w-full shrink-0 snap-start space-y-2 px-0.5"
+                                                  >
+                                                    {chunk.map((lot, localIdx) => {
+                                                      const li = start + localIdx;
+                                                      const lotSerialLabel =
+                                                        lot.lot_serial_number != null && lot.lot_serial_number > 0 ? String(lot.lot_serial_number) : "-";
+                                                      const isBeingEdited = addLotForm?.editingLotId === lot.lot_id;
+                                                      const subParts: string[] = [];
+                                                      if (lot.commodity_name?.trim()) subParts.push(lot.commodity_name.trim());
+                                                      const v = lot.variant?.trim();
+                                                      if (v && v.toLowerCase() !== "none") subParts.push(v);
+                                                      const subLine = subParts.length > 0 ? subParts.join(" · ") : "—";
+                                                      return (
+                                                        <div
+                                                          key={lot.lot_id}
+                                                          role="button"
+                                                          tabIndex={0}
+                                                          onClick={() => editFormLot(si, li)}
+                                                          onKeyDown={e => {
+                                                            if (e.key === "Enter" || e.key === " ") {
+                                                              e.preventDefault();
+                                                              editFormLot(si, li);
+                                                            }
+                                                          }}
+                                                          className={cn(
+                                                            'glass-card group w-full touch-manipulation rounded-2xl border border-border/40 p-3 text-left shadow-sm outline-none transition-all',
+                                                            'hover:shadow-md hover:border-border/60 active:scale-[0.99]',
+                                                            isBeingEdited && 'border-[#6075FF]/50 shadow-md ring-2 ring-[#6075FF]/50',
+                                                          )}
+                                                        >
+                                                          <div className="flex items-center gap-3">
+                                                            <div className="relative flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-gradient-to-br from-blue-500 to-violet-500 shadow-md">
+                                                              <Package className="relative z-10 h-4 w-4 text-white" aria-hidden />
+                                                              <div className="absolute inset-0 bg-white/20 opacity-0 transition-opacity group-hover:opacity-100" aria-hidden />
+                                                            </div>
+                                                            <div className="min-w-0 flex-1">
+                                                              <div className="flex min-w-0 items-center gap-2">
+                                                                <p className="truncate text-sm font-semibold text-foreground">
+                                                                  {lot.lot_name?.trim() || `Lot ${li + 1}`}
+                                                                </p>
+                                                                {lotSerialLabel !== "-" ? (
+                                                                  <span className="shrink-0 rounded-full bg-blue-500/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase text-blue-700 ring-1 ring-blue-500/20 dark:text-blue-300">
+                                                                    #{lotSerialLabel}
+                                                                  </span>
+                                                                ) : null}
+                                                              </div>
+                                                              <p className="mt-0.5 truncate text-xs text-muted-foreground">{subLine}</p>
+                                                            </div>
+                                                            <div className="flex shrink-0 items-center gap-1.5">
+                                                              <div className="text-right">
+                                                                <p className="text-sm font-bold tabular-nums text-foreground">{lot.quantity}</p>
+                                                                <p className="text-[10px] text-muted-foreground">bags</p>
+                                                              </div>
+                                                              <button
+                                                                type="button"
+                                                                onClick={e => {
+                                                                  e.stopPropagation();
+                                                                  setPendingDelete({
+                                                                    kind: "lot",
+                                                                    sellerIdx: si,
+                                                                    lotIdx: li,
+                                                                    label: lot.lot_name || "Lot " + (li + 1),
+                                                                  });
+                                                                }}
+                                                                className="flex h-10 w-10 items-center justify-center rounded-lg text-red-400 transition-colors hover:bg-red-50 dark:hover:bg-red-950/20"
+                                                                aria-label="Delete lot"
+                                                              >
+                                                                <Trash2 className="h-4 w-4" />
+                                                              </button>
+                                                            </div>
+                                                          </div>
+                                                        </div>
+                                                      );
+                                                    })}
                                                   </div>
-                                                </td>
-                                              </tr>
-                                            );
-                                          })}
-                                        </tbody>
-                                      </table>
-                                    </LotFieldsHorizontalScroll>
+                                                );
+                                              })}
+                                            </div>
+                                          </>
+                                        );
+                                      })()}
+                                    </div>
                                   )}
                               </LotsScrollPanel>
                             </motion.div>

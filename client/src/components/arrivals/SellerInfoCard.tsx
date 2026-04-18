@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronUp, Package, Printer, RotateCcw } from 'lucide-react';
+import { ChevronDown, ChevronUp, Printer, RotateCcw } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
 interface SellerInfoCardProps {
@@ -106,15 +106,15 @@ const SellerInfoCard = ({ sellers, onPrint, onRefresh, hidePrint }: SellerInfoCa
             </button>
 
             {isExpanded && hasLots && (
-              <div className="overflow-x-auto -mx-1">
-                <table className="w-full text-xs min-w-[320px]">
+              <div className="overflow-x-auto lg:overflow-x-visible -mx-1">
+                <table className="w-full min-w-0 text-xs lg:min-w-[320px]">
                   <thead>
                     <tr className="border-b border-border/20">
                       <th className="text-left py-1.5 px-1.5 text-muted-foreground font-semibold">Lot</th>
                       <th className="text-left py-1.5 px-1.5 text-muted-foreground font-semibold">Commodity</th>
-                      <th className="text-left py-1.5 px-1.5 text-muted-foreground font-semibold">Package</th>
+                      <th className="hidden text-left py-1.5 px-1.5 text-muted-foreground font-semibold lg:table-cell">Package</th>
                       <th className="text-right py-1.5 px-1.5 text-muted-foreground font-semibold">Qty</th>
-                      <th className="text-left py-1.5 px-1.5 text-muted-foreground font-semibold">Variant</th>
+                      <th className="hidden text-left py-1.5 px-1.5 text-muted-foreground font-semibold lg:table-cell">Variant</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -126,9 +126,9 @@ const SellerInfoCard = ({ sellers, onPrint, onRefresh, hidePrint }: SellerInfoCa
                           </span>
                         </td>
                         <td className="py-1.5 px-1.5 text-foreground">{lot.commodityName ?? '—'}</td>
-                        <td className="py-1.5 px-1.5 text-muted-foreground">Bags</td>
+                        <td className="hidden py-1.5 px-1.5 text-muted-foreground lg:table-cell">Bags</td>
                         <td className="py-1.5 px-1.5 text-right font-medium text-foreground">{lot.bagCount ?? 0}</td>
-                        <td className="py-1.5 px-1.5 text-muted-foreground">{lot.variant ?? '—'}</td>
+                        <td className="hidden py-1.5 px-1.5 text-muted-foreground lg:table-cell">{lot.variant ?? '—'}</td>
                       </tr>
                     ))}
                   </tbody>
