@@ -32,12 +32,13 @@ import com.getcapacitor.annotation.CapacitorPlugin;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.regex.Matcher;
 
 @CapacitorPlugin(name = "MercoPrinter")
 public class MercoPrinterPlugin extends Plugin {
 
-    /** Feed after slip content (manual tear / before cut), ~2 cm on 203 dpi roll printers. */
-    private static final float THERMAL_SLIP_FEED_MM = 20f;
+    /** Blank feed after slip (tear zone) so next job is not cut by mistake; ~1.5 cm. */
+    private static final float THERMAL_SLIP_FEED_MM = 15f;
     private static final int THERMAL_CHARS_PER_LINE = 48;
 
     private static final int BLUETOOTH_PERMS_REQUEST_CODE = 5020;
@@ -328,15 +329,30 @@ public class MercoPrinterPlugin extends Plugin {
         });
     }
 
-    private static String thermalCutIndicatorLine() {
-        char[] dash = new char[THERMAL_CHARS_PER_LINE];
-        java.util.Arrays.fill(dash, '-');
-        return "\n[L]" + new String(dash);
+    /**
+     * One tear row (after [L]): scissors (U+2702) + dashed hyphens to width — no text, distinct from in-slip “=” rules.
+     */
+    private static String thermalScissorDashLine48() {
+        final String scissors = "\u2702 ";
+        StringBuilder sb = new StringBuilder(THERMAL_CHARS_PER_LINE);
+        sb.append(scissors);
+        while (sb.length() < THERMAL_CHARS_PER_LINE) {
+            sb.append('-');
+        }
+        if (sb.length() > THERMAL_CHARS_PER_LINE) {
+            return sb.substring(0, THERMAL_CHARS_PER_LINE);
+        }
+        return sb.toString();
+    }
+
+    /** Visual cut guide only (scissor + dashes); in-slip dividers use “=”. */
+    private static String thermalTearFooter() {
+        return "\n[L]" + thermalScissorDashLine48();
     }
 
     /**
-     * After formatted print, attempt ESC/POS full cut. Printers without a cutter typically ignore or no-op;
-     * failures are swallowed so the slip (already includes cut line + feed) still completes.
+     * After formatted print + ~1.5 cm feed, attempt ESC/POS full cut. Printers without a cutter typically ignore or
+     * no-op; failures are swallowed so the slip (already includes tear guide + feed) still completes.
      */
     private static void tryHardwareCut(EscPosPrinter escPosPrinter) {
         if (escPosPrinter == null) return;
@@ -405,8 +421,8 @@ public class MercoPrinterPlugin extends Plugin {
                 text = "Mercotrace\nPrint job\n";
             }
 
-            // Always append visible tear line + ~2 cm feed; then best-effort hardware cut (no settings).
-            String body = text + thermalCutIndicatorLine();
+            // Tear guide (distinct from in-slip "=" rules) + ~1.5 cm feed; then best-effort hardware cut.
+            String body = text + thermalTearFooter();
             printer.printFormattedText(body, THERMAL_SLIP_FEED_MM);
             tryHardwareCut(printer);
 
@@ -436,7 +452,15 @@ public class MercoPrinterPlugin extends Plugin {
 
         // Replace CSS-only separators with visible ASCII lines.
         // (On ESC/POS thermal, CSS borders/dashed lines won't render.)
-        text = text.replaceAll("(?is)<div[^>]*class\\s*=\\s*\"[^\"]*cut-line[^\"]*\"[^>]*>\\s*</div>", "\n--------------------------------\n");
+        text = text.replaceAll(
+            "(?is)<div[^>]*class\\s*=\\s*\"[^\"]*cut-mark[^\"]*\"[^>]*>.*?</div>\\s*",
+            Matcher.quoteReplacement(thermalTearFooter()) + "\n"
+        );
+        // Legacy empty cut-line hook (older templates).
+        text = text.replaceAll(
+            "(?is)<div[^>]*class\\s*=\\s*\"[^\"]*cut-line[^\"]*\"[^>]*>\\s*</div>",
+            Matcher.quoteReplacement(thermalTearFooter()) + "\n"
+        );
         text = text.replaceAll("(?is)<div[^>]*class\\s*=\\s*\"[^\"]*totals[^\"]*\"[^>]*>", "\n================ Totals ================\n");
         text = text.replaceAll("(?is)<div[^>]*class\\s*=\\s*\"[^\"]*sticker[^\"]*\"[^>]*>", "\n================== STICKER ==================\n");
 

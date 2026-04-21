@@ -94,6 +94,8 @@ function firmHeader(): string {
 
 // Thermal ESC/POS helpers
 const THERMAL_CHARS_PER_LINE = 48; // matches EscPosPrinter(..., 48)
+/** In-slip section dividers: not hyphen rows (distinct from final scissor + dash cut guide on roll). */
+const THERMAL_INTERNAL_RULE = "=".repeat(THERMAL_CHARS_PER_LINE);
 function clampThermalText(s: string, maxLen: number): string {
   const str = String(s ?? "");
   if (str.length <= maxLen) return str;
@@ -265,8 +267,10 @@ export function generateSalesSticker(bid: BidInfo): string {
     .center-top { text-align: center; font-size: 16px; font-weight: 900; margin-bottom: 2px; }
     .origin-full { text-align: center; font-size: 10px; font-weight: 700; width: 100%; margin-bottom: 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 2px; }
-    .cut-line { border-top: 1px dashed #999; margin-top: 4px; padding-top: 0; }
-    .thermal-tear-space { height: 20mm; min-height: 20mm; margin: 0; padding: 0; }
+    .cut-mark { display: flex; align-items: center; gap: 4px; margin-top: 8px; color: #111; }
+    .cut-mark .cut-scissor { flex-shrink: 0; font-size: 16px; line-height: 1; }
+    .cut-mark .cut-rule { flex: 1; min-width: 0; height: 0; border-bottom: 2px dashed #111; align-self: center; }
+    .thermal-tear-space { height: 15mm; min-height: 15mm; margin: 0; padding: 0; }
     @media print { body { margin: 0; padding: 2mm; } }
   </style></head><body>
     <div class="sticker">
@@ -282,7 +286,9 @@ export function generateSalesSticker(bid: BidInfo): string {
         <div class="cell"><span class="lbl">Godown</span><span class="val">${escapeStickerHtml(bid.godown || '—')}</span></div>
       </div>
     </div>
-    <div class="cut-line"></div>
+    <div class="cut-mark" aria-label="Cut here">
+      <span class="cut-scissor" aria-hidden="true">&#9986;</span><span class="cut-rule" aria-hidden="true"></span>
+    </div>
     <div class="thermal-tear-space" aria-hidden="true"></div>
   </body></html>`;
 }
@@ -347,7 +353,7 @@ export function generateBuyerChitiThermal(
     "[C]" + firmLine,
     "[C]" + clampThermalText(buyerName, THERMAL_CHARS_PER_LINE),
     "[C]" + escposBold(`[${String(buyerMark ?? "").trim()}]`),
-    "[L]--------------------------------",
+    `[L]${THERMAL_INTERNAL_RULE}`,
     "",
     "[L]" + pad("Lot Name", wLot) + pad("LotSL", wLotSl) + pad("Gdwn", wGdwn) + pad("Rate", wRate) + pad("Qty", wQty),
   ].join("\n");
@@ -373,7 +379,7 @@ export function generateBuyerChitiThermal(
     "[L]" + lineLR("Total Bid", String(totalBid)),
     "[L]" + lineLR("Total QTY", `${totalQty}`),
     "",
-    "[L]--------------------------------",
+    `[L]${THERMAL_INTERNAL_RULE}`,
     "",
   ].join("\n");
 
@@ -418,7 +424,7 @@ export function generateSellerChitiThermal(
     "",
     "[C]" + clampThermalText(sellerName, THERMAL_CHARS_PER_LINE),
     "[C]" + clampThermalText(`S.No: ${sellerSerial}`, THERMAL_CHARS_PER_LINE),
-    "[L]--------------------------------",
+    `[L]${THERMAL_INTERNAL_RULE}`,
     "",
     "[L]" + pad("Lot Name", wLot) + pad("LotSL", wLotSl) + pad("Qty", wQty) + pad("Rate", wRate),
   ].join("\n");
@@ -442,7 +448,7 @@ export function generateSellerChitiThermal(
     "[L]" + lineLR("Total Lot", String(totalLot)),
     "[L]" + lineLR("Total QTY", String(totalQty)),
     "",
-    "[L]--------------------------------",
+    `[L]${THERMAL_INTERNAL_RULE}`,
     "",
   ].join("\n");
 
@@ -495,8 +501,10 @@ export function generateBuyerChiti(
     .totals .row { display: flex; justify-content: space-between; padding: 2px 0; }
     .stage { display: none; }
     .powered { text-align: center; font-size: 10px; color: #666; margin-top: 4px; }
-    .cut-line { border-top: 1px dashed #999; margin-top: 6px; padding-top: 2px; }
-    .thermal-tear-space { height: 20mm; min-height: 20mm; margin: 0; padding: 0; }
+    .cut-mark { display: flex; align-items: center; gap: 4px; margin-top: 8px; color: #111; }
+    .cut-mark .cut-scissor { flex-shrink: 0; font-size: 16px; line-height: 1; }
+    .cut-mark .cut-rule { flex: 1; min-width: 0; height: 0; border-bottom: 2px dashed #111; align-self: center; }
+    .thermal-tear-space { height: 15mm; min-height: 15mm; margin: 0; padding: 0; }
     @media print { body { margin: 0; } }
   </style></head><body>
     <div class="header"><h3>${headerTitle}</h3></div>
@@ -512,7 +520,9 @@ export function generateBuyerChiti(
       <div class="row"><span>Total Bid</span><span>${totalBid}</span></div>
       <div class="row"><span>Total QTY</span><span>${totalQty}</span></div>
     </div>
-    <div class="cut-line"></div>
+    <div class="cut-mark" aria-label="Cut here">
+      <span class="cut-scissor" aria-hidden="true">&#9986;</span><span class="cut-rule" aria-hidden="true"></span>
+    </div>
     <div class="thermal-tear-space" aria-hidden="true"></div>
   </body></html>`;
 }
@@ -555,8 +565,10 @@ export function generateSellerChiti(
     .totals .row { display: flex; justify-content: space-between; padding: 2px 0; }
     .stage { display: none; }
     .powered { text-align: center; font-size: 10px; color: #666; margin-top: 4px; }
-    .cut-line { border-top: 1px dashed #999; margin-top: 6px; padding-top: 2px; }
-    .thermal-tear-space { height: 20mm; min-height: 20mm; margin: 0; padding: 0; }
+    .cut-mark { display: flex; align-items: center; gap: 4px; margin-top: 8px; color: #111; }
+    .cut-mark .cut-scissor { flex-shrink: 0; font-size: 16px; line-height: 1; }
+    .cut-mark .cut-rule { flex: 1; min-width: 0; height: 0; border-bottom: 2px dashed #111; align-self: center; }
+    .thermal-tear-space { height: 15mm; min-height: 15mm; margin: 0; padding: 0; }
     @media print { body { margin: 0; } }
   </style></head><body>
     <div class="header"><h3>${headerTitle}</h3></div>
@@ -572,7 +584,9 @@ export function generateSellerChiti(
       <div class="row"><span>Total Lot</span><span>${totalLot}</span></div>
       <div class="row"><span>Total QTY</span><span>${totalQty}</span></div>
     </div>
-    <div class="cut-line"></div>
+    <div class="cut-mark" aria-label="Cut here">
+      <span class="cut-scissor" aria-hidden="true">&#9986;</span><span class="cut-rule" aria-hidden="true"></span>
+    </div>
     <div class="thermal-tear-space" aria-hidden="true"></div>
   </body></html>`;
 }

@@ -28,7 +28,7 @@ import {
   type BluetoothPrinterDTO,
 } from '@/services/api/bluetoothPrinters';
 import { traderRbacApi } from '@/services/api/rbac';
-import type { RbacProfile, RbacRole } from '@/types/rbac';
+import type { Profile, Role } from '@/types/rbac';
 
 type MercoPrinterPlugin = {
   listPrinters(): Promise<{ printers: { mac: string; name: string }[] }>;
@@ -46,11 +46,11 @@ function normalizeMac(mac: string): string {
 
 function escapeHtml(s: string): string {
   return s
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&#39;');
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 function isTraderOwnerRole(role: string | undefined): boolean {
@@ -127,8 +127,8 @@ const BluetoothPrinterSettingsPage = () => {
   const [accessMode, setAccessMode] = useState<BluetoothPrinterAccessMode>('OPEN');
   const [allowedUserIds, setAllowedUserIds] = useState<Set<number>>(new Set());
   const [allowedRoleIds, setAllowedRoleIds] = useState<Set<number>>(new Set());
-  const [rbacUsers, setRbacUsers] = useState<(RbacProfile & { mappingActive?: boolean })[]>([]);
-  const [rbacRoles, setRbacRoles] = useState<RbacRole[]>([]);
+  const [rbacUsers, setRbacUsers] = useState<(Profile & { mappingActive?: boolean })[]>([]);
+  const [rbacRoles, setRbacRoles] = useState<Role[]>([]);
   const [rbacLoading, setRbacLoading] = useState(false);
 
   useEffect(() => {
@@ -299,8 +299,43 @@ const BluetoothPrinterSettingsPage = () => {
       toast.error('Could not verify printer access. Check your connection.');
       return;
     }
+
+    const alreadyOrg = sharedPrinters.some((p) => normalizeMac(p.mac_address) === mac);
+
+    if (!alreadyOrg && canRegisterOrRemove) {
+      try {
+        await bluetoothPrintersApi.register({ mac_address: mac, display_name: mac });
+        await loadShared();
+        persistBoundMac(mac);
+        toast.success('Printer registered for your organization and set active on this device');
+        return;
+      } catch (e) {
+        const raw = e instanceof Error ? e.message : '';
+        const lower = raw.toLowerCase();
+        if (lower.includes('already') || lower.includes('conflict')) {
+          await loadShared();
+          persistBoundMac(mac);
+          toast.success('Printer already on the organization list; active MAC saved on this device');
+          return;
+        }
+        persistBoundMac(mac);
+        toast.error(
+          `${raw || 'Could not register printer for organization'} Active MAC still saved on this device only.`
+        );
+        return;
+      }
+    }
+
+    if (!alreadyOrg && !canRegisterOrRemove) {
+      persistBoundMac(mac);
+      toast.success(
+        'Saved on this device. This MAC is not on the shared list yet—ask an owner or someone with Print Settings edit or user/role management access to register it for all devices.'
+      );
+      return;
+    }
+
     persistBoundMac(mac);
-    toast.success('Bluetooth printer MAC saved');
+    toast.success('Active printer saved on this device');
   };
 
   const handleTestPrint = async () => {
@@ -746,7 +781,11 @@ const BluetoothPrinterSettingsPage = () => {
             </div>
             <div>
               <h2 className="font-bold text-foreground">Manual MAC</h2>
-              <p className="text-xs text-muted-foreground">When list does not show the device. Server access rules still apply.</p>
+              <p className="text-xs text-muted-foreground">
+                When the paired list does not show the device. If you can register printers (owner, Print Settings edit,
+                or manage users/roles), saving also adds this MAC to the organization so other devices see it—same as
+                Register from paired list. Otherwise it stays on this device only until an admin registers it.
+              </p>
             </div>
           </div>
 
