@@ -26,8 +26,18 @@ public class TraderOwnerAccess {
         if (userId.isEmpty()) {
             return false;
         }
+        return isUserTraderOwner(userId.get());
+    }
+
+    /**
+     * @return true when the given user is the primary active OWNER mapping for their trader.
+     */
+    public boolean isUserTraderOwner(Long userId) {
+        if (userId == null) {
+            return false;
+        }
         return userTraderRepository
-            .findFirstByUserIdAndPrimaryMappingTrueAndActiveTrue(userId.get())
+            .findFirstByUserIdAndPrimaryMappingTrueAndActiveTrue(userId)
             .map(mapping -> {
                 String role = mapping.getRoleInTrader();
                 return role != null && "OWNER".equalsIgnoreCase(role.trim());

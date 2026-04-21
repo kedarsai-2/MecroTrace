@@ -19,8 +19,10 @@ import android.webkit.WebViewClient;
 import android.widget.FrameLayout;
 
 import com.dantsu.escposprinter.EscPosPrinter;
+import com.dantsu.escposprinter.EscPosPrinterCommands;
 import com.dantsu.escposprinter.connection.bluetooth.BluetoothConnection;
-import com.dantsu.escposprinter.connection.bluetooth.BluetoothPrintersConnections;
+
+import java.lang.reflect.Field;
 
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
@@ -33,6 +35,10 @@ import java.util.List;
 
 @CapacitorPlugin(name = "MercoPrinter")
 public class MercoPrinterPlugin extends Plugin {
+
+    /** Feed after slip content (manual tear / before cut), ~2 cm on 203 dpi roll printers. */
+    private static final float THERMAL_SLIP_FEED_MM = 20f;
+    private static final int THERMAL_CHARS_PER_LINE = 48;
 
     private static final int BLUETOOTH_PERMS_REQUEST_CODE = 5020;
     private PluginCall pendingBluetoothPermissionsCall;
@@ -322,11 +328,36 @@ public class MercoPrinterPlugin extends Plugin {
         });
     }
 
+    private static String thermalCutIndicatorLine() {
+        char[] dash = new char[THERMAL_CHARS_PER_LINE];
+        java.util.Arrays.fill(dash, '-');
+        return "\n[L]" + new String(dash);
+    }
+
+    /**
+     * After formatted print, attempt ESC/POS full cut. Printers without a cutter typically ignore or no-op;
+     * failures are swallowed so the slip (already includes cut line + feed) still completes.
+     */
+    private static void tryHardwareCut(EscPosPrinter escPosPrinter) {
+        if (escPosPrinter == null) return;
+        try {
+            Field f = EscPosPrinter.class.getDeclaredField("printer");
+            f.setAccessible(true);
+            Object raw = f.get(escPosPrinter);
+            if (raw instanceof EscPosPrinterCommands) {
+                ((EscPosPrinterCommands) raw).cutPaper();
+            }
+        } catch (Exception ignored) {
+            // Reflection or cut unsupported: tear line + feed already printed
+        }
+    }
+
     private boolean tryThermalByMac(String html, String deviceMac, String thermalText) {
         if (deviceMac == null || deviceMac.trim().isEmpty()) {
             return false;
         }
 
+        EscPosPrinter printer = null;
         try {
             BluetoothAdapter adapter = BluetoothAdapter.getDefaultAdapter();
             if (adapter == null) return false;
@@ -360,7 +391,7 @@ public class MercoPrinterPlugin extends Plugin {
 
             // 80mm thermal paper width (per your requirement).
             // 203 DPI + 80mm => typically ~48 chars per line.
-            EscPosPrinter printer = new EscPosPrinter(matched, 203, 80f, 48);
+            printer = new EscPosPrinter(matched, 203, 80f, THERMAL_CHARS_PER_LINE);
 
             String text;
             if (thermalText != null && !thermalText.trim().isEmpty()) {
@@ -373,11 +404,21 @@ public class MercoPrinterPlugin extends Plugin {
             if (text.isEmpty()) {
                 text = "Mercotrace\nPrint job\n";
             }
-            printer.printFormattedText(text);
-            printer.disconnectPrinter();
+
+            // Always append visible tear line + ~2 cm feed; then best-effort hardware cut (no settings).
+            String body = text + thermalCutIndicatorLine();
+            printer.printFormattedText(body, THERMAL_SLIP_FEED_MM);
+            tryHardwareCut(printer);
+
             return true;
         } catch (Exception e) {
             return false;
+        } finally {
+            if (printer != null) {
+                try {
+                    printer.disconnectPrinter();
+                } catch (Exception ignored) {}
+            }
         }
     }
 
@@ -447,7 +488,7 @@ public class MercoPrinterPlugin extends Plugin {
 
         // Basic centering for the known receipt header.
         // (ESC/POS thermal can't render CSS, so we align text by padding.)
-        final int charsPerLine = 48; // matches new EscPosPrinter(..., 48)
+        final int charsPerLine = THERMAL_CHARS_PER_LINE; // matches new EscPosPrinter(..., 48)
         String[] lines = text.trim().split("\\n");
         for (int i = 0; i < lines.length; i++) {
             String t = lines[i].trim();

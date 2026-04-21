@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <changeSet id="20260421120000-1" author="mercotrace">
+        <comment>Organization-scoped Bluetooth printer registry (per trader / mandi).</comment>
+        <createTable tableName="bluetooth_printer">
+            <column name="id" type="bigint">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="trader_id" type="bigint">
+                <constraints nullable="false"/>
+            </column>
+            <column name="mac_address" type="varchar(17)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="display_name" type="varchar(200)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="access_mode" type="varchar(20)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="created_at" type="${datetimeType}">
+                <constraints nullable="false"/>
+            </column>
+            <column name="created_by_user_id" type="bigint"/>
+        </createTable>
+        <addUniqueConstraint
+            tableName="bluetooth_printer"
+            columnNames="trader_id,mac_address"
+            constraintName="uk_bluetooth_printer_trader_mac"/>
+        <createIndex tableName="bluetooth_printer" indexName="idx_bluetooth_printer_trader">
+            <column name="trader_id"/>
+        </createIndex>
+    </changeSet>
+
+    <changeSet id="20260421120000-2" author="mercotrace">
+        <createTable tableName="bluetooth_printer_allowed_user">
+            <column name="printer_id" type="bigint">
+                <constraints nullable="false"/>
+            </column>
+            <column name="user_id" type="bigint">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+        <addPrimaryKey
+            tableName="bluetooth_printer_allowed_user"
+            columnNames="printer_id,user_id"
+            constraintName="pk_bluetooth_printer_allowed_user"/>
+        <addForeignKeyConstraint
+            baseTableName="bluetooth_printer_allowed_user"
+            baseColumnNames="printer_id"
+            constraintName="fk_bpau_printer"
+            referencedTableName="bluetooth_printer"
+            referencedColumnNames="id"
+            onDelete="CASCADE"/>
+    </changeSet>
+
+    <changeSet id="20260421120000-3" author="mercotrace">
+        <createTable tableName="bluetooth_printer_allowed_role">
+            <column name="printer_id" type="bigint">
+                <constraints nullable="false"/>
+            </column>
+            <column name="role_id" type="bigint">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+        <addPrimaryKey
+            tableName="bluetooth_printer_allowed_role"
+            columnNames="printer_id,role_id"
+            constraintName="pk_bluetooth_printer_allowed_role"/>
+        <addForeignKeyConstraint
+            baseTableName="bluetooth_printer_allowed_role"
+            baseColumnNames="printer_id"
+            constraintName="fk_bpar_printer"
+            referencedTableName="bluetooth_printer"
+            referencedColumnNames="id"
+            onDelete="CASCADE"/>
+    </changeSet>
+</databaseChangeLog>
