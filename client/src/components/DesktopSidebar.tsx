@@ -4,7 +4,7 @@ import {
   Home, Settings, Users,   Truck, Gavel, Printer,
   FileText, Receipt, User,
   ChevronLeft, ChevronRight, Moon, Sun,
-  Box, Send, BarChart3,, ClipboardList
+  Box, Send, BarChart3, ClipboardList
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { MercotraceIcon } from '@/components/MercotraceLogo';
