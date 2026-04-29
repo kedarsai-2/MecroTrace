@@ -66,7 +66,9 @@ export interface SettlementEntryDTO {
   buyerName: string;
   /** Auction base bid per bag */
   rate: number;
-  /** Preset margin from auction; seller settlement rate = rate + presetMargin */
+  /** Vehicle-ops final per-bag rate (incl. pad preset). Modified settlement does not add preset again. */
+  summarySellerRate?: number;
+  /** Preset from auction (signed). Original settlement = rate + preset; not added on top of summarySellerRate. */
   presetMargin?: number;
   quantity: number;
   weight: number;

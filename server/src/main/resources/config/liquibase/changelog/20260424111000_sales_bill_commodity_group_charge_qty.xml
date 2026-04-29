@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+    <changeSet id="20260424111000-1" author="merco">
+        <comment>Optional per-group bag counts for coolie / weighman (default = sum of line quantities when null).</comment>
+        <addColumn tableName="sales_bill_commodity_group">
+            <column name="coolie_charge_qty" type="integer"/>
+            <column name="weighman_charge_qty" type="integer"/>
+        </addColumn>
+    </changeSet>
+</databaseChangeLog>

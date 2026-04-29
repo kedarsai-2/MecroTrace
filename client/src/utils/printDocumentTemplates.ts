@@ -2,6 +2,7 @@
 // Same format as client_origin; used with directPrint() + printLogApi.
 
 import { effectiveGstPercent, formatBillingInr, gstOnSubtotal, percentOfAmount, roundMoney2 } from '@/utils/billingMoney';
+import { formatAuctionLotIdentifier } from '@/utils/auctionLotIdentifier';
 
 const PRINT_STYLES = `
   body { font-family: system-ui, sans-serif; margin: 0; padding: 12px; font-size: 12px; color: #111; }
@@ -25,12 +26,15 @@ const PRINT_STYLES = `
 export interface DocumentPrintOptions {
   pageSize?: 'A4' | 'A5';
   includeHeader?: boolean;
+  /** Footer copy line on GST / Non-GST bill and Sales Patti. Default ORIGINAL COPY. */
+  copyLabel?: string;
 }
 
 function normalizeOptions(options?: DocumentPrintOptions): Required<DocumentPrintOptions> {
   return {
     pageSize: options?.pageSize === 'A5' ? 'A5' : 'A4',
     includeHeader: options?.includeHeader !== false,
+    copyLabel: (options?.copyLabel && String(options.copyLabel).trim()) || 'ORIGINAL COPY',
   };
 }
 
@@ -95,6 +99,10 @@ export interface BillPrintData {
       lotName?: string;
       /** Total bags for the whole lot (used to build the lot identifier). */
       lotTotalQty?: number;
+      vehicleTotalQty?: number;
+      sellerVehicleQty?: number;
+      vehicleMark?: string;
+      sellerMark?: string;
       bidNumber?: number;
       sellerName?: string;
     }[];
@@ -146,16 +154,30 @@ function commodityNetTotal(group: BillPrintData['commodityGroups'][number]): num
 }
 
 /**
- * Lot identifier — mirrors BillingPage `formatLotIdentifierForBillEntry`:
- * "{lotTotalQty}/{lotTotalQty}/{lotName}-{lotTotalQty}"
- * Falls back gracefully when fields are absent.
+ * Lot identifier — mirrors BillingPage `formatLotIdentifierForBillEntry`.
  */
 function formatLotIdentifierForPrint(
   item: BillPrintData['commodityGroups'][number]['items'][number],
 ): string {
-  const lotQty  = Number(item.lotTotalQty ?? item.quantity ?? 0);
+  const lineQty = Number(item.quantity ?? 0) || 0;
+  const rawLt = item.lotTotalQty;
+  const lotQty =
+    rawLt != null && Number.isFinite(Number(rawLt)) && Number(rawLt) > 0 ? Number(rawLt) : lineQty;
   const lotName = String(item.lotName || String(lotQty || ''));
-  return `${lotQty}/${lotQty}/${lotName}-${lotQty}`;
+  const rawVt = item.vehicleTotalQty;
+  const vTotal =
+    rawVt != null && Number.isFinite(Number(rawVt)) && Number(rawVt) > 0 ? Number(rawVt) : lotQty;
+  const rawSv = item.sellerVehicleQty;
+  const sTotal =
+    rawSv != null && Number.isFinite(Number(rawSv)) && Number(rawSv) > 0 ? Number(rawSv) : lotQty;
+  return formatAuctionLotIdentifier({
+    vehicleMark: item.vehicleMark,
+    vehicleTotalQty: vTotal,
+    sellerMark: item.sellerMark,
+    sellerTotalQty: sTotal,
+    lotName,
+    lotQty,
+  });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -526,6 +548,7 @@ function gstBillFooter(
   group: BillPrintData['commodityGroups'][number],
   pageNum: number,
   totalPages: number,
+  copyLabel: string,
 ): string {
   const f = bill.firm;
 
@@ -575,7 +598,8 @@ function gstBillFooter(
   /* ── Charges (right) ── */
   const commAmt   = roundMoney2(group.commissionAmount || 0);
   const userAmt   = roundMoney2(group.userFeeAmount    || 0);
-  const handling  = roundMoney2((group.coolieAmount || 0) + (group.weighmanChargeAmount || 0));
+  const coolieAmt = roundMoney2(group.coolieAmount || 0);
+  const unloadAmt = roundMoney2(group.weighmanChargeAmount || 0);
   const net       = commodityNetTotal(group);
   const fr        = roundMoney2(bill.outboundFreight || 0);
   const grandTot  = bill.grandTotal;
@@ -590,7 +614,6 @@ function gstBillFooter(
   const charge2Label = userAmt > 0
     ? (group.userFeePercent > 0 ? `User Fee (${formatBillingInr(group.userFeePercent)}%)` : 'Charge 2')
     : 'Charge 2';
-  const charge3Label = handling > 0 ? 'Coolie / Weighman' : 'Charge 3';
 
   const optLine = (show: boolean, label: string, val: string) =>
     show ? `<div class="chg-line"><span>${label}</span><span>${val}</span></div>` : '';
@@ -599,7 +622,8 @@ function gstBillFooter(
     <div class="chg-col">
       <div class="chg-line"><span>${escapeHtml(charge1Label)}</span><span>${commAmt > 0 ? '₹' + formatBillingInr(commAmt) : '—'}</span></div>
       <div class="chg-line"><span>${escapeHtml(charge2Label)}</span><span>${userAmt > 0 ? '₹' + formatBillingInr(userAmt) : '—'}</span></div>
-      <div class="chg-line"><span>${escapeHtml(charge3Label)}</span><span>${handling > 0 ? '₹' + formatBillingInr(handling) : '—'}</span></div>
+      ${optLine(coolieAmt > 0, 'Coolie', '₹' + formatBillingInr(coolieAmt))}
+      ${optLine(unloadAmt > 0, 'Unloading', '₹' + formatBillingInr(unloadAmt))}
       ${optLine(discAmt > 0, 'Discount', '−₹' + formatBillingInr(discAmt))}
       ${optLine(roundMoney2(group.manualRoundOff || 0) !== 0, 'Round Off', ((group.manualRoundOff ?? 0) > 0 ? '+' : '') + '₹' + formatBillingInr(group.manualRoundOff ?? 0))}
       <div class="chg-line chg-sep"><span>Taxable Amount</span><span>₹${formatBillingInr(sub)}</span></div>
@@ -624,7 +648,7 @@ function gstBillFooter(
     </div>
     <div class="words-strip">Total Amount in Words: ${escapeHtml(wordsStr)}</div>
     <div class="bot-strip">
-      <div>COPY NAME</div>
+      <div>${escapeHtml(copyLabel)}</div>
       <div class="mid">BUYER'S MARK: ${escapeHtml(bill.buyerMark || '—')}</div>
       <div class="right">For ${firmSign}</div>
     </div>
@@ -644,39 +668,69 @@ function gstBillPageLine(pageNum: number, totalPages: number): string {
   </div>`;
 }
 
-export function generateSalesBillPrintHTML(bill: BillPrintData, options?: DocumentPrintOptions): string {
-  const opts   = normalizeOptions(options);
+function buildGstSalesBillBodyHTML(
+  bill: BillPrintData,
+  includeHeader: boolean,
+  copyLabel: string,
+): string {
   const groups = bill.commodityGroups || [];
-  const total  = groups.length;
-
-  const css = buildGstBillCSS(opts.pageSize);
-
+  const total = groups.length;
   if (total === 0) {
+    return `<p style="padding:20px;font-family:Arial">No commodities on this bill.</p>`;
+  }
+  return groups
+    .map((group, gi) => {
+      const pageNum = gi + 1;
+      const isLast = gi === total - 1;
+      const header = gstBillPageHeader(bill, group, includeHeader);
+      const table = gstBillItemTable(group);
+      const footer = isLast
+        ? gstBillFooter(bill, group, pageNum, total, copyLabel)
+        : gstBillPageLine(pageNum, total);
+      return `<div class="${isLast ? 'pg' : 'pg pg-break'}">${header}${table}${footer}</div>`;
+    })
+    .join('');
+}
+
+export function generateSalesBillPrintHTML(bill: BillPrintData, options?: DocumentPrintOptions): string {
+  const opts = normalizeOptions(options);
+  const copyLabel = (options?.copyLabel && options.copyLabel.trim()) || 'ORIGINAL COPY';
+  const css = buildGstBillCSS(opts.pageSize);
+  const body = buildGstSalesBillBodyHTML(bill, opts.includeHeader, copyLabel);
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Tax Invoice ${escapeHtml(bill.billNumber || '')}</title><style>${css}</style></head><body>${body}</body></html>`;
+}
+
+/** One HTML document; each copy is a full bill with `page-break-after` between copies. */
+export function generateSalesBillPrintHTMLForCopies(
+  bill: BillPrintData,
+  copyLabels: string[],
+  options?: DocumentPrintOptions,
+): string {
+  const opts = normalizeOptions(options);
+  const labels =
+    copyLabels.length > 0
+      ? copyLabels.map((l) => (l && String(l).trim()) || 'COPY').filter((s) => s.length > 0)
+      : ['ORIGINAL COPY'];
+  const css = buildGstBillCSS(opts.pageSize);
+  const groups = bill.commodityGroups || [];
+  if (groups.length === 0) {
     const empty = `<p style="padding:20px;font-family:Arial">No commodities on this bill.</p>`;
     return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>${css}</style></head><body>${empty}</body></html>`;
   }
-
-  const pages = groups.map((group, gi) => {
-    const pageNum = gi + 1;
-    const isLast  = gi === total - 1;
-
-    const header  = gstBillPageHeader(bill, group, opts.includeHeader);
-    const table   = gstBillItemTable(group);
-    const footer  = isLast
-      ? gstBillFooter(bill, group, pageNum, total)
-      : gstBillPageLine(pageNum, total);
-
-    return `<div class="${isLast ? 'pg' : 'pg pg-break'}">${header}${table}${footer}</div>`;
-  }).join('');
-
-  return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Tax Invoice ${escapeHtml(bill.billNumber || '')}</title><style>${css}</style></head><body>${pages}</body></html>`;
+  const inner = labels
+    .map((label, i) => {
+      const body = buildGstSalesBillBodyHTML(bill, opts.includeHeader, label);
+      const pba = i < labels.length - 1 ? 'page-break-after: always;' : '';
+      return `<div class="gst-bill-print-copy" style="${pba}">${body}</div>`;
+    })
+    .join('');
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Tax Invoice ${escapeHtml(bill.billNumber || '')}</title><style>${css}</style></head><body>${inner}</body></html>`;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Non-GST Sales Bill (Buyer)
 // Always: no header (no firm letterhead), A5 portrait by default.
-// Layout mirrors design spec: "Sold X Bags of ITEM..." info block,
-// combined 7-col table (items left + particulars right), words strip, copy name.
+// Info block: buyer/vehicle; combined 7-col table (items left + particulars right), words strip, copy name.
 // ─────────────────────────────────────────────────────────────────────────────
 
 function buildNonGstBillCSS(pageSize: 'A4' | 'A5'): string {
@@ -775,13 +829,13 @@ function generateNonGstCommodityPage(
   group: BillPrintData['commodityGroups'][number],
   pageNum: number,
   totalPages: number,
+  copyLabel: string,
 ): string {
   const d = new Date(bill.billDate);
   const dateStr = Number.isNaN(d.getTime())
     ? String(bill.billDate)
     : d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
 
-  const commodity = escapeHtml((group.commodityName || 'Item').trim());
   const divisor   = Number(group.divisor) > 0 ? Number(group.divisor) : 50;
   const billNum   = escapeHtml(bill.billNumber || 'DRAFT');
   const buyerName = escapeHtml((bill.billingName || bill.buyerName || '—').trim());
@@ -805,15 +859,17 @@ function generateNonGstCommodityPage(
 
   /* ── Build particulars list ── */
   const pars: { label: string; amount: number }[] = [];
-  const commAmt  = roundMoney2(group.commissionAmount || 0);
-  const userAmt  = roundMoney2(group.userFeeAmount    || 0);
-  const handling = roundMoney2((group.coolieAmount || 0) + (group.weighmanChargeAmount || 0));
-  const fr       = roundMoney2(bill.outboundFreight || 0);
+  const commAmt   = roundMoney2(group.commissionAmount || 0);
+  const userAmt   = roundMoney2(group.userFeeAmount || 0);
+  const coolieAmt = roundMoney2(group.coolieAmount || 0);
+  const unloadAmt = roundMoney2(group.weighmanChargeAmount || 0);
+  const fr        = roundMoney2(bill.outboundFreight || 0);
 
-  if (commAmt  > 0) pars.push({ label: group.commissionPercent > 0 ? `Commission (${formatBillingInr(group.commissionPercent)}%)` : 'Commission', amount: commAmt });
-  if (userAmt  > 0) pars.push({ label: group.userFeePercent > 0 ? `User Fee (${formatBillingInr(group.userFeePercent)}%)` : 'User Fee', amount: userAmt });
-  if (handling > 0) pars.push({ label: 'Coolie / Weighman', amount: handling });
-  if (fr       > 0) pars.push({ label: 'Outbound Freight', amount: fr });
+  if (commAmt > 0) pars.push({ label: group.commissionPercent > 0 ? `Commission (${formatBillingInr(group.commissionPercent)}%)` : 'Commission', amount: commAmt });
+  if (userAmt > 0) pars.push({ label: group.userFeePercent > 0 ? `User Fee (${formatBillingInr(group.userFeePercent)}%)` : 'User Fee', amount: userAmt });
+  if (coolieAmt > 0) pars.push({ label: 'Coolie', amount: coolieAmt });
+  if (unloadAmt > 0) pars.push({ label: 'Unloading', amount: unloadAmt });
+  if (fr > 0) pars.push({ label: 'Outbound Freight', amount: fr });
 
   const subtotalWithCharges = roundMoney2(roundMoney2(group.subtotal) + roundMoney2(group.totalCharges ?? 0));
   let discAmt = roundMoney2(group.discount || 0);
@@ -826,7 +882,6 @@ function generateNonGstCommodityPage(
   const totalParsAmt = roundMoney2(pars.reduce((s, p) => s + p.amount, 0));
   const net          = commodityNetTotal(group);
   const wordsStr     = inrAmountToWords(net);
-  const totalQtyInt  = Math.round(totalQty);
 
   /* ── Build data rows (max of items vs particulars count) ── */
   const maxRows = Math.max(items.length, pars.length);
@@ -860,7 +915,6 @@ function generateNonGstCommodityPage(
   <div class="${pageNum < totalPages ? 'pg pg-break' : 'pg'}">
     <div class="info-blk">
       <div class="info-l">
-        <div>Sold <strong>${totalQtyInt}</strong> Bags of <strong>${commodity}</strong> on account and risk of</div>
         <div>${buyerName}${contact ? ', ' + contact : ''}</div>
         ${addr    ? `<div>${addr}</div>`                       : ''}
         ${vehicle ? `<div>Vehicle No : ${vehicle}</div>` : ''}
@@ -900,31 +954,57 @@ function generateNonGstCommodityPage(
         </tr>
       </tbody>
     </table>
-    <div class="copy-name">COPY NAME</div>
+    <div class="copy-name">${escapeHtml(copyLabel)}</div>
     <div class="page-line">Page ${pageNum}/${totalPages}</div>
   </div>`;
 }
 
+function buildNonGstSalesBillBodyHTML(bill: BillPrintData, pageSize: 'A4' | 'A5', copyLabel: string): string {
+  const groups = bill.commodityGroups || [];
+  const total = groups.length;
+  if (total === 0) {
+    return `<p style="padding:16px;font-family:Arial">No commodities on this bill.</p>`;
+  }
+  return groups.map((group, gi) => generateNonGstCommodityPage(bill, group, gi + 1, total, copyLabel)).join('');
+}
+
 export function generateNonGstSalesBillPrintHTML(
   bill: BillPrintData,
-  options?: Pick<DocumentPrintOptions, 'pageSize'>,
+  options?: Pick<DocumentPrintOptions, 'pageSize' | 'copyLabel'>,
 ): string {
   // Non-GST bills: always no header; default A5 unless caller overrides
   const pageSize: 'A4' | 'A5' = options?.pageSize ?? 'A5';
-  const groups = bill.commodityGroups || [];
-  const total  = groups.length;
-  const css    = buildNonGstBillCSS(pageSize);
+  const copyLabel = (options?.copyLabel && options.copyLabel.trim()) || 'ORIGINAL COPY';
+  const css = buildNonGstBillCSS(pageSize);
+  const pages = buildNonGstSalesBillBodyHTML(bill, pageSize, copyLabel);
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Invoice ${escapeHtml(bill.billNumber || '')}</title><style>${css}</style></head><body>${pages}</body></html>`;
+}
 
-  if (total === 0) {
+/** One HTML document; each copy is a full non-GST bill with page breaks between copies. */
+export function generateNonGstSalesBillPrintHTMLForCopies(
+  bill: BillPrintData,
+  copyLabels: string[],
+  options?: Pick<DocumentPrintOptions, 'pageSize'>,
+): string {
+  const pageSize: 'A4' | 'A5' = options?.pageSize ?? 'A5';
+  const labels =
+    copyLabels.length > 0
+      ? copyLabels.map((l) => (l && String(l).trim()) || 'COPY').filter((s) => s.length > 0)
+      : ['ORIGINAL COPY'];
+  const css = buildNonGstBillCSS(pageSize);
+  const groups = bill.commodityGroups || [];
+  if (groups.length === 0) {
     const empty = `<p style="padding:16px;font-family:Arial">No commodities on this bill.</p>`;
     return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>${css}</style></head><body>${empty}</body></html>`;
   }
-
-  const pages = groups
-    .map((group, gi) => generateNonGstCommodityPage(bill, group, gi + 1, total))
+  const inner = labels
+    .map((label, i) => {
+      const body = buildNonGstSalesBillBodyHTML(bill, pageSize, label);
+      const pba = i < labels.length - 1 ? 'page-break-after: always;' : '';
+      return `<div class="ng-bill-print-copy" style="${pba}">${body}</div>`;
+    })
     .join('');
-
-  return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Invoice ${escapeHtml(bill.billNumber || '')}</title><style>${css}</style></head><body>${pages}</body></html>`;
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Invoice ${escapeHtml(bill.billNumber || '')}</title><style>${css}</style></head><body>${inner}</body></html>`;
 }
 
 // ── Sales Patti (SettlementPage) ─────────────────────────
@@ -1044,8 +1124,11 @@ function buildSalesPattiStyle(): string {
 `;
 }
 
-export function generateSalesPattiPrintHTML(patti: PattiPrintData, options?: DocumentPrintOptions): string {
-  const printOptions = normalizeOptions(options);
+function buildSalesPattiA4Html(
+  patti: PattiPrintData,
+  printOptions: ReturnType<typeof normalizeOptions>,
+  copyLabel: string,
+): string {
   const dateStr = new Date(patti.createdAt).toLocaleDateString('en-GB');
   const rows = (patti.detailRows && patti.detailRows.length > 0)
     ? patti.detailRows
@@ -1089,7 +1172,6 @@ export function generateSalesPattiPrintHTML(patti: PattiPrintData, options?: Doc
 
   const f = patti.firm;
 
-  // Letterhead strip (3-col + firm band + title) — only when includeHeader is true
   const letterheadHtml = (printOptions.includeHeader && f)
     ? (() => {
         const apmc     = escapeHtml((f.rmcApmcCode || '').trim());
@@ -1121,7 +1203,6 @@ export function generateSalesPattiPrintHTML(patti: PattiPrintData, options?: Doc
       })()
     : '';
 
-  // Sold line + Patti No/Date — always shown
   const soldSectionHtml = `
     <div class="ph-sold">
       <div class="ph-sold-left">
@@ -1138,7 +1219,7 @@ export function generateSalesPattiPrintHTML(patti: PattiPrintData, options?: Doc
 
   const firmHeaderHtml = `<div class="ph-box">${letterheadHtml}${soldSectionHtml}</div>`;
 
-  const body = `
+  return `
     <div class="patti-a4">
       ${firmHeaderHtml}
 
@@ -1192,25 +1273,87 @@ export function generateSalesPattiPrintHTML(patti: PattiPrintData, options?: Doc
         <span>Net Payable</span>
         <span>${formatBillingInr(patti.netPayable)}</span>
       </div>
+      <div class="patti-copy-footer" style="margin-top:10px;font-size:9px;font-weight:700;text-align:center;border:1px solid #000;padding:4px 8px;">
+        ${escapeHtml(copyLabel)}
+      </div>
     </div>
   `;
-  return wrapPrintDocument(`${buildSalesPattiStyle()}${body}`, printOptions.pageSize);
 }
 
-export function generateSalesPattiBatchPrintHTML(pattis: PattiPrintData[], options?: DocumentPrintOptions): string {
-  const pages = (pattis || []).map((p, idx, arr) => `
-    <div${idx < arr.length - 1 ? ' style="page-break-after: always;"' : ''}>
-      ${generateSalesPattiPrintHTMLBody(p, options)}
-    </div>
-  `).join('');
+/**
+ * One document: each page is a (possibly different) patti payload with its own footer label.
+ * Use for Original vs Modified (ALT O / ALT M) settlement copies.
+ */
+export function generateSalesPattiPrintHTMLPages(
+  pages: { patti: PattiPrintData; copyLabel: string }[],
+  options?: DocumentPrintOptions,
+): string {
   const printOptions = normalizeOptions(options);
+  if (pages.length === 0) {
+    return wrapPrintDocument(`${buildSalesPattiStyle()}`, printOptions.pageSize);
+  }
+  const inner = pages
+    .map((pg, i) => {
+      const label = (pg.copyLabel && String(pg.copyLabel).trim()) || 'COPY';
+      const chunk = buildSalesPattiA4Html(pg.patti, printOptions, label);
+      const pba = i < pages.length - 1 ? 'page-break-after: always;' : '';
+      return `<div class="patti-print-job" style="${pba}">${chunk}</div>`;
+    })
+    .join('');
+  return wrapPrintDocument(`${buildSalesPattiStyle()}${inner}`, printOptions.pageSize);
+}
+
+/** One document; each entry in `copyLabels` is a full patti with footer label and page break between copies. */
+export function generateSalesPattiPrintHTMLForCopies(
+  patti: PattiPrintData,
+  copyLabels: string[],
+  options?: DocumentPrintOptions,
+): string {
+  const labels =
+    copyLabels.length > 0
+      ? copyLabels.map((l) => (l && String(l).trim()) || 'COPY').filter((s) => s.length > 0)
+      : ['ORIGINAL COPY'];
+  return generateSalesPattiPrintHTMLPages(
+    labels.map((copyLabel) => ({ patti, copyLabel })),
+    options,
+  );
+}
+
+export function generateSalesPattiPrintHTML(patti: PattiPrintData, options?: DocumentPrintOptions): string {
+  const label = (options?.copyLabel && options.copyLabel.trim()) || 'ORIGINAL COPY';
+  return generateSalesPattiPrintHTMLForCopies(patti, [label], options);
+}
+
+export function generateSalesPattiBatchPrintHTML(
+  pattis: PattiPrintData[],
+  options?: DocumentPrintOptions,
+  copyLabels?: string[],
+): string {
+  const printOptions = normalizeOptions(options);
+  const labels =
+    copyLabels && copyLabels.length > 0
+      ? copyLabels.map((l) => (l && String(l).trim()) || 'COPY').filter((s) => s.length > 0)
+      : ['ORIGINAL COPY'];
+  const list = pattis || [];
+  const totalSlots = list.length * labels.length;
+  let slot = 0;
+  const pages = list
+    .flatMap((p) =>
+      labels.map((label) => {
+        const isLast = slot === totalSlots - 1;
+        slot += 1;
+        const inner = buildSalesPattiA4Html(p, printOptions, label);
+        return `<div${!isLast ? ' style="page-break-after: always;"' : ''}>${inner}</div>`;
+      }),
+    )
+    .join('');
   return wrapPrintDocument(`${buildSalesPattiStyle()}${pages}`, printOptions.pageSize);
 }
 
 function generateSalesPattiPrintHTMLBody(patti: PattiPrintData, options?: DocumentPrintOptions): string {
-  const full = generateSalesPattiPrintHTML(patti, options);
-  const bodyMatch = full.match(/<body>([\s\S]*)<\/body>/i);
-  return bodyMatch ? bodyMatch[1] : '';
+  const printOptions = normalizeOptions(options);
+  const label = (options?.copyLabel && options.copyLabel.trim()) || 'ORIGINAL COPY';
+  return buildSalesPattiA4Html(patti, printOptions, label);
 }
 
 // ── Weighing Slip (WeighingPage) ──────────────────────────

@@ -52,6 +52,9 @@ export const AVAILABLE_MODULES: Record<string, string[]> = {
   // 6. Weighing
   'Weighing': ['View', 'Create'],
 
+  // 6b. Summary page
+  SummaryPage: ['View'],
+
   // 7. Writer's Pad
   "Writer's Pad": ['View', 'Create', 'Edit'],
 

@@ -30,6 +30,10 @@ public class Vehicle extends AbstractAuditingEntity<Long> implements Serializabl
     @Column(name = "vehicle_number", length = 50, nullable = true)
     private String vehicleNumber;
 
+    /** Optional global unique mark/alias for the vehicle (NULL = unset). Uniqueness enforced case-insensitive on trimmed value. */
+    @Column(name = "vehicle_mark_alias", length = 8, nullable = true)
+    private String vehicleMarkAlias;
+
     @Column(name = "arrival_datetime", nullable = false)
     private Instant arrivalDatetime;
 
@@ -86,6 +90,14 @@ public class Vehicle extends AbstractAuditingEntity<Long> implements Serializabl
 
     public void setVehicleNumber(String vehicleNumber) {
         this.vehicleNumber = vehicleNumber;
+    }
+
+    public String getVehicleMarkAlias() {
+        return vehicleMarkAlias;
+    }
+
+    public void setVehicleMarkAlias(String vehicleMarkAlias) {
+        this.vehicleMarkAlias = vehicleMarkAlias;
     }
 
     public Instant getArrivalDatetime() {
@@ -192,6 +204,7 @@ public class Vehicle extends AbstractAuditingEntity<Long> implements Serializabl
             "id=" + getId() +
             ", traderId=" + getTraderId() +
             ", vehicleNumber='" + getVehicleNumber() + "'" +
+            ", vehicleMarkAlias='" + getVehicleMarkAlias() + "'" +
             ", arrivalDatetime='" + getArrivalDatetime() + "'" +
             ", createdBy='" + getCreatedBy() + "'" +
             ", createdAt='" + getCreatedAt() + "'" +

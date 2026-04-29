@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
 import { roundMoney2 } from '@/utils/billingMoney';
@@ -10,12 +10,20 @@ import {
   numericGuardModeForBillingMoney,
 } from '@/utils/numericInputGuards';
 
+/** Default trailing debounce for commitMode live — cuts full-page re-renders on huge forms (e.g. Billing). */
+const DEFAULT_LIVE_DEBOUNCE_MS = 100;
+
 type BillingMoneyInputProps = {
   value: number;
-  /** Called on every keystroke while focused (live recalc) and again on blur (final normalize). */
+  /** Called while focused (live + debounce) and again on blur (final normalize). */
   onCommit: (n: number) => void;
-  /** live: commit on each keypress; blur: commit only on blur/finalize. */
+  /** live: commit while typing (debounced); blur: commit only on blur/finalize. */
   commitMode?: 'live' | 'blur';
+  /**
+   * Only when commitMode is `live`: ms to wait after last change before calling onCommit.
+   * Omit = {@link DEFAULT_LIVE_DEBOUNCE_MS}. Use `0` for immediate per-keystroke commits (small forms).
+   */
+  liveDebounceMs?: number;
   disabled?: boolean;
   className?: string;
   placeholder?: string;
@@ -33,9 +41,17 @@ type BillingMoneyInputProps = {
  * incomplete (e.g. lone minus/dot), or invalid — parent state is left unchanged until blur
  * or a complete number, so clearing a field does not force artificial values (e.g. qty → 1).
  */
-function parseDraftToNumber(raw: string, min?: number): number | null {
+function parseDraftToNumber(raw: string, min?: number, integerOnly?: boolean): number | null {
   const t = raw.replace(/,/g, '').trim();
   if (t === '') return null;
+  if (integerOnly) {
+    if (!/^\d+$/.test(t)) return null;
+    const n = parseInt(t, 10);
+    if (!Number.isFinite(n)) return null;
+    let x = n;
+    if (min !== undefined && x < min) x = min;
+    return x;
+  }
   if (t === '.') return null;
   if (t === '-') return null;
   if (!/^-?\d*\.?\d*$/.test(t)) return null;
@@ -55,6 +71,7 @@ export function BillingMoneyInput({
   value,
   onCommit,
   commitMode = 'live',
+  liveDebounceMs,
   disabled,
   className,
   placeholder,
@@ -66,18 +83,52 @@ export function BillingMoneyInput({
   const [draft, setDraft] = useState<string | null>(null);
   /** True after any input/paste while focused; false on focus until user edits. */
   const editedSinceFocusRef = useRef(false);
+  const liveCommitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const display = draft !== null ? draft : roundMoney2(value).toFixed(2);
+  const liveDebounceEffective =
+    commitMode === 'live'
+      ? liveDebounceMs === 0
+        ? 0
+        : (liveDebounceMs ?? DEFAULT_LIVE_DEBOUNCE_MS)
+      : 0;
+
+  const clearLiveTimer = () => {
+    if (liveCommitTimerRef.current != null) {
+      clearTimeout(liveCommitTimerRef.current);
+      liveCommitTimerRef.current = null;
+    }
+  };
+
+  useEffect(() => () => clearLiveTimer(), []);
+
+  const display =
+    draft !== null
+      ? draft
+      : integerOnly
+        ? String(Math.max(min ?? 0, Math.round(Number(value) || 0)))
+        : roundMoney2(value).toFixed(2);
   const guardMode = numericGuardModeForBillingMoney(integerOnly);
+
+  const scheduleLiveCommit = (next: string) => {
+    if (commitMode !== 'live') return;
+    const live = parseDraftToNumber(next, min, integerOnly);
+    clearLiveTimer();
+    if (liveDebounceEffective === 0) {
+      if (live !== null) onCommit(live);
+      return;
+    }
+    if (live === null) return;
+    liveCommitTimerRef.current = setTimeout(() => {
+      liveCommitTimerRef.current = null;
+      onCommit(live);
+    }, liveDebounceEffective);
+  };
 
   const pushDraft = (next: string) => {
     editedSinceFocusRef.current = true;
     setDraft(next);
     if (commitMode === 'live') {
-      const live = parseDraftToNumber(next, min);
-      if (live !== null) {
-        onCommit(live);
-      }
+      scheduleLiveCommit(next);
     }
   };
 
@@ -106,6 +157,7 @@ export function BillingMoneyInput({
         pushDraft(next);
       }}
       onBlur={() => {
+        clearLiveTimer();
         const raw = draft ?? '';
         const trimmed = raw.replace(/,/g, '').trim();
         if (!editedSinceFocusRef.current && trimmed === '') {
@@ -117,11 +169,12 @@ export function BillingMoneyInput({
         editedSinceFocusRef.current = false;
         let n = parseFloat(raw.replace(/,/g, ''));
         if (!Number.isFinite(n)) {
-          onCommit(allowEmptyZero ? 0 : roundMoney2(value));
+          onCommit(allowEmptyZero ? 0 : integerOnly ? Math.max(min ?? 0, Math.round(Number(value) || 0)) : roundMoney2(value));
           return;
         }
         if (min !== undefined && n < min) n = min;
-        onCommit(roundMoney2(n));
+        const committed = integerOnly ? Math.round(n) : roundMoney2(n);
+        onCommit(committed);
       }}
       className={cn(className)}
     />

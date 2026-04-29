@@ -73,7 +73,7 @@ const OnboardingScreen = () => {
   const isLastSlide = currentSlide === slides.length - 1;
 
   return (
-    <div className="h-[100dvh] relative overflow-hidden flex flex-col">
+    <div className="fixed inset-0 z-0 flex flex-col overflow-hidden bg-slate-950">
       <AnimatePresence mode="wait">
         <motion.div
           key={slide.id}

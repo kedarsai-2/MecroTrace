@@ -98,5 +98,15 @@ class PrintLogServiceImplTest {
         assertThat(dto.getReferenceId()).isEqualTo("1");
         assertThat(dto.getPrintType()).isEqualTo("STICKER");
     }
+
+    @Test
+    void listDistinctReferenceIdsByReferenceType_returnsRepositoryList() {
+        when(printLogRepository.findDistinctReferenceIdsByTraderIdAndReferenceType(TRADER_ID, "BUYER_CHITI_BID"))
+            .thenReturn(List.of("10:1", "10:2"));
+
+        assertThat(service.listDistinctReferenceIdsByReferenceType("BUYER_CHITI_BID"))
+            .containsExactly("10:1", "10:2");
+        verify(printLogRepository).findDistinctReferenceIdsByTraderIdAndReferenceType(TRADER_ID, "BUYER_CHITI_BID");
+    }
 }
 

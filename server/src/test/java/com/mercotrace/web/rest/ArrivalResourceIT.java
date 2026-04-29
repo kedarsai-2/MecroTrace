@@ -207,6 +207,41 @@ class ArrivalResourceIT {
 
     @Test
     @Transactional
+    void createArrivalWithNonAlphanumericVehicleMarkAliasIsBadRequest() throws Exception {
+        ArrivalRequestDTO request = buildBasicRequest(true);
+        request.setVehicleMarkAlias("BAD-1");
+        restArrivalMockMvc
+            .perform(post(ENTITY_API_URL).contentType(MediaType.APPLICATION_JSON).content(om.writeValueAsBytes(request)))
+            .andExpect(status().isBadRequest())
+            .andExpect(content().string(org.hamcrest.Matchers.containsString("letters and numbers")));
+    }
+
+    @Test
+    @Transactional
+    void createArrivalWithDuplicateVehicleMarkAliasIsBadRequest() throws Exception {
+        ArrivalRequestDTO first = buildBasicRequest(true);
+        first.setVehicleMarkAlias("ALIAS1");
+        String firstBody = restArrivalMockMvc
+            .perform(post(ENTITY_API_URL).contentType(MediaType.APPLICATION_JSON).content(om.writeValueAsBytes(first)))
+            .andExpect(status().isCreated())
+            .andReturn()
+            .getResponse()
+            .getContentAsString();
+        ArrivalSummaryDTO firstSummary = om.readValue(firstBody, ArrivalSummaryDTO.class);
+        insertedVehicle = vehicleRepository.findById(firstSummary.getVehicleId()).orElse(null);
+
+        ArrivalRequestDTO second = buildBasicRequest(true);
+        second.setVehicleNumber("KA02XY9999");
+        second.setVehicleMarkAlias("alias1");
+
+        restArrivalMockMvc
+            .perform(post(ENTITY_API_URL).contentType(MediaType.APPLICATION_JSON).content(om.writeValueAsBytes(second)))
+            .andExpect(status().isBadRequest())
+            .andExpect(content().string(org.hamcrest.Matchers.containsString("Vehicle mark/alias")));
+    }
+
+    @Test
+    @Transactional
     void createArrivalWithDuplicateLotNamesWithinSameSellerIsBadRequest() throws Exception {
         ArrivalLotDTO lot1 = new ArrivalLotDTO();
         lot1.setLotName("Lot-1");

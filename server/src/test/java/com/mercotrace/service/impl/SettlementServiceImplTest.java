@@ -99,6 +99,9 @@ class SettlementServiceImplTest {
     @Mock
     private com.mercotrace.repository.CommodityConfigRepository commodityConfigRepository;
 
+    @Mock
+    private com.mercotrace.repository.PrintSettingRepository printSettingRepository;
+
     private SettlementServiceImpl service;
 
     @BeforeEach
@@ -125,6 +128,7 @@ class SettlementServiceImplTest {
             contactService,
             hamaliSlabRepository,
             commodityConfigRepository,
+            printSettingRepository,
             new ObjectMapper()
         );
         // Only create stubbing when needed in specific tests to avoid UnnecessaryStubbingException.

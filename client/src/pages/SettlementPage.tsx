@@ -26,6 +26,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import BottomNav from '@/components/BottomNav';
 import { toast } from 'sonner';
 import {
+  parsePrintCopiesJson,
   printLogApi,
   printSettingsApi,
   settlementApi,
@@ -40,7 +41,11 @@ import type { ArrivalFullDetail, ArrivalSellerFullDetail } from '@/services/api/
 import type { FullCommodityConfigDto } from '@/services/api/commodities';
 import type { Commodity, Contact } from '@/types/models';
 import { directPrint } from '@/utils/printTemplates';
-import { generateSalesPattiBatchPrintHTML, generateSalesPattiPrintHTML, type PattiPrintData } from '@/utils/printDocumentTemplates';
+import {
+  generateSalesPattiPrintHTMLForCopies,
+  generateSalesPattiPrintHTMLPages,
+  type PattiPrintData,
+} from '@/utils/printDocumentTemplates';
 import { useAuth } from '@/context/AuthContext';
 import ForbiddenPage from '@/components/ForbiddenPage';
 import { usePermissions } from '@/lib/permissions';
@@ -172,11 +177,17 @@ interface SettlementEntry {
   buyerName: string;
   /** Auction base bid per bag */
   rate: number;
-  /** From auction; seller settlement rate = rate + presetMargin */
+  /** Vehicle-ops summary rate per bag (final; pad preset already reflected). Not added to preset again on modified. */
+  summarySellerRate?: number;
+  /** From auction (signed); effective = base + presetMargin for original or modified */
   presetMargin?: number;
   quantity: number;
   weight: number;
 }
+
+/** Sales Patti print footers: auction-based vs summary-based settlement. */
+const SETTLEMENT_PATTI_FOOTER_ALT_O = 'Original (ALT O) — Bid + preset';
+const SETTLEMENT_PATTI_FOOTER_ALT_M = 'Modified (ALT M) — Summary new seller rate (incl. preset)';
 
 interface RateCluster {
   rate: number;
@@ -620,11 +631,26 @@ function isVehicleNumberValid(v: string): boolean {
   return v.length >= VEHICLE_NUMBER_MIN && v.length <= VEHICLE_NUMBER_MAX;
 }
 
-/** Seller settlement rate per bag for patti (REQ-PUT: base bid + preset margin). */
-function sellerSettlementRatePerBag(entry: SettlementEntry): number {
-  const base = Number(entry.rate) || 0;
-  const p = entry.presetMargin ?? 0;
-  return base + (Number.isFinite(p) ? p : 0);
+function presetDelta(entry: SettlementEntry): number {
+  const p = entry.presetMargin;
+  if (p == null) return 0;
+  const n = Number(p);
+  return Number.isFinite(n) ? n : 0;
+}
+
+/**
+ * Per-bag amount for settlement:
+ * - Original: bid (rate) + preset (signed, from pad).
+ * - Modified: vehicle-ops summary new seller rate only — that value is the final per-bag amount (pad preset already incorporated there). Do not add preset again. If missing, fall back to bid + preset (legacy / extra-bid rows).
+ */
+function settlementEffectiveRatePerBag(entry: SettlementEntry, mode: 'original' | 'modified'): number {
+  if (mode === 'original') {
+    return (Number(entry.rate) || 0) + presetDelta(entry);
+  }
+  if (entry.summarySellerRate != null && Number.isFinite(Number(entry.summarySellerRate))) {
+    return Number(entry.summarySellerRate);
+  }
+  return (Number(entry.rate) || 0) + presetDelta(entry);
 }
 
 function normalizeVehicleKey(v: string | undefined): string {
@@ -863,7 +889,11 @@ function distributeLotEntryWeights(lot: SettlementLot, totalW: number): number[]
 /**
  * Lot-level Sales Patti row: amount = Σ (distributedWeight × rate per bag) / commodity divisor (same as Billing).
  */
-function lotBaseSalesRow(lot: SettlementLot, divisor: number) {
+function lotBaseSalesRow(
+  lot: SettlementLot,
+  divisor: number,
+  settlementRateMode: 'original' | 'modified' = 'modified'
+) {
   const div = divisor > 0 ? divisor : 50;
   const qty = lot.entries.reduce((s, e) => s + (Number(e.quantity) || 0), 0);
   const sumEntryW = lot.entries.reduce((s, e) => s + (Number(e.weight) || 0), 0);
@@ -886,7 +916,7 @@ function lotBaseSalesRow(lot: SettlementLot, divisor: number) {
   let amount = 0;
   lot.entries.forEach((e, i) => {
     const w = distW[i] ?? 0;
-    amount += (w * sellerSettlementRatePerBag(e)) / div;
+    amount += (w * settlementEffectiveRatePerBag(e, settlementRateMode)) / div;
   });
   amount = roundMoney2(amount);
   const ratePerBag = weight > 0 ? roundMoney2((amount * div) / weight) : 0;
@@ -1078,14 +1108,20 @@ function parsePattiExtensionJson(
 }
 
 /** Merge API lot totals with optional user overrides. Amount = (weight × rate per bag) / divisor. */
-function mergeLotDisplayRow(lot: SettlementLot, o: LotSalesOverride | undefined, divisor: number) {
-  const base = lotBaseSalesRow(lot, divisor);
+function mergeLotDisplayRow(
+  lot: SettlementLot,
+  o: LotSalesOverride | undefined,
+  divisor: number,
+  settlementRateMode: 'original' | 'modified' = 'modified'
+) {
+  const base = lotBaseSalesRow(lot, divisor, settlementRateMode);
   if (!hasLotSalesOverride(o)) return base;
   const qty =
     o!.qty !== undefined && Number.isFinite(o!.qty) ? Math.max(0, Math.round(Number(o!.qty))) : base.qty;
   const weight = o!.weight !== undefined ? o!.weight : base.weight;
   const div = base.divisor;
-  const ratePerBag = o!.ratePerBag !== undefined ? o!.ratePerBag : base.ratePerBag;
+  const ratePerBag =
+    settlementRateMode === 'modified' && o!.ratePerBag !== undefined ? o!.ratePerBag : base.ratePerBag;
   const amount = roundMoney2((weight * ratePerBag) / div);
   const avg = qty > 0 ? weight / qty : 0;
   return {
@@ -1096,6 +1132,177 @@ function mergeLotDisplayRow(lot: SettlementLot, o: LotSalesOverride | undefined,
     ratePerBag,
     amount,
   };
+}
+
+type MainPattiPrintHeader = {
+  sellerName: string;
+  sellerMobile: string;
+  sellerAddress: string;
+  vehicleNumber: string;
+} | null;
+
+/**
+ * Main vehicle patti: two printable payloads (ALT O vs ALT M detail rows / gross & net only).
+ * Freight, weighing merge, and every deduction line use the same loop that legacy single-page
+ * `printPayload` used (scope sellers → `sellerExpensesById` → `deductionTotals` → `deductions`); that block is not altered here beyond feeding one shared `printBase`.
+ */
+function buildMainVehiclePattiPrintPayloadPair(
+  pattiData: PattiData,
+  scopeSellers: SellerSettlement[],
+  removedLotsBySellerId: Record<string, string[]>,
+  lotSalesOverridesBySellerId: Record<string, Record<string, LotSalesOverride> | undefined>,
+  extraBidLotsBySellerId: Record<string, ExtraBidLot[]>,
+  getLotDivisor: (lot: SettlementLot) => number,
+  vehicleNetPayableFromPatti: number,
+  headerId: MainPattiPrintHeader,
+  displayMainSalesPattiNo: string,
+  firmInfo: PattiPrintData['firm'],
+  sellerExpensesById: Record<string, SellerExpenseFormState>,
+  isWeighingEnabledForSeller: (id: string) => boolean,
+  isWeighingMergedIntoFreight: (id: string) => boolean
+): { printPayloadOrig: PattiPrintData; printPayloadMod: PattiPrintData } {
+  const detailRowsMod = buildMainVehiclePattiDetailRows(
+    scopeSellers,
+    removedLotsBySellerId,
+    lotSalesOverridesBySellerId,
+    extraBidLotsBySellerId,
+    getLotDivisor,
+    'modified',
+  );
+  const detailRowsOrig = buildMainVehiclePattiDetailRows(
+    scopeSellers,
+    removedLotsBySellerId,
+    lotSalesOverridesBySellerId,
+    extraBidLotsBySellerId,
+    getLotDivisor,
+    'original',
+  );
+  const totalBags = detailRowsMod.reduce((s, r) => s + (Number(r.bags) || 0), 0);
+  const commodityNames = Array.from(
+    new Set(
+      scopeSellers.flatMap(s => [
+        ...s.lots.map(l => String(l.commodityName || '').trim()).filter(Boolean),
+        ...(extraBidLotsBySellerId[s.sellerId] ?? []).map(e => String(e.commodityName || '').trim()).filter(Boolean),
+      ])
+    )
+  );
+  const commodityName =
+    commodityNames.length === 1
+      ? commodityNames[0]
+      : (commodityNames.length > 1 ? 'Mixed Commodity' : 'Commodity');
+  const deductionTotals = {
+    freight: 0,
+    unloading: 0,
+    weighing: 0,
+    advance: 0,
+    gunnies: 0,
+    others: 0,
+  };
+  for (const seller of scopeSellers) {
+    const exp = sellerExpensesById[seller.sellerId] ?? defaultSellerExpenses();
+    const mergeIntoFreight = isWeighingMergedIntoFreight(seller.sellerId);
+    if (isWeighingEnabledForSeller(seller.sellerId)) {
+      if (mergeIntoFreight) {
+        deductionTotals.freight += (Number(exp.freight) || 0) + (Number(exp.weighman) || 0);
+      } else {
+        deductionTotals.freight += Number(exp.freight) || 0;
+        deductionTotals.weighing += Number(exp.weighman) || 0;
+      }
+    } else {
+      deductionTotals.freight += Number(exp.freight) || 0;
+    }
+    deductionTotals.unloading += Number(exp.unloading) || 0;
+    deductionTotals.advance += Number(exp.cashAdvance) || 0;
+    deductionTotals.gunnies += Number(exp.gunnies) || 0;
+    deductionTotals.others += Number(exp.others) || 0;
+  }
+  const deductions: PattiPrintData['deductions'] = [
+    { key: 'freight', label: 'Freight', amount: roundMoney2(deductionTotals.freight) },
+    { key: 'coolie', label: 'Unloading', amount: roundMoney2(deductionTotals.unloading) },
+    ...(deductionTotals.weighing > 0
+      ? [{ key: 'weighing', label: 'Weighing', amount: roundMoney2(deductionTotals.weighing) }]
+      : []),
+    { key: 'advance', label: 'Cash Advance', amount: roundMoney2(deductionTotals.advance) },
+    { key: 'gunnies', label: 'Gunnies', amount: roundMoney2(deductionTotals.gunnies) },
+    { key: 'others', label: 'Others', amount: roundMoney2(deductionTotals.others) },
+  ];
+  const primarySeller = scopeSellers[0];
+  const totalDeductions = roundMoney2(deductions.reduce((s, d) => s + d.amount, 0));
+  const grossMod = roundMoney2(detailRowsMod.reduce((s, r) => s + (Number(r.amount) || 0), 0));
+  const grossOrig = roundMoney2(detailRowsOrig.reduce((s, r) => s + (Number(r.amount) || 0), 0));
+  const netMod = roundMoney2(vehicleNetPayableFromPatti);
+  const netOrig = roundMoney2(grossOrig - totalDeductions);
+  const printBase: PattiPrintData = {
+    ...pattiData,
+    sellerName: headerId?.sellerName || pattiData.sellerName || primarySeller.sellerName,
+    sellerMobile: headerId?.sellerMobile || '',
+    sellerAddress: headerId?.sellerAddress || '',
+    vehicleNumber: headerId?.vehicleNumber || '',
+    pattiNoDisplay: mainPattiNumberForDisplay(displayMainSalesPattiNo, pattiData.pattiId),
+    commodityName,
+    totalBags,
+    deductions,
+    totalDeductions,
+    firm: firmInfo,
+  };
+  return {
+    printPayloadOrig: {
+      ...printBase,
+      detailRows: detailRowsOrig,
+      grossAmount: grossOrig,
+      rateClusters: [],
+      netPayable: netOrig,
+    },
+    printPayloadMod: {
+      ...printBase,
+      detailRows: detailRowsMod,
+      grossAmount: grossMod,
+      rateClusters: pattiData.rateClusters,
+      netPayable: netMod,
+    },
+  };
+}
+
+/** All sellers on the vehicle: detail rows for main patti print (per rate mode). */
+function buildMainVehiclePattiDetailRows(
+  scopeSellers: SellerSettlement[],
+  removedLotsBySellerId: Record<string, string[]>,
+  lotSalesOverridesBySellerId: Record<string, Record<string, LotSalesOverride> | undefined>,
+  extraBidLotsBySellerId: Record<string, ExtraBidLot[]>,
+  getLotDivisor: (lot: SettlementLot) => number,
+  mode: 'original' | 'modified'
+): { mark: string; bags: number; weight: number; rate: number; amount: number }[] {
+  return scopeSellers.flatMap(seller => {
+    const removedSet = new Set(removedLotsBySellerId[seller.sellerId] ?? []);
+    const lotOverrides = lotSalesOverridesBySellerId[seller.sellerId];
+    const fromApi = seller.lots.flatMap((lot, lotIndex) => {
+      const sid = lotStableId(lot, lotIndex);
+      if (removedSet.has(sid)) return [];
+      const row = mergeLotDisplayRow(lot, lotOverrides?.[sid], getLotDivisor(lot), mode);
+      return [
+        {
+          mark: (seller.sellerMark || '-').trim() || '-',
+          bags: Number(row.qty) || 0,
+          weight: Number(row.weight) || 0,
+          rate: Number(row.ratePerBag) || 0,
+          amount: Number(row.amount) || 0,
+        },
+      ];
+    });
+    const extras = extraBidLotsBySellerId[seller.sellerId] ?? [];
+    const fromExtra = extras.map(e => {
+      const lot = settlementLotFromExtraBid(e);
+      const row = mergeLotDisplayRow(lot, undefined, getLotDivisor(lot), mode);
+      return {
+        mark: (seller.sellerMark || '-').trim() || '-',
+        bags: Number(row.qty) || 0,
+        weight: Number(row.weight) || 0,
+        rate: Number(row.ratePerBag) || 0,
+        amount: Number(row.amount) || 0,
+      };
+    });
+    return [...fromApi, ...fromExtra];
+  });
 }
 
 /** Stable row id for delete/hide when `lotId` is missing from API. */
@@ -1393,7 +1600,8 @@ function buildRateClustersFromSellerLots(
   removedIds: Set<string>,
   lotOverrides?: Record<string, LotSalesOverride>,
   getDivisor?: (lot: SettlementLot) => number,
-  extraBidLots?: ExtraBidLot[]
+  extraBidLots?: ExtraBidLot[],
+  settlementRateMode: 'original' | 'modified' = 'modified'
 ): RateCluster[] {
   const divFn = getDivisor ?? (() => 50);
   const rateMap = new Map<number, RateCluster>();
@@ -1420,11 +1628,11 @@ function buildRateClustersFromSellerLots(
     const sid = lotStableId(lot, i);
     if (removedIds.has(sid)) return;
     const ov = lotOverrides?.[sid];
-    pushRow(mergeLotDisplayRow(lot, ov, divFn(lot)));
+    pushRow(mergeLotDisplayRow(lot, ov, divFn(lot), settlementRateMode));
   });
   for (const e of extraBidLots ?? []) {
     const lot = settlementLotFromExtraBid(e);
-    pushRow(mergeLotDisplayRow(lot, undefined, divFn(lot)));
+    pushRow(mergeLotDisplayRow(lot, undefined, divFn(lot), settlementRateMode));
   }
   return Array.from(rateMap.values()).sort((a, b) => b.rate - a.rate);
 }
@@ -1547,14 +1755,15 @@ function buildSellerSubPattiPrintData(
   mergeWeighingIntoFreight = true,
   sellerMobile = '',
   sellerPattiNoForPrint = '',
-  extraBidLots: ExtraBidLot[] = []
+  extraBidLots: ExtraBidLot[] = [],
+  settlementRateMode: 'original' | 'modified' = 'modified'
 ): PattiPrintData {
   const divisorFn = getDivisor ?? (() => 50);
   const lotRowsFromApi = seller.lots.flatMap((lot, lotIndex) => {
     const sid = lotStableId(lot, lotIndex);
     if (removedIds.has(sid)) return [];
     const ov = lotOverrides?.[sid];
-    const row = mergeLotDisplayRow(lot, ov, divisorFn(lot));
+    const row = mergeLotDisplayRow(lot, ov, divisorFn(lot), settlementRateMode);
     return [{
       mark: (seller.sellerMark || '-').trim() || '-',
       bags: Number(row.qty) || 0,
@@ -1565,7 +1774,7 @@ function buildSellerSubPattiPrintData(
   });
   const lotRowsFromExtra = extraBidLots.map(e => {
     const lot = settlementLotFromExtraBid(e);
-    const row = mergeLotDisplayRow(lot, undefined, divisorFn(lot));
+    const row = mergeLotDisplayRow(lot, undefined, divisorFn(lot), settlementRateMode);
     return {
       mark: (seller.sellerMark || '-').trim() || '-',
       bags: Number(row.qty) || 0,
@@ -1581,7 +1790,8 @@ function buildSellerSubPattiPrintData(
     removedIds,
     lotOverrides,
     getDivisor,
-    extraBidLots
+    extraBidLots,
+    settlementRateMode
   );
   const grossAmount = lotRows.reduce((s, r) => s + r.amount, 0);
   const merged = weighingEnabled && mergeWeighingIntoFreight;
@@ -1764,6 +1974,11 @@ const SettlementPage = () => {
     () => (settlementIncludeHeader ? settlementPaperWithHeader : settlementPaperWithoutHeader),
     [settlementIncludeHeader, settlementPaperWithHeader, settlementPaperWithoutHeader],
   );
+  const [settlementPrintCopyLabels, setSettlementPrintCopyLabels] = useState<string[]>(['ORIGINAL COPY']);
+  const settlementCopyLabelsResolved = useMemo(
+    () => (settlementPrintCopyLabels.length > 0 ? settlementPrintCopyLabels : ['ORIGINAL COPY']),
+    [settlementPrintCopyLabels],
+  );
   /** Prevents overlapping save/update requests (buttons + shortcut). */
   const pattiSaveBusyRef = useRef(false);
   /** After a successful save, re-baseline dirty tracking once `pattiSaveBusy` is false and state has settled. */
@@ -1809,6 +2024,7 @@ const SettlementPage = () => {
           setSettlementPaperWithHeader(row.paper_size_with_header === 'A5' ? 'A5' : 'A4');
           setSettlementPaperWithoutHeader(row.paper_size_without_header === 'A5' ? 'A5' : 'A4');
           setSettlementIncludeHeader(row.include_header !== false);
+          setSettlementPrintCopyLabels(parsePrintCopiesJson(row.print_copies_json ?? null).map((c) => c.label));
         }
       } catch {
         // keep defaults
@@ -3368,8 +3584,9 @@ const SettlementPage = () => {
     when: isSettlementDirty,
     title: 'Save your progress?',
     description: 'You have unsaved changes. Would you like to save your progress before leaving?',
-    continueLabel: 'Save',
+    continueLabel: 'Save Patti In Progress',
     stayLabel: 'Discard',
+    closeLabel: 'Stay On Page',
     onBeforeContinue: saveSettlementProgressBeforeLeave,
   });
 
@@ -3806,12 +4023,13 @@ const SettlementPage = () => {
   amountSummaryForExpensePullRef.current = amountSummaryDisplay;
 
   /**
-   * Saved patti, after Enable edit (Alt+M): sticky summary including while viewing original snapshot (Alt+O).
+   * Saved patti, after Enable edit (Alt+M): sticky compare summary. Hidden while viewing original snapshot (Alt+O).
    * Uses same figures as Vehicle details and Expenses & Invoice where noted.
    */
   const savedPattiCompareStickyFooter = useMemo(() => {
     if (
       !isLatestEditUnlocked ||
+      isOriginalReferenceMode ||
       settlementFormMode !== 'saved' ||
       !pattiData ||
       !selectedSeller
@@ -3859,6 +4077,7 @@ const SettlementPage = () => {
     };
   }, [
     isLatestEditUnlocked,
+    isOriginalReferenceMode,
     settlementFormMode,
     pattiData,
     selectedSeller,
@@ -3933,7 +4152,7 @@ const SettlementPage = () => {
     const salesPad = scope.reduce((acc, s) => acc + totalBillingNetWeightForSeller(s), 0);
     const auction = scope.reduce(
       (acc, seller) => {
-        const rows = (seller.lots ?? []).map(lot => lotBaseSalesRow(lot, getLotDivisor(lot)));
+        const rows = (seller.lots ?? []).map(lot => lotBaseSalesRow(lot, getLotDivisor(lot), 'original'));
         return {
           qty: acc.qty + rows.reduce((s, r) => s + (Number(r.qty) || 0), 0),
           weight: acc.weight + rows.reduce((s, r) => s + (Number(r.weight) || 0), 0),
@@ -4627,106 +4846,21 @@ const SettlementPage = () => {
       return;
     }
 
-    const detailRows = scopeSellers.flatMap(seller => {
-      const removedSet = new Set(removedLotsBySellerId[seller.sellerId] ?? []);
-      const lotOverrides = lotSalesOverridesBySellerId[seller.sellerId];
-      const fromApi = seller.lots.flatMap((lot, lotIndex) => {
-        const sid = lotStableId(lot, lotIndex);
-        if (removedSet.has(sid)) return [];
-        const row = mergeLotDisplayRow(lot, lotOverrides?.[sid], getLotDivisor(lot));
-        return [
-          {
-            mark: (seller.sellerMark || '-').trim() || '-',
-            bags: Number(row.qty) || 0,
-            weight: Number(row.weight) || 0,
-            rate: Number(row.ratePerBag) || 0,
-            amount: Number(row.amount) || 0,
-          },
-        ];
-      });
-      const extras = extraBidLotsBySellerId[seller.sellerId] ?? [];
-      const fromExtra = extras.map(e => {
-        const lot = settlementLotFromExtraBid(e);
-        const row = mergeLotDisplayRow(lot, undefined, getLotDivisor(lot));
-        return {
-          mark: (seller.sellerMark || '-').trim() || '-',
-          bags: Number(row.qty) || 0,
-          weight: Number(row.weight) || 0,
-          rate: Number(row.ratePerBag) || 0,
-          amount: Number(row.amount) || 0,
-        };
-      });
-      return [...fromApi, ...fromExtra];
-    });
-
-    const totalBags = detailRows.reduce((s, r) => s + (Number(r.bags) || 0), 0);
-    const commodityNames = Array.from(
-      new Set(
-        scopeSellers.flatMap(s => [
-          ...s.lots.map(l => String(l.commodityName || '').trim()).filter(Boolean),
-          ...(extraBidLotsBySellerId[s.sellerId] ?? []).map(e => String(e.commodityName || '').trim()).filter(Boolean),
-        ])
-      )
+    const { printPayloadOrig, printPayloadMod } = buildMainVehiclePattiPrintPayloadPair(
+      pattiData,
+      scopeSellers,
+      removedLotsBySellerId,
+      lotSalesOverridesBySellerId,
+      extraBidLotsBySellerId,
+      getLotDivisor,
+      vehicleNetPayableFromPatti,
+      mainPattiPrintHeaderIdentity,
+      displayMainSalesPattiNo,
+      firmInfo,
+      sellerExpensesById,
+      isWeighingEnabledForSeller,
+      isWeighingMergedIntoFreight
     );
-    const commodityName = commodityNames.length === 1
-      ? commodityNames[0]
-      : (commodityNames.length > 1 ? 'Mixed Commodity' : 'Commodity');
-
-    const deductionTotals = {
-      freight: 0,
-      unloading: 0,
-      weighing: 0,
-      advance: 0,
-      gunnies: 0,
-      others: 0,
-    };
-    for (const seller of scopeSellers) {
-      const exp = sellerExpensesById[seller.sellerId] ?? defaultSellerExpenses();
-      const mergeIntoFreight = isWeighingMergedIntoFreight(seller.sellerId);
-      if (isWeighingEnabledForSeller(seller.sellerId)) {
-        if (mergeIntoFreight) {
-          deductionTotals.freight += (Number(exp.freight) || 0) + (Number(exp.weighman) || 0);
-        } else {
-          deductionTotals.freight += Number(exp.freight) || 0;
-          deductionTotals.weighing += Number(exp.weighman) || 0;
-        }
-      } else {
-        deductionTotals.freight += Number(exp.freight) || 0;
-      }
-      deductionTotals.unloading += Number(exp.unloading) || 0;
-      deductionTotals.advance += Number(exp.cashAdvance) || 0;
-      deductionTotals.gunnies += Number(exp.gunnies) || 0;
-      deductionTotals.others += Number(exp.others) || 0;
-    }
-    const deductions: PattiPrintData['deductions'] = [
-      { key: 'freight', label: 'Freight', amount: roundMoney2(deductionTotals.freight) },
-      { key: 'coolie', label: 'Unloading', amount: roundMoney2(deductionTotals.unloading) },
-      ...(deductionTotals.weighing > 0
-        ? [{ key: 'weighing', label: 'Weighing', amount: roundMoney2(deductionTotals.weighing) }]
-        : []),
-      { key: 'advance', label: 'Cash Advance', amount: roundMoney2(deductionTotals.advance) },
-      { key: 'gunnies', label: 'Gunnies', amount: roundMoney2(deductionTotals.gunnies) },
-      { key: 'others', label: 'Others', amount: roundMoney2(deductionTotals.others) },
-    ];
-
-    const primarySeller = scopeSellers[0];
-    const headerId = mainPattiPrintHeaderIdentity;
-
-    const printPayload: PattiPrintData = {
-      ...pattiData,
-      sellerName: headerId?.sellerName || pattiData.sellerName || primarySeller.sellerName,
-      sellerMobile: headerId?.sellerMobile || '',
-      sellerAddress: headerId?.sellerAddress || '',
-      vehicleNumber: headerId?.vehicleNumber || '',
-      pattiNoDisplay: mainPattiNumberForDisplay(displayMainSalesPattiNo, pattiData.pattiId),
-      commodityName,
-      totalBags,
-      detailRows,
-      deductions,
-      totalDeductions: roundMoney2(deductions.reduce((s, d) => s + d.amount, 0)),
-      netPayable: roundMoney2(vehicleNetPayableFromPatti),
-      firm: firmInfo,
-    };
     const printedAt = new Date().toISOString();
     try {
       await printLogApi.create({
@@ -4739,10 +4873,16 @@ const SettlementPage = () => {
       /* optional */
     }
     const ok = await directPrint(
-      generateSalesPattiPrintHTML(printPayload, {
-        pageSize: settlementEffectivePrintSize,
-        includeHeader: settlementIncludeHeader,
-      }),
+      generateSalesPattiPrintHTMLPages(
+        [
+          { patti: printPayloadOrig, copyLabel: SETTLEMENT_PATTI_FOOTER_ALT_O },
+          { patti: printPayloadMod, copyLabel: SETTLEMENT_PATTI_FOOTER_ALT_M },
+        ],
+        {
+          pageSize: settlementEffectivePrintSize,
+          includeHeader: settlementIncludeHeader,
+        }
+      ),
       { mode: 'system' },
     );
     if (ok) toast.success('Main patti sent to printer');
@@ -4791,29 +4931,46 @@ const SettlementPage = () => {
       const displayName = form.name || seller.sellerName;
       const exp = sellerExpensesById[seller.sellerId] ?? defaultSellerExpenses();
       const removedSet = new Set(removedLotsBySellerId[seller.sellerId] ?? []);
-      const payload: PattiPrintData = {
-        ...buildSellerSubPattiPrintData(
-          seller,
-          displayName,
-          exp,
-          removedSet,
-          pattiData.pattiId,
-          pattiData.createdAt,
-          lotSalesOverridesBySellerId[seller.sellerId],
-          getLotDivisor,
-          isWeighingEnabledForSeller(seller.sellerId),
-          isWeighingMergedIntoFreight(seller.sellerId),
-          form.mobile || seller.sellerPhone || '',
-          String(sellerSalesPattiNumberBySellerId[seller.sellerId] ?? '').trim(),
-          extraBidLotsBySellerId[seller.sellerId] ?? []
-        ),
-        firm: firmInfo,
-      };
+      const extras = extraBidLotsBySellerId[seller.sellerId] ?? [];
+      const subNo = String(sellerSalesPattiNumberBySellerId[seller.sellerId] ?? '').trim();
+      const baseArgs = [
+        seller,
+        displayName,
+        exp,
+        removedSet,
+        pattiData.pattiId,
+        pattiData.createdAt,
+        lotSalesOverridesBySellerId[seller.sellerId],
+        getLotDivisor,
+        isWeighingEnabledForSeller(seller.sellerId),
+        isWeighingMergedIntoFreight(seller.sellerId),
+        form.mobile || seller.sellerPhone || '',
+        subNo,
+        extras,
+      ] as const;
       const ok = await directPrint(
-        generateSalesPattiPrintHTML(payload, {
-          pageSize: settlementEffectivePrintSize,
-          includeHeader: settlementIncludeHeader,
-        }),
+        generateSalesPattiPrintHTMLPages(
+          [
+            {
+              patti: {
+                ...buildSellerSubPattiPrintData(...baseArgs, 'original'),
+                firm: firmInfo,
+              },
+              copyLabel: `${SETTLEMENT_PATTI_FOOTER_ALT_O} — ${displayName}`,
+            },
+            {
+              patti: {
+                ...buildSellerSubPattiPrintData(...baseArgs, 'modified'),
+                firm: firmInfo,
+              },
+              copyLabel: `${SETTLEMENT_PATTI_FOOTER_ALT_M} — ${displayName}`,
+            },
+          ],
+          {
+            pageSize: settlementEffectivePrintSize,
+            includeHeader: settlementIncludeHeader,
+          }
+        ),
         { mode: 'system' },
       );
       if (ok) toast.success('Seller sub-patti sent to printer');
@@ -4856,38 +5013,46 @@ const SettlementPage = () => {
         return;
       }
     }
-    const payloads: PattiPrintData[] = [];
+    const pages: { patti: PattiPrintData; copyLabel: string }[] = [];
     for (const s of arrivalSellersForPatti) {
       const form = sellerFormById[s.sellerId] ?? defaultSellerForm(s);
       const displayName = form.name || s.sellerName;
       const exp = sellerExpensesById[s.sellerId] ?? defaultSellerExpenses();
       const removedSet = new Set(removedLotsBySellerId[s.sellerId] ?? []);
-      const payload: PattiPrintData = {
-        ...buildSellerSubPattiPrintData(
-          s,
-          displayName,
-          exp,
-          removedSet,
-          pattiData.pattiId,
-          pattiData.createdAt,
-          lotSalesOverridesBySellerId[s.sellerId],
-          getLotDivisor,
-          isWeighingEnabledForSeller(s.sellerId),
-          isWeighingMergedIntoFreight(s.sellerId),
-          form.mobile || s.sellerPhone || '',
-          String(sellerSalesPattiNumberBySellerId[s.sellerId] ?? '').trim(),
-          extraBidLotsBySellerId[s.sellerId] ?? []
-        ),
-        firm: firmInfo,
-      };
-      payloads.push(payload);
+      const extras = extraBidLotsBySellerId[s.sellerId] ?? [];
+      const subNo = String(sellerSalesPattiNumberBySellerId[s.sellerId] ?? '').trim();
+      const common = [
+        s,
+        displayName,
+        exp,
+        removedSet,
+        pattiData.pattiId,
+        pattiData.createdAt,
+        lotSalesOverridesBySellerId[s.sellerId],
+        getLotDivisor,
+        isWeighingEnabledForSeller(s.sellerId),
+        isWeighingMergedIntoFreight(s.sellerId),
+        form.mobile || s.sellerPhone || '',
+        subNo,
+        extras,
+      ] as const;
+      pages.push(
+        {
+          patti: { ...buildSellerSubPattiPrintData(...common, 'original'), firm: firmInfo },
+          copyLabel: `${SETTLEMENT_PATTI_FOOTER_ALT_O} — ${displayName}`,
+        },
+        {
+          patti: { ...buildSellerSubPattiPrintData(...common, 'modified'), firm: firmInfo },
+          copyLabel: `${SETTLEMENT_PATTI_FOOTER_ALT_M} — ${displayName}`,
+        }
+      );
     }
-    if (payloads.length === 0) {
+    if (pages.length === 0) {
       toast.error('No seller sub-patti data found to print.');
       return;
     }
     const ok = await directPrint(
-      generateSalesPattiBatchPrintHTML(payloads, {
+      generateSalesPattiPrintHTMLPages(pages, {
         pageSize: settlementEffectivePrintSize,
         includeHeader: settlementIncludeHeader,
       }),
@@ -5490,6 +5655,11 @@ const SettlementPage = () => {
               <p className="font-bold text-sm text-foreground">MERCOTRACE</p>
               <p className="text-muted-foreground">Sales Patti (Settlement)</p>
               <p className="text-muted-foreground">{new Date(pattiData.createdAt).toLocaleDateString()} {new Date(pattiData.createdAt).toLocaleTimeString()}</p>
+              <p className="text-[11px] text-muted-foreground mt-1">
+                {arrivalSellersForPatti.length > 0
+                  ? `Print: ${SETTLEMENT_PATTI_FOOTER_ALT_O} + ${SETTLEMENT_PATTI_FOOTER_ALT_M}`
+                  : `Print copies: ${settlementCopyLabelsResolved.join(', ')}`}
+              </p>
             </div>
 
             <div className="border-b border-dashed border-border pb-2 space-y-1">
@@ -5537,7 +5707,7 @@ const SettlementPage = () => {
             </div>
 
             <div className="text-center text-muted-foreground/70 text-[9px] border-t border-dashed border-border pt-2 space-y-0.5">
-              <p>GA = Σ (NW × SR)</p>
+              <p>GA = Σ (NW × SR) — SR = summary new seller rate (incl. preset from pad), or bid + preset for original copy</p>
               <p>NP = GA − TD</p>
               <p>TD = Freight + Coolie + Weighing + Advance + Gunnies + Other</p>
             </div>
@@ -5569,23 +5739,50 @@ const SettlementPage = () => {
               } catch {
                 // backend optional
               }
+              const modHeader: PattiPrintData = {
+                ...pattiData,
+                firm: firmInfo,
+                ...(mainPattiPrintHeaderIdentity
+                  ? {
+                      sellerName: mainPattiPrintHeaderIdentity.sellerName,
+                      sellerMobile: mainPattiPrintHeaderIdentity.sellerMobile,
+                      sellerAddress: mainPattiPrintHeaderIdentity.sellerAddress,
+                      vehicleNumber: mainPattiPrintHeaderIdentity.vehicleNumber,
+                    }
+                  : {}),
+                pattiNoDisplay: mainPattiNumberForDisplay(displayMainSalesPattiNo, pattiData.pattiId),
+              };
               const ok = await directPrint(
-                generateSalesPattiPrintHTML(
-                  {
-                    ...pattiData,
-                    firm: firmInfo,
-                    ...(mainPattiPrintHeaderIdentity
-                      ? {
-                          sellerName: mainPattiPrintHeaderIdentity.sellerName,
-                          sellerMobile: mainPattiPrintHeaderIdentity.sellerMobile,
-                          sellerAddress: mainPattiPrintHeaderIdentity.sellerAddress,
-                          vehicleNumber: mainPattiPrintHeaderIdentity.vehicleNumber,
-                        }
-                      : {}),
-                    pattiNoDisplay: mainPattiNumberForDisplay(displayMainSalesPattiNo, pattiData.pattiId),
-                  },
-                  { pageSize: settlementEffectivePrintSize, includeHeader: settlementIncludeHeader },
-                ),
+                arrivalSellersForPatti.length > 0
+                  ? generateSalesPattiPrintHTMLPages(
+                      (() => {
+                        const { printPayloadOrig, printPayloadMod } = buildMainVehiclePattiPrintPayloadPair(
+                          pattiData,
+                          arrivalSellersForPatti,
+                          removedLotsBySellerId,
+                          lotSalesOverridesBySellerId,
+                          extraBidLotsBySellerId,
+                          getLotDivisor,
+                          vehicleNetPayableFromPatti,
+                          mainPattiPrintHeaderIdentity,
+                          displayMainSalesPattiNo,
+                          firmInfo,
+                          sellerExpensesById,
+                          isWeighingEnabledForSeller,
+                          isWeighingMergedIntoFreight
+                        );
+                        return [
+                          { patti: printPayloadOrig, copyLabel: SETTLEMENT_PATTI_FOOTER_ALT_O },
+                          { patti: printPayloadMod, copyLabel: SETTLEMENT_PATTI_FOOTER_ALT_M },
+                        ];
+                      })(),
+                      { pageSize: settlementEffectivePrintSize, includeHeader: settlementIncludeHeader }
+                    )
+                  : generateSalesPattiPrintHTMLForCopies(
+                      modHeader,
+                      settlementCopyLabelsResolved,
+                      { pageSize: settlementEffectivePrintSize, includeHeader: settlementIncludeHeader }
+                    ),
                 { mode: "system" },
               );
               if (ok) toast.success('Sales Patti sent to printer!');

@@ -1,24 +1,12 @@
-import { Capacitor, registerPlugin } from "@capacitor/core";
+import { Capacitor } from "@capacitor/core";
 import { toast } from "sonner";
 
 import { bluetoothPrintersApi } from "@/services/api/bluetoothPrinters";
+import { mercoPrinter } from "@/plugins/mercoPrinter";
+import { formatAuctionLotIdentifier } from "@/utils/auctionLotIdentifier";
 
 // ── Print Templates for Print Hub ──────────────────────────
 // REQ-LOG-002: All print formats per SRS (same format as client_origin)
-
-type MercoPrinterPlugin = {
-  printHtml(options: {
-    html: string;
-    thermalText?: string;
-    mode?: "auto" | "system" | "thermal";
-    deviceMac?: string;
-    jobName?: string;
-  }): Promise<{ ok?: boolean }>;
-  listPrinters(): Promise<{ printers: { mac: string; name: string }[] }>;
-  requestBluetoothPermissions(): Promise<{ granted: boolean }>;
-};
-
-const mercoPrinter = registerPlugin<MercoPrinterPlugin>("MercoPrinter");
 
 type PrintMode = "auto" | "system" | "thermal";
 
@@ -29,10 +17,20 @@ export interface BidInfo {
   buyerMark: string;
   buyerName: string;
   quantity: number;
+  /** Vehicle mark alias (arrival) for lot identifier prefix. */
+  vehicleMark?: string;
+  /** Seller mark for lot identifier. */
+  sellerMark?: string;
   /** Total bags for this vehicle across all sellers (vehicle total qty) */
   vehicleTotalQty?: number;
   /** Total bags for this seller on the same vehicle (seller qty) */
   sellerVehicleQty?: number;
+  /**
+   * When set (e.g. from completed auction API), overrides summed bid quantities for identifier totals.
+   * Logistics may omit so totals are derived from bids.
+   */
+  auctionVehicleTotalQty?: number;
+  auctionSellerTotalQty?: number;
   rate: number;
   lotId: string;
   lotName: string;
@@ -44,6 +42,10 @@ export interface BidInfo {
   origin?: string;
   godown?: string;
   weight?: number;
+  /** Server auction entry id (completed lot); set by Print Hub when available. */
+  auctionEntryId?: number;
+  /** Set when this lot is a self-sale re-auction unit. */
+  selfSaleUnitId?: number | null;
 }
 
 type ThermalPayload = { html: string; thermalText: string };
@@ -52,7 +54,14 @@ type PrintPayload = string | ThermalPayload;
 // ── Helpers ───────────────────────────────────────────────
 function lotDisplay(bid: BidInfo): string {
   if (bid.vehicleTotalQty != null && bid.sellerVehicleQty != null) {
-    return `${bid.vehicleTotalQty}/${bid.sellerVehicleQty}`;
+    const vm = (bid.vehicleMark ?? '').trim();
+    const sm = (bid.sellerMark ?? '').trim();
+    const v = bid.vehicleTotalQty;
+    const s = bid.sellerVehicleQty;
+    if (vm || sm) {
+      return `${vm ? `${vm}-${v}` : String(v)}/${sm ? `${sm}-${s}` : String(s)}`;
+    }
+    return `${v}/${s}`;
   }
   if (bid.lotName && bid.lotName !== String(bid.lotNumber)) {
     return `${bid.lotNumber} / ${bid.lotName}`;
@@ -61,15 +70,22 @@ function lotDisplay(bid: BidInfo): string {
 }
 
 /**
- * Lot identifier format: Vehicle QTY / Seller QTY / Lot Name - Lot QTY (e.g. 320/320/110-110).
- * Aligns with AuctionsPage format for list display and search consistency.
+ * Lot identifier: {vehicleMark}-{vehicleTotal}/{sellerMark}-{sellerTotal}/{lotName}/{lineQty}
+ * (e.g. AB-200/SA-122/SA1/22). Aligns with Sales Pad / Billing.
  */
 export function formatLotIdentifierForBid(bid: BidInfo): string {
   const vTotal = bid.vehicleTotalQty ?? bid.quantity;
   const sTotal = bid.sellerVehicleQty ?? bid.quantity;
   const lotName = (bid.lotName || '').trim() || String(bid.lotNumber);
   const lotQty = bid.quantity;
-  return `${vTotal}/${sTotal}/${lotName}-${lotQty}`;
+  return formatAuctionLotIdentifier({
+    vehicleMark: bid.vehicleMark,
+    vehicleTotalQty: vTotal,
+    sellerMark: bid.sellerMark,
+    sellerTotalQty: sTotal,
+    lotName,
+    lotQty,
+  });
 }
 
 function todayStr(): string {
@@ -320,19 +336,20 @@ export function generateBuyerChitiThermal(
   buyerMark: string,
   bids: BidInfo[],
   stage: "post-auction" | "post-weighing" = "post-auction",
-  traderDisplayName?: string
+  traderDisplayName?: string,
+  printRate: boolean = true
 ): string {
   const _stage = stage;
   void _stage;
   const totalQty = bids.reduce((s, b) => s + b.quantity, 0);
   const totalBid = bids.length;
 
-  // Column widths sum to 48 (Mark column removed; widths redistributed)
-  const wLot = 16;
-  const wLotSl = 8;
-  const wGdwn = 10;
+  // Column widths sum to 48 (Mark column removed; widths redistributed). When printRate is off, wRate width is split across others.
+  const wLot = printRate ? 16 : 20;
+  const wLotSl = printRate ? 8 : 8;
+  const wGdwn = printRate ? 10 : 12;
   const wRate = 9;
-  const wQty = 5;
+  const wQty = printRate ? 5 : 8;
 
   const pad = (s: string, w: number) => padThermalRight(clampThermalText(s, w), w);
   const lineLR = (left: string, right: string) => {
@@ -355,7 +372,11 @@ export function generateBuyerChitiThermal(
     "[C]" + escposBold(`[${String(buyerMark ?? "").trim()}]`),
     `[L]${THERMAL_INTERNAL_RULE}`,
     "",
-    "[L]" + pad("Lot Name", wLot) + pad("LotSL", wLotSl) + pad("Gdwn", wGdwn) + pad("Rate", wRate) + pad("Qty", wQty),
+    "[L]" + (
+      printRate
+        ? pad("Lot Name", wLot) + pad("LotSL", wLotSl) + pad("Gdwn", wGdwn) + pad("Rate", wRate) + pad("Qty", wQty)
+        : pad("Lot Name", wLot) + pad("LotSL", wLotSl) + pad("Gdwn", wGdwn) + pad("Qty", wQty)
+    ),
   ].join("\n");
 
   const rows = bids
@@ -363,12 +384,16 @@ export function generateBuyerChitiThermal(
       const lot = formatLotIdentifierForBid(b);
       const rateTxt = escapeThermalPrice(`₹${b.rate}`);
 
-      const line1 =
-        pad(lot, wLot) +
-        pad(String(b.lotNumber && b.lotNumber > 0 ? b.lotNumber : "—"), wLotSl) +
-        pad(b.godown || "—", wGdwn) +
-        pad(rateTxt, wRate) +
-        pad(String(b.quantity), wQty);
+      const line1 = printRate
+        ? pad(lot, wLot) +
+          pad(String(b.lotNumber && b.lotNumber > 0 ? b.lotNumber : "—"), wLotSl) +
+          pad(b.godown || "—", wGdwn) +
+          pad(rateTxt, wRate) +
+          pad(String(b.quantity), wQty)
+        : pad(lot, wLot) +
+          pad(String(b.lotNumber && b.lotNumber > 0 ? b.lotNumber : "—"), wLotSl) +
+          pad(b.godown || "—", wGdwn) +
+          pad(String(b.quantity), wQty);
 
       return "[L]" + line1;
     })
@@ -470,21 +495,36 @@ export function generateBuyerChiti(
   buyerMark: string,
   bids: BidInfo[],
   stage: 'post-auction' | 'post-weighing' = 'post-auction',
-  traderDisplayName?: string
+  traderDisplayName?: string,
+  printRate: boolean = true
 ): string {
   const _stage = stage;
   void _stage;
   const totalQty = bids.reduce((s, b) => s + b.quantity, 0);
   const totalBid = bids.length;
   const headerTitle = escapeStickerHtml((traderDisplayName ?? '').trim() || 'Trader');
-  const rows = bids.map(b => `
-    <tr>
+  const rows = bids
+    .map(b => {
+      if (printRate) {
+        return `<tr>
       <td>${formatLotIdentifierForBid(b)}</td>
       <td>${b.lotNumber && b.lotNumber > 0 ? b.lotNumber : '—'}</td>
       <td>${b.godown || '—'}</td>
       <td>₹${b.rate}</td>
       <td>${b.quantity}</td>
-    </tr>`).join('');
+    </tr>`;
+      }
+      return `<tr>
+      <td>${formatLotIdentifierForBid(b)}</td>
+      <td>${b.lotNumber && b.lotNumber > 0 ? b.lotNumber : '—'}</td>
+      <td>${b.godown || '—'}</td>
+      <td>${b.quantity}</td>
+    </tr>`;
+    })
+    .join('');
+  const tableHead = printRate
+    ? '<thead><tr><th>Lot Name</th><th>Lot SL No</th><th>Gdwn</th><th>Rate</th><th>Qty</th></tr></thead>'
+    : '<thead><tr><th>Lot Name</th><th>Lot SL No</th><th>Gdwn</th><th>Qty</th></tr></thead>';
 
   return `<!DOCTYPE html><html><head><style>
     @page { size: 80mm auto; margin: 2mm; }
@@ -513,7 +553,7 @@ export function generateBuyerChiti(
       <div class="mark">[${escapeStickerHtml(buyerMark)}]</div>
     </div>
     <table>
-      <thead><tr><th>Lot Name</th><th>Lot SL No</th><th>Gdwn</th><th>Rate</th><th>Qty</th></tr></thead>
+      ${tableHead}
       <tbody>${rows}</tbody>
     </table>
     <div class="totals">

@@ -30,6 +30,7 @@ class AuctionEntryMapperTest {
         entry.setPresetMargin(new BigDecimal("10.00"));
         entry.setPresetType(AuctionPresetType.PROFIT);
         entry.setSellerRate(new BigDecimal("90.50"));
+        entry.setSummarySellerRate(new BigDecimal("95.00"));
         entry.setBuyerRate(new BigDecimal("102.50"));
         entry.setQuantity(3);
         entry.setAmount(new BigDecimal("307.50"));
@@ -52,6 +53,7 @@ class AuctionEntryMapperTest {
         assertThat(mappedBack.getPresetMargin()).isEqualByComparingTo(entry.getPresetMargin());
         assertThat(mappedBack.getPresetType()).isEqualTo(entry.getPresetType());
         assertThat(mappedBack.getSellerRate()).isEqualByComparingTo(entry.getSellerRate());
+        assertThat(mappedBack.getSummarySellerRate()).isEqualByComparingTo(entry.getSummarySellerRate());
         assertThat(mappedBack.getBuyerRate()).isEqualByComparingTo(entry.getBuyerRate());
         assertThat(mappedBack.getQuantity()).isEqualTo(entry.getQuantity());
         assertThat(mappedBack.getAmount()).isEqualByComparingTo(entry.getAmount());

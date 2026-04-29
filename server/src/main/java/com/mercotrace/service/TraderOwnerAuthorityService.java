@@ -260,6 +260,9 @@ public class TraderOwnerAuthorityService {
         // Financial Reports module (read-only)
         names.add(AuthoritiesConstants.FINANCIAL_REPORTS_VIEW);
 
+        // Summary page (read-only)
+        names.add(AuthoritiesConstants.SUMMARY_PAGE_VIEW);
+
         // Operational Reports module (read-only)
         names.add(AuthoritiesConstants.REPORTS_VIEW);
 

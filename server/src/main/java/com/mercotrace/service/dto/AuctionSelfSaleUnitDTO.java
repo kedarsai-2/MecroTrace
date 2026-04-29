@@ -1,5 +1,6 @@
 package com.mercotrace.service.dto;
 
+import com.fasterxml.jackson.annotation.JsonAlias;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.mercotrace.domain.enumeration.AuctionSelfSaleUnitStatus;
 import java.io.Serializable;
@@ -41,6 +42,16 @@ public class AuctionSelfSaleUnitDTO implements Serializable {
 
     @JsonProperty("vehicle_number")
     private String vehicleNumber;
+
+    private String vehicleMark;
+
+    /** Sum of bag counts for all lots on this vehicle (for lot identifier). */
+    @JsonProperty("vehicle_total_qty")
+    private Integer vehicleTotalQty;
+
+    /** Sum of bag counts for all lots of this seller (for lot identifier). */
+    @JsonProperty("seller_total_qty")
+    private Integer sellerTotalQty;
 
     @JsonProperty("self_sale_qty")
     private Integer selfSaleQty;
@@ -138,6 +149,33 @@ public class AuctionSelfSaleUnitDTO implements Serializable {
 
     public void setVehicleNumber(String vehicleNumber) {
         this.vehicleNumber = vehicleNumber;
+    }
+
+    @JsonProperty("vehicle_mark")
+    public String getVehicleMark() {
+        return vehicleMark;
+    }
+
+    @JsonProperty("vehicle_mark")
+    @JsonAlias("vehicleMark")
+    public void setVehicleMark(String vehicleMark) {
+        this.vehicleMark = vehicleMark;
+    }
+
+    public Integer getVehicleTotalQty() {
+        return vehicleTotalQty;
+    }
+
+    public void setVehicleTotalQty(Integer vehicleTotalQty) {
+        this.vehicleTotalQty = vehicleTotalQty;
+    }
+
+    public Integer getSellerTotalQty() {
+        return sellerTotalQty;
+    }
+
+    public void setSellerTotalQty(Integer sellerTotalQty) {
+        this.sellerTotalQty = sellerTotalQty;
     }
 
     public Integer getSelfSaleQty() {

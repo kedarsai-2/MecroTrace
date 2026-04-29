@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { scrollLoginFieldIntoView, useLoginScreenScrollAssist } from '@/hooks/useLoginScrollIntoView';
 import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { ArrowRight, Eye, EyeOff, Mail, Lock, Sun, Moon, Building2, Phone, KeyRound, LogIn, UserPlus } from 'lucide-react';
@@ -169,6 +170,8 @@ const LoginScreen = () => {
     };
   }, [otpCooldown]);
 
+  useLoginScreenScrollAssist(loginMode, 'login-phone', 'login-email');
+
   const handleEmailLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setTouched({ email: true, password: true, phone: false });
@@ -190,7 +193,7 @@ const LoginScreen = () => {
   };
 
   return (
-    <div className="h-[100dvh] relative overflow-hidden flex flex-col" role="presentation">
+    <div className="fixed inset-0 z-0 flex flex-col overflow-hidden bg-slate-950" role="presentation">
       {/* Background image */}
       <img src={loginBg} alt="" role="presentation" className="absolute inset-0 w-full h-full object-cover z-0" fetchPriority="high" decoding="async" width={1920} height={1080} />
       <div className="absolute inset-0 bg-gradient-to-br from-blue-900/70 via-blue-800/60 to-violet-900/70 z-[1]" />
@@ -228,7 +231,7 @@ const LoginScreen = () => {
         </div>
 
         {/* Right side — Login form */}
-        <main className="flex-1 flex flex-col min-h-0">
+        <main className="flex-1 flex flex-col min-h-0 overflow-y-auto overscroll-y-contain">
           {/* Theme Toggle */}
           <div className="flex justify-end px-5 pt-[max(1rem,env(safe-area-inset-top))]">
             <button onClick={toggleTheme} aria-label={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
@@ -316,6 +319,7 @@ const LoginScreen = () => {
                       <Phone className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-blue-800/50" aria-hidden="true" />
                       <Input id="login-phone" type="tel" placeholder="Enter 10-digit mobile number"
                         value={phone} onChange={e => { setPhone(e.target.value.replace(/\D/g, '').slice(0, 10)); clearError(); }}
+                        onFocus={(e) => scrollLoginFieldIntoView(e.currentTarget)}
                         onBlur={() => setTouched(p => ({ ...p, phone: true }))}
                         className="pl-12 h-12 sm:h-14 text-base sm:text-lg rounded-xl bg-white/90 border-0 text-blue-900 placeholder:text-blue-400"
                         maxLength={10} disabled={otpSent} />
@@ -330,6 +334,7 @@ const LoginScreen = () => {
                         <KeyRound className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-blue-800/50" aria-hidden="true" />
                         <Input id="login-otp" type="text" placeholder="Enter 4-digit OTP"
                           value={otp} onChange={e => setOtp(e.target.value.replace(/\D/g, '').slice(0, 4))}
+                          onFocus={(e) => scrollLoginFieldIntoView(e.currentTarget)}
                           className="pl-12 h-12 sm:h-14 text-base sm:text-lg rounded-xl bg-white/90 border-0 text-blue-900 placeholder:text-blue-400 tracking-[0.5em] text-center font-bold"
                           maxLength={4} autoFocus />
                       </div>
@@ -384,6 +389,7 @@ const LoginScreen = () => {
                       <Mail className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-blue-800/50" aria-hidden="true" />
                       <Input id="login-email" type="email" placeholder="Email address" autoComplete="email"
                         value={email} onChange={e => { setEmail(e.target.value); clearError(); }}
+                        onFocus={(e) => scrollLoginFieldIntoView(e.currentTarget)}
                         onBlur={() => setTouched(p => ({ ...p, email: true }))}
                         className="pl-12 h-12 sm:h-14 text-base sm:text-lg rounded-xl bg-white/90 border-0 text-blue-900 placeholder:text-blue-400"
                         required aria-invalid={!!emailError} />
@@ -396,6 +402,7 @@ const LoginScreen = () => {
                       <Lock className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-blue-800/50" aria-hidden="true" />
                       <Input id="login-password" type={showPassword ? 'text' : 'password'} placeholder="Password" autoComplete="current-password"
                         value={password} onChange={e => { setPassword(e.target.value); clearError(); }}
+                        onFocus={(e) => scrollLoginFieldIntoView(e.currentTarget)}
                         onBlur={() => setTouched(p => ({ ...p, password: true }))}
                         className="pl-12 pr-14 h-12 sm:h-14 text-base sm:text-lg rounded-xl bg-white/90 border-0 text-blue-900 placeholder:text-blue-400"
                         required aria-invalid={!!passwordError} />

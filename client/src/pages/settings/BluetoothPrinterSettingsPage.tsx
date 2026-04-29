@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
 import { Bluetooth, ArrowLeft, RefreshCw, Play, Save, Trash2, Link2, Shield } from 'lucide-react';
-import { Capacitor, registerPlugin } from '@capacitor/core';
+import { Capacitor } from '@capacitor/core';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
@@ -29,13 +29,7 @@ import {
 } from '@/services/api/bluetoothPrinters';
 import { traderRbacApi } from '@/services/api/rbac';
 import type { Profile, Role } from '@/types/rbac';
-
-type MercoPrinterPlugin = {
-  listPrinters(): Promise<{ printers: { mac: string; name: string }[] }>;
-  requestBluetoothPermissions(): Promise<{ granted: boolean }>;
-};
-
-const mercoPrinter = registerPlugin<MercoPrinterPlugin>('MercoPrinter');
+import { mercoPrinter } from '@/plugins/mercoPrinter';
 
 const BOUND_PRINTER_MAC_KEY = 'merco.boundBluetoothPrinterMac';
 const MAC_REGEX = /^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$/;

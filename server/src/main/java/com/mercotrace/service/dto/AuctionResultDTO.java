@@ -30,6 +30,22 @@ public class AuctionResultDTO implements Serializable {
     @JsonProperty("vehicleNumber")
     private String vehicleNumber;
 
+    /** Vehicle mark alias (arrival). With totals, used in printed lot identifier. */
+    @JsonProperty("vehicleMark")
+    private String vehicleMark;
+
+    /** Seller mark (contact or seller-in-vehicle). */
+    @JsonProperty("sellerMark")
+    private String sellerMark;
+
+    /** Sum of bag counts for all lots on this vehicle (all sellers). */
+    @JsonProperty("vehicleTotalQty")
+    private Integer vehicleTotalQty;
+
+    /** Sum of bag counts for all lots of this seller on the vehicle. */
+    @JsonProperty("sellerTotalQty")
+    private Integer sellerTotalQty;
+
     @JsonProperty("commodityName")
     private String commodityName;
 
@@ -94,6 +110,38 @@ public class AuctionResultDTO implements Serializable {
 
     public void setVehicleNumber(String vehicleNumber) {
         this.vehicleNumber = vehicleNumber;
+    }
+
+    public String getVehicleMark() {
+        return vehicleMark;
+    }
+
+    public void setVehicleMark(String vehicleMark) {
+        this.vehicleMark = vehicleMark;
+    }
+
+    public String getSellerMark() {
+        return sellerMark;
+    }
+
+    public void setSellerMark(String sellerMark) {
+        this.sellerMark = sellerMark;
+    }
+
+    public Integer getVehicleTotalQty() {
+        return vehicleTotalQty;
+    }
+
+    public void setVehicleTotalQty(Integer vehicleTotalQty) {
+        this.vehicleTotalQty = vehicleTotalQty;
+    }
+
+    public Integer getSellerTotalQty() {
+        return sellerTotalQty;
+    }
+
+    public void setSellerTotalQty(Integer sellerTotalQty) {
+        this.sellerTotalQty = sellerTotalQty;
     }
 
     public String getCommodityName() {

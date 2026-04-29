@@ -6,6 +6,7 @@ import com.mercotrace.service.dto.PrintLogCreateRequest;
 import com.mercotrace.service.dto.PrintLogDTO;
 import jakarta.validation.Valid;
 import java.util.List;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Page;
@@ -55,5 +56,16 @@ public class PrintLogResource {
         Page<PrintLogDTO> page = printLogService.list(pageable);
         HttpHeaders headers = PaginationUtil.generatePaginationHttpHeaders(ServletUriComponentsBuilder.fromCurrentRequest(), page);
         return ResponseEntity.ok().headers(headers).body(page.getContent());
+    }
+
+    @GetMapping("/reference-ids")
+    @PreAuthorize("hasAuthority(\"" + AuthoritiesConstants.PRINT_LOGS_VIEW + "\")")
+    @Operation(
+        summary = "Distinct print reference ids",
+        description = "Non-null reference_id values for the given reference_type (current trader), e.g. buyer Chitti bid keys"
+    )
+    public ResponseEntity<List<String>> listReferenceIdsFromQuery(@RequestParam("referenceType") String referenceType) {
+        LOG.debug("REST request to get distinct print reference ids: {}", referenceType);
+        return ResponseEntity.ok(printLogService.listDistinctReferenceIdsByReferenceType(referenceType));
     }
 }

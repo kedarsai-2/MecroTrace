@@ -83,7 +83,7 @@ const ContactPortalSignupPage = () => {
   };
 
   return (
-    <div className="h-[100dvh] relative flex flex-col" role="presentation">
+    <div className="fixed inset-0 z-0 flex flex-col overflow-hidden bg-slate-950" role="presentation">
       <img
         src={loginBg}
         alt=""
@@ -96,7 +96,7 @@ const ContactPortalSignupPage = () => {
       />
       <div className="absolute inset-0 bg-gradient-to-br from-emerald-900/80 via-emerald-800/70 to-slate-900/80 z-[1]" />
 
-      <div className="relative z-10 flex-1 flex flex-col min-h-0 overflow-y-auto">
+      <div className="relative z-10 flex-1 flex flex-col min-h-0 overflow-y-auto overscroll-y-contain">
         <div className="flex items-center justify-between px-5 pt-[max(1rem,env(safe-area-inset-top))]">
           <button
             type="button"

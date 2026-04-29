@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <changeSet id="20260425120100-1" author="mercotrace" dbms="postgresql">
+        <comment>Rename summary authority to ROLE_SUMMARY_PAGE_VIEW; align role.module_permissions key to SummaryPage</comment>
+        <sql>
+            INSERT INTO jhi_authority (name) VALUES ('ROLE_SUMMARY_PAGE_VIEW') ON CONFLICT (name) DO NOTHING;
+
+            DELETE FROM trader_user_authority a
+            USING trader_user_authority b
+            WHERE a.authority_name = 'ROLE_POST_AUCTION_PRE_WEIGHING_SUMMARY_VIEW'
+              AND b.user_id = a.user_id
+              AND b.authority_name = 'ROLE_SUMMARY_PAGE_VIEW';
+
+            UPDATE trader_user_authority
+            SET authority_name = 'ROLE_SUMMARY_PAGE_VIEW'
+            WHERE authority_name = 'ROLE_POST_AUCTION_PRE_WEIGHING_SUMMARY_VIEW';
+
+            DELETE FROM admin_user_authority a
+            USING admin_user_authority b
+            WHERE a.authority_name = 'ROLE_POST_AUCTION_PRE_WEIGHING_SUMMARY_VIEW'
+              AND b.admin_user_id = a.admin_user_id
+              AND b.authority_name = 'ROLE_SUMMARY_PAGE_VIEW';
+
+            UPDATE admin_user_authority
+            SET authority_name = 'ROLE_SUMMARY_PAGE_VIEW'
+            WHERE authority_name = 'ROLE_POST_AUCTION_PRE_WEIGHING_SUMMARY_VIEW';
+
+            DELETE FROM jhi_authority WHERE name = 'ROLE_POST_AUCTION_PRE_WEIGHING_SUMMARY_VIEW';
+
+            UPDATE role
+            SET module_permissions = replace(
+                cast(module_permissions as text),
+                '"Post-Auction Pre-Weighing Summary"',
+                '"SummaryPage"'
+            )
+            WHERE module_permissions is not null
+              AND cast(module_permissions as text) like '%Post-Auction Pre-Weighing Summary%';
+        </sql>
+    </changeSet>
+</databaseChangeLog>

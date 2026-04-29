@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!-- Preset margin (signed) stored separately from buyer other_charges; REQ-BIL-002 NR = B + P + BRK + Other. -->
+    <changeSet id="20260424120000-1" author="mercotrace">
+        <addColumn tableName="sales_bill_line_item">
+            <column name="preset_applied" type="numeric(15,2)" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+        </addColumn>
+    </changeSet>
+
+    <changeSet id="20260424120000-2" author="mercotrace">
+        <comment>Copy signed preset from linked auction bid where present.</comment>
+        <sql>
+            UPDATE sales_bill_line_item li
+            SET preset_applied = ae.preset_margin
+            FROM auction_entry ae
+            WHERE li.auction_entry_id = ae.id;
+        </sql>
+    </changeSet>
+
+    <changeSet id="20260424120000-3" author="mercotrace">
+        <comment>Split legacy merged other_charges (preset + buyer dynamic) when preset was taken from auction.</comment>
+        <sql>
+            UPDATE sales_bill_line_item li
+            SET other_charges = li.other_charges - li.preset_applied
+            WHERE li.auction_entry_id IS NOT NULL
+              AND li.other_charges &gt;= li.preset_applied;
+        </sql>
+    </changeSet>
+</databaseChangeLog>

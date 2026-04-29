@@ -76,6 +76,14 @@ public class SalesBillCommodityGroup implements Serializable {
     @Column(name = "weighman_charge_amount", precision = 15, scale = 2)
     private BigDecimal weighmanChargeAmount = BigDecimal.ZERO;
 
+    /** When null, coolie amount uses sum of line item quantities. */
+    @Column(name = "coolie_charge_qty")
+    private Integer coolieChargeQty;
+
+    /** When null, weighman amount uses sum of line item quantities. */
+    @Column(name = "weighman_charge_qty")
+    private Integer weighmanChargeQty;
+
     // Per-commodity discount (PERCENT or AMOUNT)
     @Column(name = "discount", precision = 15, scale = 2)
     private BigDecimal discount = BigDecimal.ZERO;
@@ -148,6 +156,10 @@ public class SalesBillCommodityGroup implements Serializable {
     public void setWeighmanChargeRate(BigDecimal weighmanChargeRate) { this.weighmanChargeRate = weighmanChargeRate; }
     public BigDecimal getWeighmanChargeAmount() { return weighmanChargeAmount; }
     public void setWeighmanChargeAmount(BigDecimal weighmanChargeAmount) { this.weighmanChargeAmount = weighmanChargeAmount; }
+    public Integer getCoolieChargeQty() { return coolieChargeQty; }
+    public void setCoolieChargeQty(Integer coolieChargeQty) { this.coolieChargeQty = coolieChargeQty; }
+    public Integer getWeighmanChargeQty() { return weighmanChargeQty; }
+    public void setWeighmanChargeQty(Integer weighmanChargeQty) { this.weighmanChargeQty = weighmanChargeQty; }
     public BigDecimal getDiscount() { return discount; }
     public void setDiscount(BigDecimal discount) { this.discount = discount; }
     public String getDiscountType() { return discountType; }

@@ -28,7 +28,7 @@ const SplashScreen = () => {
   }, [navigate, isDesktop]);
 
   return (
-    <div className="h-[100dvh] relative overflow-hidden flex flex-col">
+    <div className="fixed inset-0 z-0 flex flex-col overflow-hidden bg-slate-950">
       <div className="absolute inset-0 bg-gradient-to-br from-blue-400 via-blue-500 to-violet-500" />
       <motion.div className="absolute inset-0 bg-gradient-to-tr from-transparent via-white/30 to-transparent" initial={{ x: '-100%', opacity: 0 }} animate={{ x: '100%', opacity: 1 }} transition={{ duration: 1.5, delay: 0.5 }} />
       <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(91,140,255,0.4)_0%,transparent_70%)]" />

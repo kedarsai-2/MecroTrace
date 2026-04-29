@@ -148,6 +148,19 @@
     -moz-osx-font-smoothing: grayscale;
   }
 
+  /* Capacitor WebView: reduce rubber-band overscroll exposing default white,
+     and keep document height stable with dynamic browser chrome. */
+  html.capacitor-native {
+    height: 100%;
+    overscroll-behavior-y: none;
+  }
+
+  html.capacitor-native body {
+    height: 100%;
+    min-height: 100%;
+    overscroll-behavior-y: none;
+  }
+
   body {
     @apply bg-background text-foreground;
   }
@@ -158,6 +171,11 @@
     min-height: 100dvh;
     position: relative;
     overflow-x: hidden;
+  }
+
+  html.capacitor-native #root {
+    min-height: 100%;
+    min-height: -webkit-fill-available;
   }
 
   /* Trader app: centered max-width on tablet, full-width on desktop (sidebar layout).

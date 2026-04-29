@@ -64,6 +64,14 @@ public class AuctionEntry extends AbstractAuditingEntity<Long> implements Serial
     @Column(name = "seller_rate", precision = 19, scale = 2, nullable = false)
     private BigDecimal sellerRate;
 
+    /**
+     * Vehicle-ops / Summary "new seller rate". Independent from auction {@link #bidRate} /
+     * {@link #buyerRate}; PATCH updates this alone without recomputing buyer totals.
+     */
+    @NotNull
+    @Column(name = "summary_seller_rate", precision = 19, scale = 2, nullable = false)
+    private BigDecimal summarySellerRate;
+
     @NotNull
     @Column(name = "buyer_rate", precision = 19, scale = 2, nullable = false)
     private BigDecimal buyerRate;
@@ -167,6 +175,14 @@ public class AuctionEntry extends AbstractAuditingEntity<Long> implements Serial
 
     public void setSellerRate(BigDecimal sellerRate) {
         this.sellerRate = sellerRate;
+    }
+
+    public BigDecimal getSummarySellerRate() {
+        return summarySellerRate;
+    }
+
+    public void setSummarySellerRate(BigDecimal summarySellerRate) {
+        this.summarySellerRate = summarySellerRate;
     }
 
     public BigDecimal getBuyerRate() {
@@ -276,6 +292,7 @@ public class AuctionEntry extends AbstractAuditingEntity<Long> implements Serial
             ", presetMargin=" + getPresetMargin() +
             ", presetType=" + getPresetType() +
             ", sellerRate=" + getSellerRate() +
+            ", summarySellerRate=" + getSummarySellerRate() +
             ", buyerRate=" + getBuyerRate() +
             ", quantity=" + getQuantity() +
             ", amount=" + getAmount() +

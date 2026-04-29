@@ -14,6 +14,10 @@ public class AuctionBidUpdateRequest implements Serializable {
     @JsonProperty("rate")
     private BigDecimal rate;
 
+    /** When set without {@code rate}, updates only summary_seller_rate and does not recompute buyer_rate / amount. */
+    @JsonProperty("summary_seller_rate")
+    private BigDecimal summarySellerRate;
+
     @JsonProperty("quantity")
     private Integer quantity;
 
@@ -58,6 +62,14 @@ public class AuctionBidUpdateRequest implements Serializable {
 
     public void setRate(BigDecimal rate) {
         this.rate = rate;
+    }
+
+    public BigDecimal getSummarySellerRate() {
+        return summarySellerRate;
+    }
+
+    public void setSummarySellerRate(BigDecimal summarySellerRate) {
+        this.summarySellerRate = summarySellerRate;
     }
 
     public Integer getQuantity() {

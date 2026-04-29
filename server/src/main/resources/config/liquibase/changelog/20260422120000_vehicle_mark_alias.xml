@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <changeSet id="20260422120000-vehicle-mark-alias-column" author="mercotrace">
+        <addColumn tableName="vehicle">
+            <column name="vehicle_mark_alias" type="varchar(100)">
+                <constraints nullable="true"/>
+            </column>
+        </addColumn>
+    </changeSet>
+
+    <!-- Global uniqueness for non-null, non-blank aliases (case-insensitive, trimmed). Multiple NULLs allowed (PostgreSQL). -->
+    <changeSet id="20260422120000-vehicle-mark-alias-unique-idx" author="mercotrace" dbms="postgresql">
+        <sql>
+            CREATE UNIQUE INDEX ux_vehicle_vehicle_mark_alias_normalized ON vehicle (lower(trim(vehicle_mark_alias)))
+            WHERE vehicle_mark_alias IS NOT NULL AND length(trim(vehicle_mark_alias)) &gt; 0;
+        </sql>
+    </changeSet>
+</databaseChangeLog>

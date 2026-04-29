@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <changeSet id="20260422130000-vehicle-mark-alias-varchar8" author="mercotrace" dbms="postgresql">
+        <preConditions onFail="MARK_RAN">
+            <columnExists tableName="vehicle" columnName="vehicle_mark_alias"/>
+        </preConditions>
+        <sql>
+            DROP INDEX IF EXISTS ux_vehicle_vehicle_mark_alias_normalized;
+        </sql>
+        <modifyDataType tableName="vehicle" columnName="vehicle_mark_alias" newDataType="varchar(8)"/>
+        <sql>
+            CREATE UNIQUE INDEX ux_vehicle_vehicle_mark_alias_normalized ON vehicle (lower(trim(vehicle_mark_alias)))
+            WHERE vehicle_mark_alias IS NOT NULL AND length(trim(vehicle_mark_alias)) &gt; 0;
+        </sql>
+    </changeSet>
+</databaseChangeLog>

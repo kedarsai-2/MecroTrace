@@ -1,5 +1,6 @@
 package com.mercotrace.service.dto;
 
+import com.fasterxml.jackson.annotation.JsonAlias;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import java.io.Serializable;
 import java.util.ArrayList;
@@ -31,6 +32,9 @@ public class LotSummaryDTO implements Serializable {
 
     @JsonProperty("seller_mark")
     private String sellerMark;
+
+    /** Vehicle mark alias from arrival (vehicle_mark_alias). Used in lot identifier: {mark}-{vehicle qty}. */
+    private String vehicleMark;
 
     @JsonProperty("seller_vehicle_id")
     private Long sellerVehicleId;
@@ -116,6 +120,18 @@ public class LotSummaryDTO implements Serializable {
 
     public void setSellerMark(String sellerMark) {
         this.sellerMark = sellerMark;
+    }
+
+    /** Expose JSON as {@code vehicle_mark}; setter also accepts {@code vehicleMark}. */
+    @JsonProperty("vehicle_mark")
+    public String getVehicleMark() {
+        return vehicleMark;
+    }
+
+    @JsonProperty("vehicle_mark")
+    @JsonAlias("vehicleMark")
+    public void setVehicleMark(String vehicleMark) {
+        this.vehicleMark = vehicleMark;
     }
 
     public Long getSellerVehicleId() {

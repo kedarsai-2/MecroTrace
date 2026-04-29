@@ -1,14 +1,20 @@
 import { useState, useEffect } from 'react';
 import { RotateCcw } from 'lucide-react';
+import { Capacitor } from '@capacitor/core';
 
 /**
  * Shows a fullscreen overlay when device is in landscape orientation,
  * asking the user to rotate back to portrait.
+ * Android native builds lock orientation in AndroidManifest; no overlay needed.
  */
 const PortraitLock = () => {
   const [isLandscape, setIsLandscape] = useState(false);
 
   useEffect(() => {
+    if (Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android') {
+      return;
+    }
+
     const checkOrientation = () => {
       // Only enforce portrait on mobile/tablet, not desktop
       const isLand = window.innerWidth > window.innerHeight && window.innerHeight < 600 && window.innerWidth < 1024;

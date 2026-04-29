@@ -19,6 +19,8 @@ export interface LotSummaryDTO {
   commodity_name: string;
   seller_name: string;
   seller_mark: string;
+  /** Vehicle mark alias from arrival; used in lot identifier. */
+  vehicle_mark?: string;
   seller_vehicle_id: number;
   vehicle_number: string;
   was_modified: boolean;
@@ -43,6 +45,8 @@ export interface AuctionEntryDTO {
   preset_margin?: number;
   preset_type?: PresetType;
   seller_rate?: number;
+  /** Vehicle-ops Summary — editable independently of auction bid_rate / buyer_rate */
+  summary_seller_rate?: number | null;
   buyer_rate?: number;
   quantity: number;
   amount: number;
@@ -85,6 +89,8 @@ export interface AuctionBidCreateRequest {
 
 export interface AuctionBidUpdateRequest {
   rate?: number;
+  /** Without `rate`: updates only this column; does not change buyer_rate / auction bid. */
+  summary_seller_rate?: number;
   quantity?: number;
   token_advance?: number;
   extra_rate?: number;
@@ -124,6 +130,10 @@ export interface AuctionResultDTO {
   sellerName: string;
   sellerVehicleId: number;
   vehicleNumber: string;
+  vehicleMark?: string;
+  sellerMark?: string;
+  vehicleTotalQty?: number;
+  sellerTotalQty?: number;
   commodityName: string;
   auctionDatetime?: string;
   conductedBy?: string;
@@ -153,8 +163,11 @@ export interface AuctionSelfSaleUnitDTO {
   commodity_name: string;
   seller_name: string;
   seller_mark: string;
+  vehicle_mark?: string;
   seller_vehicle_id: number;
   vehicle_number: string;
+  vehicle_total_qty?: number;
+  seller_total_qty?: number;
   self_sale_qty: number;
   remaining_qty: number;
   rate: number;

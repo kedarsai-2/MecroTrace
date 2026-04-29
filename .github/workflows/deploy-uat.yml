@@ -1,0 +1,126 @@
+# UAT deployment: build client + Spring Boot JAR on GitHub, rsync to VPS, symlink swap + systemd restart.
+# Prerequisites and secrets: docs/deployment-uat-github-actions.md
+
+name: Deploy UAT
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: uat-deploy
+  cancel-in-progress: false
+
+jobs:
+  build-client:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+
+      - name: Install and build client
+        working-directory: client
+        env:
+          VITE_API_URL: ${{ secrets.UAT_VITE_API_URL }}
+        run: |
+          npm ci
+          npm run build
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: client/dist/
+          if-no-files-found: error
+
+  build-server:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+          cache-dependency-path: server/pom.xml
+
+      - name: Package server (prod)
+        working-directory: server
+        run: ./mvnw -ntp -Pprod -DskipTests -Dmodernizer.skip=true package
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: backend-jar
+          path: server/target/mercotrace-0.0.1-SNAPSHOT.jar
+          if-no-files-found: error
+
+  deploy:
+    needs: [build-client, build-server]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: artifacts/frontend
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: backend-jar
+          path: artifacts/jar
+
+      - uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.UAT_SSH_PRIVATE_KEY }}
+
+      - name: Configure SSH known_hosts
+        env:
+          KNOWN_HOSTS: ${{ secrets.UAT_SSH_KNOWN_HOSTS }}
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          echo "$KNOWN_HOSTS" >> ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+
+      - name: Upload artifacts and activate release
+        env:
+          SSH_USER: ${{ secrets.UAT_SSH_USER }}
+          SSH_HOST: ${{ secrets.UAT_SSH_HOST }}
+          DEPLOY_ROOT: ${{ secrets.UAT_DEPLOY_PATH }}
+          SERVICE_NAME: ${{ vars.UAT_SYSTEMD_SERVICE }}
+        run: |
+          set -euo pipefail
+          SHORT_SHA="$(echo '${{ github.sha }}' | cut -c1-7)"
+          DEPLOY_PATH="${DEPLOY_ROOT:-/var/www/uatmerco}"
+          SERVICE="${SERVICE_NAME:-uatmerco}"
+
+          JAR_LOCAL="$(find artifacts/jar -name '*.jar' -type f | head -1)"
+          test -n "$JAR_LOCAL" || { echo "No jar under artifacts/jar"; exit 1; }
+
+          echo "Deploying ${SHORT_SHA} to ${DEPLOY_PATH} as ${SSH_USER}@${SSH_HOST}"
+
+          rsync -avz -e ssh "${JAR_LOCAL}" "${SSH_USER}@${SSH_HOST}:${DEPLOY_PATH}/backend/releases/mercotrace-${SHORT_SHA}.jar"
+          ssh "${SSH_USER}@${SSH_HOST}" "mkdir -p '${DEPLOY_PATH}/frontend/releases/${SHORT_SHA}'"
+          rsync -avz --delete -e ssh "artifacts/frontend/" "${SSH_USER}@${SSH_HOST}:${DEPLOY_PATH}/frontend/releases/${SHORT_SHA}/"
+
+          scp scripts/deploy-uat-remote.sh "${SSH_USER}@${SSH_HOST}:/tmp/deploy-uat-remote-${SHORT_SHA}.sh"
+          ssh "${SSH_USER}@${SSH_HOST}" "chmod +x /tmp/deploy-uat-remote-${SHORT_SHA}.sh && DEPLOY_ROOT='${DEPLOY_PATH}' RELEASE_ID='${SHORT_SHA}' SERVICE_NAME='${SERVICE}' bash /tmp/deploy-uat-remote-${SHORT_SHA}.sh && rm -f /tmp/deploy-uat-remote-${SHORT_SHA}.sh"
+
+      - name: Smoke check (optional)
+        env:
+          UAT_HEALTH_URL: ${{ secrets.UAT_HEALTH_URL }}
+        run: |
+          if [ -z "$UAT_HEALTH_URL" ]; then
+            echo "UAT_HEALTH_URL not set, skipping smoke check"
+            exit 0
+          fi
+          curl -fsS --retry 5 --retry-delay 3 --retry-all-errors "$UAT_HEALTH_URL"

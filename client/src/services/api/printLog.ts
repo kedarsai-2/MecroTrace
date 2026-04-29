@@ -52,4 +52,13 @@ export const printLogApi = {
     if (!res.ok) await parseJsonOrThrow(res, 'Failed to load print logs');
     return res.json();
   },
+
+  /** Distinct `reference_id` for a print reference type (trader-scoped; shared across users). */
+  async listReferenceIds(referenceType: string): Promise<string[]> {
+    const searchParams = new URLSearchParams();
+    searchParams.set('referenceType', referenceType);
+    const res = await apiFetch(`${BASE}/reference-ids?${searchParams.toString()}`, { method: 'GET' });
+    if (!res.ok) await parseJsonOrThrow(res, 'Failed to load print reference ids');
+    return res.json();
+  },
 };

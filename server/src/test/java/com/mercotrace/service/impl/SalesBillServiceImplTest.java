@@ -3,18 +3,27 @@ package com.mercotrace.service.impl;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.mercotrace.domain.BillNumberSequence;
+import com.mercotrace.domain.Commodity;
+import com.mercotrace.domain.CommodityConfig;
+import com.mercotrace.domain.PrintSetting;
 import com.mercotrace.domain.SalesBill;
 import com.mercotrace.domain.SalesBillCommodityGroup;
+import com.mercotrace.domain.SalesBillLineItem;
+import com.mercotrace.domain.Trader;
 import com.mercotrace.repository.BillNumberSequenceRepository;
 import com.mercotrace.repository.SalesBillRepository;
 import com.mercotrace.repository.TraderRepository;
 import com.mercotrace.repository.VoucherRepository;
 import com.mercotrace.repository.CommodityRepository;
 import com.mercotrace.repository.CommodityConfigRepository;
+import com.mercotrace.repository.PrintSettingRepository;
 import com.mercotrace.service.TraderContextService;
 import com.mercotrace.service.dto.SalesBillDTOs.BillLineItemDTO;
 import com.mercotrace.service.dto.SalesBillDTOs.CommodityGroupDTO;
@@ -60,10 +69,14 @@ class SalesBillServiceImplTest {
     @Mock
     private CommodityConfigRepository commodityConfigRepository;
 
+    @Mock
+    private PrintSettingRepository printSettingRepository;
+
     private SalesBillServiceImpl service;
 
     @BeforeEach
     void setUp() {
+        when(printSettingRepository.findByTraderIdAndModuleKey(any(), any())).thenReturn(Optional.empty());
         service = new SalesBillServiceImpl(
             traderContextService,
             salesBillRepository,
@@ -72,6 +85,7 @@ class SalesBillServiceImplTest {
             voucherRepository,
             commodityRepository,
             commodityConfigRepository,
+            printSettingRepository,
             new ObjectMapper()
         );
     }
@@ -230,6 +244,154 @@ class SalesBillServiceImplTest {
         assertThat(page.getContent()).hasSize(1);
         assertThat(page.getContent().get(0).getBillNumber()).isEqualTo("MT-00002");
         assertThat(page.getContent().get(0).getBuyerName()).isEqualTo("Filtered Buyer");
+    }
+
+    @Test
+    void create_persistsCoolieChargeQtyAndComputesAmountFromOverride() {
+        when(traderContextService.getCurrentTraderId()).thenReturn(TRADER_ID);
+        when(salesBillRepository.save(any(SalesBill.class))).thenAnswer(inv -> {
+            SalesBill b = inv.getArgument(0);
+            if (b.getId() == null) {
+                b.setId(77L);
+            }
+            return b;
+        });
+
+        SalesBillCreateOrUpdateRequest req = sampleCreateRequest();
+        CommodityGroupDTO g = req.getCommodityGroups().get(0);
+        g.setCoolieRate(BigDecimal.valueOf(2.5));
+        g.setCoolieChargeQty(4);
+
+        service.create(req);
+
+        ArgumentCaptor<SalesBill> billCaptor = ArgumentCaptor.forClass(SalesBill.class);
+        verify(salesBillRepository).save(billCaptor.capture());
+        SalesBillCommodityGroup sg = billCaptor.getValue().getCommodityGroups().get(0);
+        assertThat(sg.getCoolieChargeQty()).isEqualTo(4);
+        assertThat(sg.getCoolieAmount()).isEqualByComparingTo("10.00");
+    }
+
+    @Test
+    void create_computesCoolieAmountFromLineSumWhenQtyOverrideNull() {
+        when(traderContextService.getCurrentTraderId()).thenReturn(TRADER_ID);
+        when(salesBillRepository.save(any(SalesBill.class))).thenAnswer(inv -> {
+            SalesBill b = inv.getArgument(0);
+            if (b.getId() == null) {
+                b.setId(78L);
+            }
+            return b;
+        });
+
+        SalesBillCreateOrUpdateRequest req = sampleCreateRequest();
+        CommodityGroupDTO g = req.getCommodityGroups().get(0);
+        g.setCoolieRate(BigDecimal.valueOf(2));
+        g.setCoolieChargeQty(null);
+
+        service.create(req);
+
+        ArgumentCaptor<SalesBill> billCaptor = ArgumentCaptor.forClass(SalesBill.class);
+        verify(salesBillRepository).save(billCaptor.capture());
+        SalesBillCommodityGroup sg = billCaptor.getValue().getCommodityGroups().get(0);
+        assertThat(sg.getCoolieChargeQty()).isNull();
+        assertThat(sg.getCoolieAmount()).isEqualByComparingTo("20.00");
+    }
+
+    @Test
+    void create_persistsPresetAppliedSeparateFromOtherCharges() {
+        when(traderContextService.getCurrentTraderId()).thenReturn(TRADER_ID);
+
+        when(salesBillRepository.save(any(SalesBill.class))).thenAnswer(inv -> {
+            SalesBill b = inv.getArgument(0);
+            if (b.getId() == null) {
+                b.setId(88L);
+            }
+            return b;
+        });
+
+        SalesBillCreateOrUpdateRequest req = sampleCreateRequest();
+        BillLineItemDTO item = req.getCommodityGroups().get(0).getItems().get(0);
+        item.setBrokerage(BigDecimal.ZERO);
+        item.setPresetApplied(BigDecimal.valueOf(-2.5));
+        item.setOtherCharges(BigDecimal.valueOf(3));
+        item.setNewRate(BigDecimal.valueOf(100.5)); // 100 base - 2.5 preset + 3 other
+
+        service.create(req);
+
+        ArgumentCaptor<SalesBill> billCaptor = ArgumentCaptor.forClass(SalesBill.class);
+        verify(salesBillRepository).save(billCaptor.capture());
+        SalesBillLineItem li = billCaptor.getValue().getCommodityGroups().get(0).getItems().get(0);
+        assertThat(li.getPresetApplied()).isEqualByComparingTo("-2.50");
+        assertThat(li.getOtherCharges()).isEqualByComparingTo("3.00");
+    }
+
+    @Test
+    void assignNumber_appliesBillNumberStartFrom_onlyForTraderDefaultPrefix() {
+        when(traderContextService.getCurrentTraderId()).thenReturn(TRADER_ID);
+
+        SalesBill bill = new SalesBill();
+        bill.setId(1L);
+        bill.setTraderId(TRADER_ID);
+        // empty groups → default trader prefix (MT)
+        when(salesBillRepository.findByIdWithGroupsAndVersions(1L)).thenReturn(Optional.of(bill));
+
+        Trader trader = new Trader();
+        trader.setId(TRADER_ID);
+        trader.setBillPrefix("MT");
+        when(traderRepository.findById(TRADER_ID)).thenReturn(Optional.of(trader));
+
+        when(billNumberSequenceRepository.findByPrefixForUpdate("MT")).thenReturn(Optional.empty());
+
+        PrintSetting ps = new PrintSetting();
+        ps.setBillNumberStartFrom(555);
+        when(printSettingRepository.findByTraderIdAndModuleKey(eq(TRADER_ID), eq("BILLING"))).thenReturn(Optional.of(ps));
+
+        when(salesBillRepository.save(any(SalesBill.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        SalesBillDTO dto = service.assignNumber(1L);
+
+        assertThat(dto.getBillNumber()).isEqualTo("MT-00555");
+        ArgumentCaptor<BillNumberSequence> cap = ArgumentCaptor.forClass(BillNumberSequence.class);
+        verify(billNumberSequenceRepository).save(cap.capture());
+        assertThat(cap.getValue().getNextValue()).isEqualTo(556L);
+    }
+
+    @Test
+    void assignNumber_ignoresBillNumberStartFrom_forCommodityPrefix() {
+        when(traderContextService.getCurrentTraderId()).thenReturn(TRADER_ID);
+        when(printSettingRepository.findByTraderIdAndModuleKey(any(), any())).thenReturn(Optional.empty());
+
+        SalesBillCommodityGroup g = new SalesBillCommodityGroup();
+        g.setCommodityName("Onion");
+
+        SalesBill bill = new SalesBill();
+        bill.setId(2L);
+        bill.setTraderId(TRADER_ID);
+        bill.getCommodityGroups().add(g);
+
+        when(salesBillRepository.findByIdWithGroupsAndVersions(2L)).thenReturn(Optional.of(bill));
+
+        Trader trader = new Trader();
+        trader.setId(TRADER_ID);
+        trader.setBillPrefix("MT");
+        when(traderRepository.findById(TRADER_ID)).thenReturn(Optional.of(trader));
+
+        Commodity commodity = new Commodity();
+        commodity.setId(5L);
+        when(commodityRepository.findOneByTraderIdAndCommodityNameIgnoreCase(eq(TRADER_ID), eq("Onion")))
+            .thenReturn(Optional.of(commodity));
+
+        CommodityConfig config = new CommodityConfig();
+        config.setBillPrefix("ON");
+        when(commodityConfigRepository.findOneByCommodityId(5L)).thenReturn(Optional.of(config));
+
+        when(billNumberSequenceRepository.findByPrefixForUpdate("ON")).thenReturn(Optional.empty());
+
+        when(salesBillRepository.save(any(SalesBill.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        SalesBillDTO dto = service.assignNumber(2L);
+
+        assertThat(dto.getBillNumber()).isEqualTo("ON-00001");
+        verify(printSettingRepository, never()).findByTraderIdAndModuleKey(any(), any());
     }
 }
 

@@ -47,6 +47,14 @@ public class ArrivalResource {
         this.arrivalService = arrivalService;
     }
 
+    private static String mapArrivalDataIntegrityMessage(DataIntegrityViolationException ex) {
+        String msg = ex.getMostSpecificCause() != null ? ex.getMostSpecificCause().getMessage() : ex.getMessage();
+        if (msg != null && msg.contains("ux_vehicle_vehicle_mark_alias_normalized")) {
+            return ArrivalService.VEHICLE_MARK_ALIAS_DUPLICATE_MESSAGE;
+        }
+        return "Lot Name already exists for this seller";
+    }
+
     /**
      * {@code POST  /arrivals} : Create a new completed arrival (drafts should use {@code POST /arrivals/partial}).
      */
@@ -64,7 +72,7 @@ public class ArrivalResource {
         } catch (IllegalArgumentException ex) {
             throw new BadRequestAlertException(ex.getMessage(), ENTITY_NAME, "validation");
         } catch (DataIntegrityViolationException ex) {
-            throw new BadRequestAlertException("Lot Name already exists for this seller", ENTITY_NAME, "validation");
+            throw new BadRequestAlertException(mapArrivalDataIntegrityMessage(ex), ENTITY_NAME, "validation");
         }
     }
 
@@ -86,7 +94,7 @@ public class ArrivalResource {
         } catch (IllegalArgumentException ex) {
             throw new BadRequestAlertException(ex.getMessage(), ENTITY_NAME, "validation");
         } catch (DataIntegrityViolationException ex) {
-            throw new BadRequestAlertException("Lot Name already exists for this seller", ENTITY_NAME, "validation");
+            throw new BadRequestAlertException(mapArrivalDataIntegrityMessage(ex), ENTITY_NAME, "validation");
         }
     }
 
@@ -144,7 +152,7 @@ public class ArrivalResource {
         } catch (IllegalArgumentException ex) {
             throw new BadRequestAlertException(ex.getMessage(), ENTITY_NAME, "validation");
         } catch (DataIntegrityViolationException ex) {
-            throw new BadRequestAlertException("Lot Name already exists for this seller", ENTITY_NAME, "validation");
+            throw new BadRequestAlertException(mapArrivalDataIntegrityMessage(ex), ENTITY_NAME, "validation");
         }
     }
 

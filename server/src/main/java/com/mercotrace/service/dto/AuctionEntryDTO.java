@@ -38,6 +38,10 @@ public class AuctionEntryDTO implements Serializable {
     @JsonProperty("seller_rate")
     private BigDecimal sellerRate;
 
+    /** Vehicle-ops Summary “new seller rate”; independent from buyer_rate until Sales Pad edits the auction bid. */
+    @JsonProperty("summary_seller_rate")
+    private BigDecimal summarySellerRate;
+
     @JsonProperty("buyer_rate")
     private BigDecimal buyerRate;
 
@@ -134,6 +138,14 @@ public class AuctionEntryDTO implements Serializable {
 
     public void setSellerRate(BigDecimal sellerRate) {
         this.sellerRate = sellerRate;
+    }
+
+    public BigDecimal getSummarySellerRate() {
+        return summarySellerRate;
+    }
+
+    public void setSummarySellerRate(BigDecimal summarySellerRate) {
+        this.summarySellerRate = summarySellerRate;
     }
 
     public BigDecimal getBuyerRate() {

@@ -30,6 +30,9 @@ public final class AuthoritiesConstants {
     public static final String WEIGHING_EDIT = "ROLE_WEIGHING_EDIT";
     public static final String WEIGHING_DELETE = "ROLE_WEIGHING_DELETE";
 
+    /** Summary page (read-only trader screen) */
+    public static final String SUMMARY_PAGE_VIEW = "ROLE_SUMMARY_PAGE_VIEW";
+
     /** Settlement (Puty) module */
     public static final String SETTLEMENTS_VIEW = "ROLE_SETTLEMENTS_VIEW";
     public static final String SETTLEMENTS_CREATE = "ROLE_SETTLEMENTS_CREATE";

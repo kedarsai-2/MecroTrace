@@ -6,8 +6,6 @@ import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 import java.io.Serializable;
-import org.hibernate.annotations.Cache;
-import org.hibernate.annotations.CacheConcurrencyStrategy;
 
 @Entity
 @Table(
@@ -16,7 +14,6 @@ import org.hibernate.annotations.CacheConcurrencyStrategy;
         @UniqueConstraint(name = "uk_print_setting_trader_module", columnNames = { "trader_id", "module_key" }),
     }
 )
-@Cache(usage = CacheConcurrencyStrategy.READ_WRITE)
 public class PrintSetting implements Serializable {
 
     private static final long serialVersionUID = 1L;
@@ -50,6 +47,14 @@ public class PrintSetting implements Serializable {
     @NotNull
     @Column(name = "include_header", nullable = false)
     private Boolean includeHeader = Boolean.TRUE;
+
+    /** Optional minimum numeric suffix for next sales bill number (BILLING row) or patti base (SETTLEMENT row). */
+    @Column(name = "bill_number_start_from")
+    private Integer billNumberStartFrom;
+
+    /** JSON array of `{ "label": string }` print copies; null = default one ORIGINAL COPY in API layer. */
+    @Column(name = "print_copies_json", columnDefinition = "text")
+    private String printCopiesJson;
 
     public Long getId() {
         return id;
@@ -97,5 +102,21 @@ public class PrintSetting implements Serializable {
 
     public void setIncludeHeader(Boolean includeHeader) {
         this.includeHeader = includeHeader;
+    }
+
+    public Integer getBillNumberStartFrom() {
+        return billNumberStartFrom;
+    }
+
+    public void setBillNumberStartFrom(Integer billNumberStartFrom) {
+        this.billNumberStartFrom = billNumberStartFrom;
+    }
+
+    public String getPrintCopiesJson() {
+        return printCopiesJson;
+    }
+
+    public void setPrintCopiesJson(String printCopiesJson) {
+        this.printCopiesJson = printCopiesJson;
     }
 }

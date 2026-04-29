@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { scrollLoginFieldIntoView, useLoginScreenScrollAssist } from '@/hooks/useLoginScrollIntoView';
 import { useNavigate, Link } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { ArrowRight, Eye, EyeOff, Lock, Mail, Phone, KeyRound, UserPlus, LogIn } from 'lucide-react';
@@ -155,6 +156,8 @@ const ContactPortalLoginPage = () => {
     };
   }, [otpCooldown]);
 
+  useLoginScreenScrollAssist(loginMode, 'portal-login-phone', 'portal-login-email');
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (loginMode === 'email') {
@@ -178,7 +181,7 @@ const ContactPortalLoginPage = () => {
   };
 
   return (
-    <div className="h-[100dvh] relative overflow-hidden flex flex-col" role="presentation">
+    <div className="fixed inset-0 z-0 flex flex-col overflow-hidden bg-slate-950" role="presentation">
       {/* Background image */}
       <img
         src={loginBg}
@@ -237,7 +240,7 @@ const ContactPortalLoginPage = () => {
         </div>
 
         {/* Right side — Login form */}
-        <main className="flex-1 flex flex-col min-h-0">
+        <main className="flex-1 flex flex-col min-h-0 overflow-y-auto overscroll-y-contain">
           {/* Top-right link (no theme toggle for portal) */}
           <div className="flex justify-end px-5 pt-[max(1rem,env(safe-area-inset-top))]">
             <Link
@@ -352,6 +355,7 @@ const ContactPortalLoginPage = () => {
                           setPhone(e.target.value.replace(/\D/g, '').slice(0, 10));
                           clearError();
                         }}
+                        onFocus={e => scrollLoginFieldIntoView(e.currentTarget)}
                         onBlur={() => setTouched(p => ({ ...p, phone: true }))}
                         className="pl-12 h-12 sm:h-14 text-base sm:text-lg rounded-xl bg-white/90 border-0 text-blue-900 placeholder:text-blue-400"
                         maxLength={10}
@@ -381,6 +385,7 @@ const ContactPortalLoginPage = () => {
                           placeholder="Enter 4-digit OTP"
                           value={otp}
                           onChange={e => setOtp(e.target.value.replace(/\D/g, '').slice(0, 4))}
+                          onFocus={e => scrollLoginFieldIntoView(e.currentTarget)}
                           className="pl-12 h-12 sm:h-14 text-base sm:text-lg rounded-xl bg-white/90 border-0 text-blue-900 placeholder:text-blue-400 tracking-[0.5em] text-center font-bold"
                           maxLength={4}
                           autoFocus
@@ -469,6 +474,7 @@ const ContactPortalLoginPage = () => {
                           setEmail(e.target.value);
                           clearError();
                         }}
+                        onFocus={e => scrollLoginFieldIntoView(e.currentTarget)}
                         onBlur={() => setTouched(p => ({ ...p, email: true }))}
                         className="pl-12 h-12 sm:h-14 text-base sm:text-lg rounded-xl bg-white/90 border-0 text-blue-900 placeholder:text-blue-400"
                         required
@@ -500,6 +506,7 @@ const ContactPortalLoginPage = () => {
                           setPassword(e.target.value);
                           clearError();
                         }}
+                        onFocus={e => scrollLoginFieldIntoView(e.currentTarget)}
                         onBlur={() => setTouched(p => ({ ...p, password: true }))}
                         className="pl-12 pr-14 h-12 sm:h-14 text-base sm:text-lg rounded-xl bg-white/90 border-0 text-blue-900 placeholder:text-blue-400"
                         required

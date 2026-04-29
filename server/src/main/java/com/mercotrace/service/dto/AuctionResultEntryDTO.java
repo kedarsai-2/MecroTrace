@@ -30,6 +30,12 @@ public class AuctionResultEntryDTO implements Serializable {
     @JsonProperty("rate")
     private BigDecimal rate;
 
+    /**
+     * Vehicle-ops / Summary new seller rate per bag (final figure; includes pad preset). Do not add {@code presetApplied} again for modified settlement.
+     */
+    @JsonProperty("summarySellerRate")
+    private BigDecimal summarySellerRate;
+
     @JsonProperty("quantity")
     private Integer quantity;
 
@@ -97,6 +103,14 @@ public class AuctionResultEntryDTO implements Serializable {
 
     public void setRate(BigDecimal rate) {
         this.rate = rate;
+    }
+
+    public BigDecimal getSummarySellerRate() {
+        return summarySellerRate;
+    }
+
+    public void setSummarySellerRate(BigDecimal summarySellerRate) {
+        this.summarySellerRate = summarySellerRate;
     }
 
     public Integer getQuantity() {

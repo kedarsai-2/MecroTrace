@@ -1,10 +1,10 @@
 import { useNavigate, useLocation } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-  Home, Settings, Users, Truck, Gavel, Printer,
+  Home, Settings, Users,   Truck, Gavel, Printer,
   FileText, Receipt, User,
   ChevronLeft, ChevronRight, Moon, Sun,
-  Box, Send, BarChart3,
+  Box, Send, BarChart3,, ClipboardList
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { MercotraceIcon } from '@/components/MercotraceLogo';
@@ -31,6 +31,7 @@ const navSections = [
       { icon: Settings, title: 'Commodity Settings', path: '/commodity-settings' },
       { icon: Truck, title: 'Arrivals', path: '/arrivals' },
       { icon: Gavel, title: 'Auctions / Sales', path: '/auctions' },
+      { icon: ClipboardList, title: 'Summary page', path: '/summary-page' },
       { icon: Printer, title: 'Print Hub', path: '/logistics' },
     ],
   },

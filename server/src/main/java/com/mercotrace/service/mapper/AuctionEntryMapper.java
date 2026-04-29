@@ -26,6 +26,10 @@ public interface AuctionEntryMapper extends EntityMapper<AuctionEntryDTO, Auctio
         if (entity.getLastModifiedDate() != null) {
             dto.setLastModifiedMs(entity.getLastModifiedDate().toEpochMilli());
         }
+        // If summary_seller_rate is still null on legacy rows, mirror bid_rate for API consistency.
+        if (dto.getSummarySellerRate() == null && dto.getBidRate() != null) {
+            dto.setSummarySellerRate(dto.getBidRate());
+        }
     }
 }
 

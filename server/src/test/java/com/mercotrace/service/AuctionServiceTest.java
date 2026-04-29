@@ -22,6 +22,7 @@ import com.mercotrace.repository.AuctionRepository;
 import com.mercotrace.repository.CommodityRepository;
 import com.mercotrace.repository.ContactRepository;
 import com.mercotrace.repository.LotRepository;
+import com.mercotrace.repository.PrintLogRepository;
 import com.mercotrace.repository.SellerInVehicleRepository;
 import com.mercotrace.repository.VehicleRepository;
 import com.mercotrace.service.AuctionService.AuctionConflictException;
@@ -81,6 +82,9 @@ class AuctionServiceTest {
 
     @Mock
     private TraderContextService traderContextService;
+
+    @Mock
+    private PrintLogRepository printLogRepository;
 
     @InjectMocks
     private AuctionService auctionService;

@@ -22,6 +22,8 @@ export interface ArrivalSellerPayload {
 
 export interface ArrivalCreatePayload {
   vehicle_number?: string;
+  /** Optional global-unique mark/alias: letters/digits only, max 8 chars; omit or empty = unset. */
+  vehicle_mark_alias?: string;
   is_multi_seller: boolean;
   loaded_weight: number;
   empty_weight: number;
@@ -48,6 +50,7 @@ export interface ArrivalCreatePayload {
 export interface ArrivalSummary {
   vehicleId: string | number;
   vehicleNumber: string;
+  vehicleMarkAlias?: string | null;
   sellerCount: number;
   lotCount: number;
   netWeight: number;
@@ -79,6 +82,7 @@ export interface ArrivalLotDetail {
 /** Seller in arrival detail. */
 export interface ArrivalSellerDetail {
   sellerName: string;
+  sellerMark?: string;
   contactId?: number;
   origin?: string;
   lots: ArrivalLotDetail[];
@@ -88,6 +92,7 @@ export interface ArrivalSellerDetail {
 export interface ArrivalDetail {
   vehicleId: number;
   vehicleNumber: string;
+  vehicleMarkAlias?: string | null;
   arrivalDatetime: string;
   godown?: string;
   origin?: string;
@@ -98,6 +103,7 @@ export interface ArrivalDetail {
 export interface ArrivalFullDetail {
   vehicleId: number;
   vehicleNumber: string;
+  vehicleMarkAlias?: string | null;
   arrivalDatetime: string;
   godown?: string;
   gatepassNumber?: string;
@@ -143,6 +149,8 @@ export interface ArrivalSellerFullDetail {
 /** PATCH body for updating arrival (all fields optional). When sellers present, replaces all sellers/lots. */
 export interface ArrivalUpdatePayload {
   vehicle_number?: string;
+  /** Send empty string to clear. Omit property to leave unchanged. */
+  vehicle_mark_alias?: string;
   godown?: string;
   gatepass_number?: string;
   origin?: string;
@@ -220,6 +228,7 @@ export const arrivalsApi = {
   async create(payload: ArrivalCreatePayload): Promise<ArrivalSummary> {
     const body = {
       vehicleNumber: payload.vehicle_number,
+      vehicleMarkAlias: payload.vehicle_mark_alias,
       multiSeller: payload.is_multi_seller,
       loadedWeight: payload.loaded_weight,
       emptyWeight: payload.empty_weight,
@@ -272,6 +281,7 @@ export const arrivalsApi = {
   async update(vehicleId: number | string, payload: ArrivalUpdatePayload): Promise<ArrivalSummary> {
     const body: Record<string, unknown> = {};
     if (payload.vehicle_number !== undefined) body.vehicleNumber = payload.vehicle_number;
+    if (payload.vehicle_mark_alias !== undefined) body.vehicleMarkAlias = payload.vehicle_mark_alias;
     if (payload.godown !== undefined) body.godown = payload.godown;
     if (payload.gatepass_number !== undefined) body.gatepassNumber = payload.gatepass_number;
     if (payload.origin !== undefined) body.origin = payload.origin;

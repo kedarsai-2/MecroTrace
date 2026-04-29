@@ -45,6 +45,10 @@ public class ArrivalService {
     private static final Logger LOG = LoggerFactory.getLogger(ArrivalService.class);
     private static final LocalDate GLOBAL_SELLER_SERIAL_DATE = LocalDate.of(1970, 1, 1);
 
+    /** Message when another vehicle already owns this mark/alias (case-insensitive, trimmed). */
+    public static final String VEHICLE_MARK_ALIAS_DUPLICATE_MESSAGE =
+        "Vehicle mark/alias is already used by another arrival. Each non-empty alias must be unique across the system.";
+
     /** Persisted in {@code daily_serial_allocation}; stable seller-to-serial mapping per trader (not per arrival). */
     private static final String KEY_TYPE_ARRIVAL_SELLER = "ARRIVAL_SELLER";
 
@@ -140,8 +144,11 @@ public class ArrivalService {
 
         Vehicle vehicle = new Vehicle();
         String vehicleNumber = normalizeVehicleNumber(request);
+        String vehicleMarkAlias = normalizeVehicleMarkAlias(request.getVehicleMarkAlias());
+        assertVehicleMarkAliasUnique(vehicleMarkAlias, null);
         vehicle.setTraderId(traderId);
         vehicle.setVehicleNumber(vehicleNumber);
+        vehicle.setVehicleMarkAlias(vehicleMarkAlias);
         vehicle.setArrivalDatetime(now);
         vehicle.setCreatedAt(now);
         vehicle.setPartiallyCompleted(isPartial);
@@ -268,6 +275,7 @@ public class ArrivalService {
         ArrivalSummaryDTO summary = new ArrivalSummaryDTO();
         summary.setVehicleId(vehicle.getId());
         summary.setVehicleNumber(vehicle.getVehicleNumber());
+        summary.setVehicleMarkAlias(vehicle.getVehicleMarkAlias());
         summary.setSellerCount(sellerLinks.size());
         summary.setLotCount(lots.size());
         summary.setNetWeight(netWeight);
@@ -368,6 +376,7 @@ public class ArrivalService {
             ArrivalSummaryDTO dto = new ArrivalSummaryDTO();
             dto.setVehicleId(v.getId());
             dto.setVehicleNumber(v.getVehicleNumber());
+            dto.setVehicleMarkAlias(v.getVehicleMarkAlias());
             dto.setSellerCount(sellerCount);
             dto.setLotCount(lotCount);
             dto.setNetWeight(netWeight);
@@ -430,6 +439,7 @@ public class ArrivalService {
         ArrivalFullDetailDTO dto = new ArrivalFullDetailDTO();
         dto.setVehicleId(vehicle.getId());
         dto.setVehicleNumber(vehicle.getVehicleNumber());
+        dto.setVehicleMarkAlias(vehicle.getVehicleMarkAlias());
         dto.setArrivalDatetime(vehicle.getArrivalDatetime());
         dto.setGodown(vehicle.getGodown());
         dto.setGatepassNumber(vehicle.getGatepassNumber());
@@ -523,6 +533,11 @@ public class ArrivalService {
 
         if (update.getVehicleNumber() != null && !update.getVehicleNumber().isBlank()) {
             vehicle.setVehicleNumber(update.getVehicleNumber().trim().toUpperCase());
+        }
+        if (update.getVehicleMarkAlias() != null) {
+            String normalizedAlias = normalizeVehicleMarkAlias(update.getVehicleMarkAlias());
+            assertVehicleMarkAliasUnique(normalizedAlias, vehicleId);
+            vehicle.setVehicleMarkAlias(normalizedAlias);
         }
         if (update.getGodown() != null) vehicle.setGodown(update.getGodown());
         if (update.getGatepassNumber() != null) vehicle.setGatepassNumber(update.getGatepassNumber());
@@ -850,6 +865,7 @@ public class ArrivalService {
         ArrivalSummaryDTO dto = new ArrivalSummaryDTO();
         dto.setVehicleId(v.getId());
         dto.setVehicleNumber(v.getVehicleNumber());
+        dto.setVehicleMarkAlias(v.getVehicleMarkAlias());
         dto.setSellerCount(sellers.size());
         dto.setLotCount(lotCount);
         dto.setNetWeight(netWeight);
@@ -887,11 +903,13 @@ public class ArrivalService {
 
         java.util.Map<Long, String> contactNameById = contacts.stream()
             .collect(Collectors.toMap(Contact::getId, c -> c.getName() != null ? c.getName() : ""));
+        java.util.Map<Long, Contact> contactById = contacts.stream().collect(Collectors.toMap(Contact::getId, c -> c, (a, b) -> a));
 
         List<ArrivalDetailDTO> content = vehicles.stream().map(v -> {
             ArrivalDetailDTO dto = new ArrivalDetailDTO();
             dto.setVehicleId(v.getId());
             dto.setVehicleNumber(v.getVehicleNumber());
+            dto.setVehicleMarkAlias(v.getVehicleMarkAlias());
             dto.setArrivalDatetime(v.getArrivalDatetime());
             dto.setGodown(v.getGodown());
             dto.setOrigin(v.getOrigin());
@@ -903,6 +921,14 @@ public class ArrivalService {
                 sellerDetail.setSellerName(siv.getContactId() != null
                     ? contactNameById.getOrDefault(siv.getContactId(), "")
                     : (siv.getSellerName() != null ? siv.getSellerName() : ""));
+                Contact sellerContact = siv.getContactId() != null ? contactById.get(siv.getContactId()) : null;
+                String resolvedMark = null;
+                if (sellerContact != null && sellerContact.getMark() != null && !sellerContact.getMark().isBlank()) {
+                    resolvedMark = sellerContact.getMark().trim();
+                } else if (siv.getSellerMark() != null && !siv.getSellerMark().isBlank()) {
+                    resolvedMark = siv.getSellerMark().trim();
+                }
+                sellerDetail.setSellerMark(resolvedMark);
                 List<Lot> sellerLots = lots.stream().filter(l -> l.getSellerVehicleId().equals(siv.getId())).toList();
                 List<ArrivalLotDetailDTO> lotDetails = sellerLots.stream().map(lot -> {
                     ArrivalLotDetailDTO ld = new ArrivalLotDetailDTO();
@@ -1358,6 +1384,48 @@ public class ArrivalService {
         String vn = request.getVehicleNumber();
         if (vn == null || vn.isBlank()) return null;
         return vn.trim().toUpperCase();
+    }
+
+    /** Max length for {@code vehicle.vehicle_mark_alias}; alphanumeric ASCII only when non-blank. */
+    public static final int VEHICLE_MARK_ALIAS_MAX_LEN = 8;
+
+    /**
+     * Trims vehicle mark/alias; blank becomes null. Non-blank must be at most {@link #VEHICLE_MARK_ALIAS_MAX_LEN} characters
+     * and match {@code [A-Za-z0-9]+}.
+     */
+    static String normalizeVehicleMarkAlias(String raw) {
+        if (raw == null) {
+            return null;
+        }
+        String t = raw.trim();
+        if (t.isEmpty()) {
+            return null;
+        }
+        if (t.length() > VEHICLE_MARK_ALIAS_MAX_LEN) {
+            throw new IllegalArgumentException(
+                "Vehicle mark/alias must be at most " + VEHICLE_MARK_ALIAS_MAX_LEN + " characters."
+            );
+        }
+        if (!t.matches("[A-Za-z0-9]+")) {
+            throw new IllegalArgumentException(
+                "Vehicle mark/alias must contain only letters and numbers (A–Z, a–z, 0–9)."
+            );
+        }
+        return t;
+    }
+
+    private void assertVehicleMarkAliasUnique(String normalizedAlias, Long excludeVehicleId) {
+        if (normalizedAlias == null) {
+            return;
+        }
+        String key = normalizedAlias.toLowerCase();
+        boolean taken =
+            excludeVehicleId == null
+                ? vehicleRepository.existsByNormalizedVehicleMarkAlias(key)
+                : vehicleRepository.existsByNormalizedVehicleMarkAliasExcludingId(key, excludeVehicleId);
+        if (taken) {
+            throw new IllegalArgumentException(VEHICLE_MARK_ALIAS_DUPLICATE_MESSAGE);
+        }
     }
 }
 

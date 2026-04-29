@@ -162,21 +162,24 @@ const InlineScribblePad = ({
     }
   }, [onMarkDetected, appendMode, clearStrokeInkOnly]);
 
-  const getPos = (e: React.TouchEvent | React.MouseEvent) => {
+  /** Pointer events avoid React’s passive `touch` listeners so `preventDefault` can block page scroll while drawing. */
+  const getPos = (e: React.PointerEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
     if (!canvas) return { x: 0, y: 0 };
     const rect = canvas.getBoundingClientRect();
     const scaleX = canvas.width / rect.width;
     const scaleY = canvas.height / rect.height;
-    if ('touches' in e) {
-      return { x: (e.touches[0].clientX - rect.left) * scaleX, y: (e.touches[0].clientY - rect.top) * scaleY };
-    }
-    return { x: ((e as React.MouseEvent).clientX - rect.left) * scaleX, y: ((e as React.MouseEvent).clientY - rect.top) * scaleY };
+    return {
+      x: (e.clientX - rect.left) * scaleX,
+      y: (e.clientY - rect.top) * scaleY,
+    };
   };
 
-  const startDraw = (e: React.TouchEvent | React.MouseEvent) => {
+  const startDraw = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
     e.preventDefault();
     isDrawing.current = true;
+    e.currentTarget.setPointerCapture(e.pointerId);
     const pos = getPos(e);
     lastPos.current = pos;
     strokeStartTime.current = Date.now();
@@ -186,7 +189,7 @@ const InlineScribblePad = ({
     setCandidates([]);
   };
 
-  const draw = (e: React.TouchEvent | React.MouseEvent) => {
+  const draw = (e: React.PointerEvent<HTMLCanvasElement>) => {
     e.preventDefault();
     if (!isDrawing.current || !canvasRef.current) return;
     const ctx = canvasRef.current.getContext('2d');
@@ -206,7 +209,10 @@ const InlineScribblePad = ({
     currentStroke.current.ts.push(Date.now() - strokeStartTime.current);
   };
 
-  const endDraw = () => {
+  const endDraw = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    }
     if (!isDrawing.current) return;
     isDrawing.current = false;
     if (currentStroke.current.xs.length > 1) {
@@ -237,13 +243,10 @@ const InlineScribblePad = ({
           ref={canvasRef}
           className="w-full touch-none cursor-crosshair"
           style={{ height: fillAvailableHeight ? '100%' : canvasHeight }}
-          onMouseDown={startDraw}
-          onMouseMove={draw}
-          onMouseUp={endDraw}
-          onMouseLeave={endDraw}
-          onTouchStart={startDraw}
-          onTouchMove={draw}
-          onTouchEnd={endDraw}
+          onPointerDown={startDraw}
+          onPointerMove={draw}
+          onPointerUp={endDraw}
+          onPointerCancel={endDraw}
         />
         <button
           onClick={handleClearButton}

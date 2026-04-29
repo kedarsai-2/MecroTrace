@@ -16,6 +16,7 @@ import com.mercotrace.repository.AuctionSelfSaleUnitRepository;
 import com.mercotrace.repository.CommodityRepository;
 import com.mercotrace.repository.ContactRepository;
 import com.mercotrace.repository.LotRepository;
+import com.mercotrace.repository.PrintLogRepository;
 import com.mercotrace.repository.SellerInVehicleRepository;
 import com.mercotrace.repository.VehicleRepository;
 import com.mercotrace.service.dto.*;
@@ -54,6 +55,48 @@ public class AuctionService {
     /** Calendar day for temporary-buyer expiry (scribble marks); aligns with primary market timezone. */
     private static final ZoneId BUSINESS_CALENDAR_ZONE = ZoneId.of("Asia/Kolkata");
 
+    /** Sums of lot bag counts: per vehicle (all sellers) and per seller-in-vehicle row. */
+    private static final class VehicleSellerQtyIndex {
+
+        final Map<Long, Integer> vehicleIdToTotal;
+        final Map<Long, Integer> sellerVehicleIdToTotal;
+
+        VehicleSellerQtyIndex(Map<Long, Integer> vehicleIdToTotal, Map<Long, Integer> sellerVehicleIdToTotal) {
+            this.vehicleIdToTotal = vehicleIdToTotal;
+            this.sellerVehicleIdToTotal = sellerVehicleIdToTotal;
+        }
+    }
+
+    private VehicleSellerQtyIndex buildVehicleSellerQtyIndex(Set<Long> vehicleIds) {
+        if (vehicleIds == null || vehicleIds.isEmpty()) {
+            return new VehicleSellerQtyIndex(Map.of(), Map.of());
+        }
+        List<SellerInVehicle> allSivsForVehicles = sellerInVehicleRepository.findAllByVehicleIdIn(vehicleIds);
+        Set<Long> allSivIds = allSivsForVehicles.stream().map(SellerInVehicle::getId).collect(Collectors.toSet());
+        List<Lot> allLotsOnVehicles = allSivIds.isEmpty() ? List.of() : lotRepository.findAllBySellerVehicleIdIn(allSivIds);
+        Map<Long, Integer> sellerVehicleIdToTotal = new HashMap<>();
+        for (Lot l : allLotsOnVehicles) {
+            if (l.getSellerVehicleId() != null) {
+                sellerVehicleIdToTotal.merge(l.getSellerVehicleId(), l.getBagCount() != null ? l.getBagCount() : 0, Integer::sum);
+            }
+        }
+        Map<Long, Integer> vehicleIdToTotal = new HashMap<>();
+        for (Long vid : vehicleIds) {
+            List<Long> sivIdsOfVehicle = allSivsForVehicles
+                .stream()
+                .filter(s -> vid.equals(s.getVehicleId()))
+                .map(SellerInVehicle::getId)
+                .toList();
+            int total = allLotsOnVehicles
+                .stream()
+                .filter(l -> sivIdsOfVehicle.contains(l.getSellerVehicleId()))
+                .mapToInt(l -> l.getBagCount() != null ? l.getBagCount() : 0)
+                .sum();
+            vehicleIdToTotal.put(vid, total);
+        }
+        return new VehicleSellerQtyIndex(vehicleIdToTotal, sellerVehicleIdToTotal);
+    }
+
     private final AuctionRepository auctionRepository;
     private final AuctionEntryRepository auctionEntryRepository;
     private final LotRepository lotRepository;
@@ -65,6 +108,10 @@ public class AuctionService {
     private final CommodityRepository commodityRepository;
     private final TraderContextService traderContextService;
     private final AuctionSelfSaleUnitRepository auctionSelfSaleUnitRepository;
+    private final PrintLogRepository printLogRepository;
+
+    /** Matches client Print Hub `BUYER_CHITI_BID` — per-bid print completion key {@code lotId:bidNumber}. */
+    private static final String PRINT_LOG_BUYER_CHITI_BID = "BUYER_CHITI_BID";
 
     public AuctionService(
         AuctionRepository auctionRepository,
@@ -77,7 +124,8 @@ public class AuctionService {
         ContactService contactService,
         CommodityRepository commodityRepository,
         TraderContextService traderContextService,
-        AuctionSelfSaleUnitRepository auctionSelfSaleUnitRepository
+        AuctionSelfSaleUnitRepository auctionSelfSaleUnitRepository,
+        PrintLogRepository printLogRepository
     ) {
         this.auctionRepository = auctionRepository;
         this.auctionEntryRepository = auctionEntryRepository;
@@ -90,6 +138,7 @@ public class AuctionService {
         this.commodityRepository = commodityRepository;
         this.traderContextService = traderContextService;
         this.auctionSelfSaleUnitRepository = auctionSelfSaleUnitRepository;
+        this.printLogRepository = printLogRepository;
     }
 
     /** Contact-linked sellers: use contact name/mark. Free-text sellers (no contact): use SellerInVehicle fields. */
@@ -144,28 +193,9 @@ public class AuctionService {
         Map<Long, List<Auction>> lotToAuctions = auctions.stream().collect(Collectors.groupingBy(Auction::getLotId));
         Map<Long, List<AuctionEntry>> auctionToEntries = entries.stream().collect(Collectors.groupingBy(AuctionEntry::getAuctionId));
 
-        // Compute vehicle total qty and seller total qty for lot identifier (Vehicle QTY / Seller QTY / Lot Name-Lot QTY)
-        List<SellerInVehicle> allSivsForVehicles = sellerInVehicleRepository.findAllByVehicleIdIn(vehicleIds);
-        Set<Long> allSivIds = allSivsForVehicles.stream().map(SellerInVehicle::getId).collect(Collectors.toSet());
-        List<Lot> allLotsOnVehicles = allSivIds.isEmpty() ? List.of() : lotRepository.findAllBySellerVehicleIdIn(allSivIds);
-        Map<Long, Integer> vehicleIdToTotal = new HashMap<>();
-        Map<Long, Integer> sellerVehicleIdToTotal = new HashMap<>();
-        for (Lot l : allLotsOnVehicles) {
-            if (l.getSellerVehicleId() != null) {
-                sellerVehicleIdToTotal.merge(l.getSellerVehicleId(), l.getBagCount() != null ? l.getBagCount() : 0, Integer::sum);
-            }
-        }
-        for (Long vid : vehicleIds) {
-            List<Long> sivIdsOfVehicle = allSivsForVehicles.stream()
-                .filter(s -> vid.equals(s.getVehicleId()))
-                .map(SellerInVehicle::getId)
-                .toList();
-            int total = allLotsOnVehicles.stream()
-                .filter(l -> sivIdsOfVehicle.contains(l.getSellerVehicleId()))
-                .mapToInt(l -> l.getBagCount() != null ? l.getBagCount() : 0)
-                .sum();
-            vehicleIdToTotal.put(vid, total);
-        }
+        VehicleSellerQtyIndex qtyIndex = buildVehicleSellerQtyIndex(vehicleIds);
+        Map<Long, Integer> vehicleIdToTotal = qtyIndex.vehicleIdToTotal;
+        Map<Long, Integer> sellerVehicleIdToTotal = qtyIndex.sellerVehicleIdToTotal;
 
         List<LotSummaryDTO> content = new ArrayList<>();
         for (Lot lot : lots) {
@@ -209,11 +239,21 @@ public class AuctionService {
         dto.setWasModified(false);
 
         if (siv != null) {
-            Vehicle v = vehicleMap.get(siv.getVehicleId());
-            Contact c = contactMap.get(siv.getContactId());
+            Vehicle v = siv.getVehicleId() != null ? vehicleMap.get(siv.getVehicleId()) : null;
+            // Map is built from page-scoped vehicle ids; if missing (e.g. cache edge), load vehicle for mark + number.
+            if (v == null && siv.getVehicleId() != null) {
+                v = vehicleRepository.findById(siv.getVehicleId()).orElse(null);
+            }
+            Contact c = siv.getContactId() != null ? contactMap.get(siv.getContactId()) : null;
+            if (c == null && siv.getContactId() != null) {
+                c = contactRepository.findById(siv.getContactId()).orElse(null);
+            }
             dto.setVehicleNumber(v != null ? v.getVehicleNumber() : null);
             dto.setSellerName(resolveAuctionSellerName(c, siv));
             dto.setSellerMark(resolveAuctionSellerMark(c, siv));
+            if (v != null && v.getVehicleMarkAlias() != null && !v.getVehicleMarkAlias().isBlank()) {
+                dto.setVehicleMark(v.getVehicleMarkAlias().trim());
+            }
             if (siv.getVehicleId() != null) {
                 dto.setVehicleTotalQty(vehicleIdToTotal.get(siv.getVehicleId()));
             }
@@ -367,9 +407,12 @@ public class AuctionService {
         Map<Long, Contact> contactById = contactRepository.findAllById(contactIds).stream().collect(Collectors.toMap(Contact::getId, c -> c));
         Map<Long, Commodity> commodityById = commodityRepository.findAllById(commodityIds).stream().collect(Collectors.toMap(Commodity::getId, c -> c));
 
+        Set<Long> vehicleIdsForQty = sivById.values().stream().map(SellerInVehicle::getVehicleId).filter(Objects::nonNull).collect(Collectors.toSet());
+        VehicleSellerQtyIndex selfSaleQtyIndex = buildVehicleSellerQtyIndex(vehicleIdsForQty);
+
         List<AuctionSelfSaleUnitDTO> content = units
             .stream()
-            .map(unit -> toAuctionSelfSaleUnitDTO(unit, lotById.get(unit.getLotId()), sivById, vehicleById, contactById, commodityById))
+            .map(unit -> toAuctionSelfSaleUnitDTO(unit, lotById.get(unit.getLotId()), sivById, vehicleById, contactById, commodityById, selfSaleQtyIndex))
             .filter(Objects::nonNull)
             .filter(dto -> {
                 if (q == null || q.isBlank()) {
@@ -453,6 +496,20 @@ public class AuctionService {
                 throw new StaleBidEditException("This bid was changed elsewhere. Refresh and try again.");
             }
         }
+
+        if (request.getSummarySellerRate() != null && request.getRate() == null) {
+            if (request.getSummarySellerRate().compareTo(BigDecimal.ONE) < 0) {
+                throw new IllegalArgumentException("Summary seller rate must be at least 1");
+            }
+            entry.setSummarySellerRate(request.getSummarySellerRate());
+            entry.setLastModifiedDate(Instant.now());
+            auctionEntryRepository.saveAndFlush(entry);
+            List<AuctionEntry> refreshed = auctionEntryRepository.findAllByAuctionId(auction.getId());
+            AuctionSessionDTO dto = buildSessionDTO(auction, lot, refreshed, unit.getRemainingQty(), unit.getSelfSaleQty());
+            dto.setSelfSaleContext(buildSelfSaleContext(unit, lot));
+            return dto;
+        }
+
         if (request.getRate() != null && request.getRate().compareTo(BigDecimal.ONE) < 0) {
             throw new IllegalArgumentException("Rate must be at least 1");
         }
@@ -490,7 +547,7 @@ public class AuctionService {
             entry.setPresetType(request.getPresetType());
         }
 
-        applyBillingBuyerReassignFromPatch(entry, request, traderId);
+        applyBillingBuyerReassignFromPatch(entry, auction, request, traderId);
 
         BigDecimal bidRate = entry.getBidRate();
         BigDecimal extra = entry.getExtraRate() != null ? entry.getExtraRate() : BigDecimal.ZERO;
@@ -621,6 +678,18 @@ public class AuctionService {
             }
         }
 
+        /* Summary vehicle-ops: persist negotiated seller figure only — leaves auction bid_rate / buyer_rate unchanged. */
+        if (request.getSummarySellerRate() != null && request.getRate() == null) {
+            if (request.getSummarySellerRate().compareTo(BigDecimal.ONE) < 0) {
+                throw new IllegalArgumentException("Summary seller rate must be at least 1");
+            }
+            entry.setSummarySellerRate(request.getSummarySellerRate());
+            entry.setLastModifiedDate(Instant.now());
+            auctionEntryRepository.saveAndFlush(entry);
+            List<AuctionEntry> refreshed = auctionEntryRepository.findAllByAuctionId(auction.getId());
+            return buildSessionDTO(auction, lot, refreshed);
+        }
+
         if (request.getRate() != null && request.getRate().compareTo(BigDecimal.ONE) < 0) {
             throw new IllegalArgumentException("Rate must be at least 1");
         }
@@ -664,7 +733,7 @@ public class AuctionService {
             entry.setPresetType(request.getPresetType());
         }
 
-        applyBillingBuyerReassignFromPatch(entry, request, traderId);
+        applyBillingBuyerReassignFromPatch(entry, auction, request, traderId);
 
         BigDecimal bidRate = entry.getBidRate();
         BigDecimal extra = entry.getExtraRate() != null ? entry.getExtraRate() : BigDecimal.ZERO;
@@ -800,13 +869,15 @@ public class AuctionService {
                 ? Map.of()
                 : contactRepository.findAllById(contactIds).stream().collect(Collectors.toMap(Contact::getId, c -> c));
 
+        VehicleSellerQtyIndex resultQtyIndex = buildVehicleSellerQtyIndex(vehicleIds);
+
         List<AuctionResultDTO> content = auctions
             .stream()
             .map(a -> {
                 Lot lot = lots.stream().filter(l -> l.getId().equals(a.getLotId())).findFirst().orElse(null);
                 List<AuctionEntry> aEntries = entries.stream().filter(e -> e.getAuctionId().equals(a.getId())).toList();
                 AuctionResultDTO dto = buildEffectiveLotResultDTO(a, lot, aEntries);
-                applySellerVehicleToAuctionResult(dto, lot, sivById, vehicleById, contactById);
+                applySellerVehicleToAuctionResult(dto, lot, sivById, vehicleById, contactById, resultQtyIndex);
                 return dto;
             })
             .collect(Collectors.toList());
@@ -854,9 +925,33 @@ public class AuctionService {
     }
 
     /**
-     * Fills seller display name and vehicle number on auction results (Billing search, logistics) from lot → seller-in-vehicle →
-     * contact (trader-owned or global) or free-text seller fields.
+     * Fills seller display name, vehicle number, marks, and vehicle/seller totals on auction results (Billing, logistics).
      */
+    private void enrichAuctionResultLotIdentifiers(
+        AuctionResultDTO dto,
+        Lot lot,
+        SellerInVehicle siv,
+        Vehicle v,
+        Contact c,
+        VehicleSellerQtyIndex qtyIndex
+    ) {
+        if (dto == null || qtyIndex == null) {
+            return;
+        }
+        dto.setSellerMark(resolveAuctionSellerMark(c, siv));
+        if (v != null && v.getVehicleMarkAlias() != null && !v.getVehicleMarkAlias().isBlank()) {
+            dto.setVehicleMark(v.getVehicleMarkAlias().trim());
+        } else {
+            dto.setVehicleMark(null);
+        }
+        if (lot != null && lot.getSellerVehicleId() != null) {
+            dto.setSellerTotalQty(qtyIndex.sellerVehicleIdToTotal.get(lot.getSellerVehicleId()));
+        }
+        if (siv != null && siv.getVehicleId() != null) {
+            dto.setVehicleTotalQty(qtyIndex.vehicleIdToTotal.get(siv.getVehicleId()));
+        }
+    }
+
     private void applySellerVehicleToAuctionResult(AuctionResultDTO dto, Lot lot) {
         if (dto == null || lot == null || lot.getSellerVehicleId() == null) {
             return;
@@ -869,6 +964,10 @@ public class AuctionService {
         Vehicle v = siv.getVehicleId() != null ? vehicleRepository.findById(siv.getVehicleId()).orElse(null) : null;
         dto.setSellerName(resolveAuctionSellerName(c, siv));
         dto.setVehicleNumber(v != null ? v.getVehicleNumber() : null);
+        VehicleSellerQtyIndex qtyIndex = siv.getVehicleId() != null
+            ? buildVehicleSellerQtyIndex(Set.of(siv.getVehicleId()))
+            : new VehicleSellerQtyIndex(Map.of(), Map.of());
+        enrichAuctionResultLotIdentifiers(dto, lot, siv, v, c, qtyIndex);
     }
 
     private void applySellerVehicleToAuctionResult(
@@ -876,7 +975,8 @@ public class AuctionService {
         Lot lot,
         Map<Long, SellerInVehicle> sivById,
         Map<Long, Vehicle> vehicleById,
-        Map<Long, Contact> contactById
+        Map<Long, Contact> contactById,
+        VehicleSellerQtyIndex qtyIndex
     ) {
         if (dto == null || lot == null || lot.getSellerVehicleId() == null) {
             return;
@@ -889,6 +989,7 @@ public class AuctionService {
         Vehicle v = siv.getVehicleId() != null ? vehicleById.get(siv.getVehicleId()) : null;
         dto.setSellerName(resolveAuctionSellerName(c, siv));
         dto.setVehicleNumber(v != null ? v.getVehicleNumber() : null);
+        enrichAuctionResultLotIdentifiers(dto, lot, siv, v, c, qtyIndex != null ? qtyIndex : new VehicleSellerQtyIndex(Map.of(), Map.of()));
     }
 
     private AuctionSessionDTO buildSessionDTO(Auction auction, Lot lot, List<AuctionEntry> entries) {
@@ -932,6 +1033,9 @@ public class AuctionService {
                 lotSummary.setVehicleNumber(v != null ? v.getVehicleNumber() : null);
                 lotSummary.setSellerName(resolveAuctionSellerName(c, siv));
                 lotSummary.setSellerMark(resolveAuctionSellerMark(c, siv));
+                if (v != null && v.getVehicleMarkAlias() != null && !v.getVehicleMarkAlias().isBlank()) {
+                    lotSummary.setVehicleMark(v.getVehicleMarkAlias().trim());
+                }
                 // Vehicle total: sum of all lots on same vehicle. Seller total: sum of all lots for same seller.
                 if (siv.getVehicleId() != null) {
                     List<SellerInVehicle> sivsOnVehicle = sellerInVehicleRepository.findAllByVehicleId(siv.getVehicleId());
@@ -1235,6 +1339,9 @@ public class AuctionService {
                 remainingSelfSale.setBuyerMark(entry.getBuyerMark());
                 remainingSelfSale.setBuyerName(entry.getBuyerName());
                 remainingSelfSale.setRate(unit.getRate());
+                remainingSelfSale.setSummarySellerRate(
+                    entry.getSummarySellerRate() != null ? entry.getSummarySellerRate() : entry.getBidRate()
+                );
                 remainingSelfSale.setQuantity(unit.getRemainingQty());
                 remainingSelfSale.setAmount(unit.getRate().multiply(BigDecimal.valueOf(unit.getRemainingQty())));
                 remainingSelfSale.setIsSelfSale(Boolean.TRUE);
@@ -1293,6 +1400,7 @@ public class AuctionService {
             entry.setPresetMargin(preset);
             entry.setPresetType(type);
             entry.setSellerRate(rate);
+            entry.setSummarySellerRate(rate);
             entry.setBuyerRate(rate.add(extra));
             entry.setQuantity(request.getQuantity());
             entry.setAmount(entry.getBuyerRate().multiply(BigDecimal.valueOf(request.getQuantity())));
@@ -1340,7 +1448,8 @@ public class AuctionService {
         Map<Long, SellerInVehicle> sivById,
         Map<Long, Vehicle> vehicleById,
         Map<Long, Contact> contactById,
-        Map<Long, Commodity> commodityById
+        Map<Long, Commodity> commodityById,
+        VehicleSellerQtyIndex qtyIndex
     ) {
         if (lot == null) {
             return null;
@@ -1365,6 +1474,15 @@ public class AuctionService {
             dto.setSellerName(resolveAuctionSellerName(contact, siv));
             dto.setSellerMark(resolveAuctionSellerMark(contact, siv));
             dto.setVehicleNumber(vehicle != null ? vehicle.getVehicleNumber() : null);
+            if (vehicle != null && vehicle.getVehicleMarkAlias() != null && !vehicle.getVehicleMarkAlias().isBlank()) {
+                dto.setVehicleMark(vehicle.getVehicleMarkAlias().trim());
+            }
+            if (qtyIndex != null && lot.getSellerVehicleId() != null) {
+                dto.setSellerTotalQty(qtyIndex.sellerVehicleIdToTotal.get(lot.getSellerVehicleId()));
+            }
+            if (qtyIndex != null && siv.getVehicleId() != null) {
+                dto.setVehicleTotalQty(qtyIndex.vehicleIdToTotal.get(siv.getVehicleId()));
+            }
         }
         if (lot.getCommodityId() != null) {
             Commodity commodity = commodityById.get(lot.getCommodityId());
@@ -1376,7 +1494,12 @@ public class AuctionService {
     /**
      * Billing module: move auction bid ownership to the sales bill buyer (same trader).
      */
-    private void applyBillingBuyerReassignFromPatch(AuctionEntry entry, AuctionBidUpdateRequest request, Long traderId) {
+    private void applyBillingBuyerReassignFromPatch(
+        AuctionEntry entry,
+        Auction auction,
+        AuctionBidUpdateRequest request,
+        Long traderId
+    ) {
         if (!Boolean.TRUE.equals(request.getBillingReassignBuyer())) {
             return;
         }
@@ -1384,6 +1507,18 @@ public class AuctionService {
         String name = request.getBuyerName() != null ? request.getBuyerName().trim() : "";
         if (mark.isEmpty() || name.isEmpty()) {
             throw new IllegalArgumentException("buyer_name and buyer_mark are required when billing_reassign_buyer is true");
+        }
+        /* Print Hub stores BUYER_CHITI_BID completion by lotId:bidNumber only — clear so line can print under new buyer. */
+        Long lotId = auction != null ? auction.getLotId() : null;
+        Integer bidNum = entry.getBidNumber();
+        if (lotId != null && bidNum != null && traderId != null) {
+            String refId = lotId + ":" + bidNum;
+            printLogRepository.deleteByTraderIdAndReferenceTypeAndReferenceId(traderId, PRINT_LOG_BUYER_CHITI_BID, refId);
+            LOG.debug(
+                "Cleared Print Hub BUYER_CHITI_BID logs for {} after billing buyer reassign (auction entry {})",
+                refId,
+                entry.getId()
+            );
         }
         entry.setBuyerMark(mark);
         entry.setBuyerName(name);
@@ -1402,6 +1537,7 @@ public class AuctionService {
         dto.setBuyerMark(entry.getBuyerMark());
         dto.setBuyerName(entry.getBuyerName());
         dto.setRate(entry.getBidRate());
+        dto.setSummarySellerRate(entry.getSummarySellerRate() != null ? entry.getSummarySellerRate() : entry.getBidRate());
         dto.setQuantity(entry.getQuantity());
         dto.setAmount(entry.getAmount());
         dto.setIsSelfSale(entry.getIsSelfSale());

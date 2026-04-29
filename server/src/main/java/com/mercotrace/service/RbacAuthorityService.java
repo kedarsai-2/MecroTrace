@@ -346,6 +346,9 @@ public class RbacAuthorityService {
         // Financial Reports module (read-only)
         names.add(AuthoritiesConstants.FINANCIAL_REPORTS_VIEW);
 
+        // Summary page (read-only)
+        names.add(AuthoritiesConstants.SUMMARY_PAGE_VIEW);
+
         // Operational Reports module (read-only)
         names.add(AuthoritiesConstants.REPORTS_VIEW);
 
@@ -457,6 +460,12 @@ public class RbacAuthorityService {
             modules,
             "weighing",
             mapOf("view", AuthoritiesConstants.WEIGHING_VIEW, "create", AuthoritiesConstants.WEIGHING_CREATE)
+        );
+
+        register(
+            modules,
+            "summarypage",
+            mapOf("view", AuthoritiesConstants.SUMMARY_PAGE_VIEW)
         );
 
         register(

@@ -21,7 +21,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -73,7 +75,22 @@ public class ModuleAuctionResource {
         @RequestParam(required = false) String q
     ) {
         LOG.debug("REST request to get Auction lots page: {} status={} q={}", pageable, status, q);
-        Page<LotSummaryDTO> page = auctionService.listLotsWithStatus(pageable, status, q);
+        Sort sort = pageable.getSort();
+        Pageable p =
+            sort.stream().anyMatch(o -> "lot_id".equalsIgnoreCase(o.getProperty()))
+                ? PageRequest.of(
+                    pageable.getPageNumber(),
+                    pageable.getPageSize(),
+                    Sort.by(
+                        sort.stream()
+                            .map(
+                                o ->
+                                    new Sort.Order(
+                                        o.getDirection(),
+                                        "lot_id".equalsIgnoreCase(o.getProperty()) ? "id" : o.getProperty()))
+                            .toList()))
+                : pageable;
+        Page<LotSummaryDTO> page = auctionService.listLotsWithStatus(p, status, q);
         HttpHeaders headers = PaginationUtil.generatePaginationHttpHeaders(ServletUriComponentsBuilder.fromCurrentRequest(), page);
         return ResponseEntity.ok().headers(headers).body(page.getContent());
     }

@@ -42,6 +42,9 @@ const MODULE_FEATURE_TO_AUTHORITY: ModuleFeatureAuthorityMap = {
     view: 'ROLE_WEIGHING_VIEW',
     create: 'ROLE_WEIGHING_CREATE',
   },
+  [normalize('SummaryPage')]: {
+    view: 'ROLE_SUMMARY_PAGE_VIEW',
+  },
   [normalize("Writer's Pad")]: {
     view: 'ROLE_WRITERS_PAD_VIEW',
     create: 'ROLE_WRITERS_PAD_CREATE',
@@ -154,6 +157,7 @@ export function getModuleKeyForRoute(pathname: string): ModuleKey | null {
   if (pathname.startsWith('/commodity-settings')) return 'Commodity Settings';
   if (pathname.startsWith('/arrivals')) return 'Arrivals';
   if (pathname.startsWith('/auctions')) return 'Auctions / Sales';
+  if (pathname.startsWith('/summary-page')) return 'SummaryPage';
   if (pathname.startsWith('/weighing')) return 'Weighing';
   if (pathname.startsWith('/writers-pad') || pathname.startsWith('/scribble-pad')) return "Writer's Pad";
   if (pathname.startsWith('/logistics')) return 'Print Hub';

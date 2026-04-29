@@ -10,10 +10,18 @@ export interface BillLineItemDTO {
   auctionEntryId?: number | null;
   selfSaleUnitId?: number | null;
   sellerName?: string;
+  /** Lot-level bag count for canonical lot identifier (Sales Pad format); not billed qty. */
+  lotTotalQty?: number | null;
+  vehicleTotalQty?: number | null;
+  sellerVehicleQty?: number | null;
+  vehicleMark?: string | null;
+  sellerMark?: string | null;
   quantity: number;
   weight: number;
   baseRate: number;
   brokerage?: number;
+  /** Signed auction preset (₹ rate add); not merged into otherCharges. */
+  presetApplied?: number;
   otherCharges?: number;
   newRate: number;
   amount: number;
@@ -42,6 +50,17 @@ export interface CommodityGroupDTO {
   cgstInputMode?: 'PERCENT' | 'AMOUNT';
   igstRate?: number;
   igstInputMode?: 'PERCENT' | 'AMOUNT';
+  coolieRate?: number;
+  coolieAmount?: number;
+  /** When omitted, server uses sum of line quantities for coolie amount. */
+  coolieChargeQty?: number | null;
+  weighmanChargeRate?: number;
+  weighmanChargeAmount?: number;
+  /** When omitted, server uses sum of line quantities for weighman amount. */
+  weighmanChargeQty?: number | null;
+  discount?: number;
+  discountType?: 'PERCENT' | 'AMOUNT';
+  manualRoundOff?: number;
 }
 
 /** Version snapshot (backend BillVersionDTO). */

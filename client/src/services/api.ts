@@ -22,7 +22,17 @@ export { writersPadApi } from './api/writersPad';
 export { presetMarksApi } from './api/presetMarks';
 export type { PresetMarkSettingDTO } from './api/presetMarks';
 export { printSettingsApi } from './api/printSettings';
-export type { PrintSettingDTO, PrintModuleKey, PrintPaperSize } from './api/printSettings';
+export type {
+  PrintSettingDTO,
+  PrintModuleKey,
+  PrintPaperSize,
+  PrintCopyItem,
+} from './api/printSettings';
+export {
+  parsePrintCopiesJson,
+  serializePrintCopiesJson,
+  DEFAULT_PRINT_COPIES,
+} from './api/printSettings';
 export type {
   SellerSettlementDTO,
   SettlementLotDTO,

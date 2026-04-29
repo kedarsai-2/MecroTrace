@@ -7,6 +7,7 @@ import com.mercotrace.service.TraderContextService;
 import com.mercotrace.service.dto.PrintLogCreateRequest;
 import com.mercotrace.service.dto.PrintLogDTO;
 import java.time.Instant;
+import java.util.List;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
@@ -47,6 +48,13 @@ public class PrintLogServiceImpl implements PrintLogService {
         Long traderId = traderContextService.getCurrentTraderId();
         return printLogRepository.findAllByTraderIdOrderByPrintedAtDesc(traderId, pageable)
             .map(this::toDto);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<String> listDistinctReferenceIdsByReferenceType(String referenceType) {
+        Long traderId = traderContextService.getCurrentTraderId();
+        return printLogRepository.findDistinctReferenceIdsByTraderIdAndReferenceType(traderId, referenceType);
     }
 
     private PrintLogDTO toDto(PrintLog e) {

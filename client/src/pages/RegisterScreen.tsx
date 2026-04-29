@@ -128,7 +128,7 @@ const RegisterScreen = () => {
   };
 
   return (
-    <div className="h-[100dvh] relative overflow-hidden flex flex-col">
+    <div className="fixed inset-0 z-0 flex flex-col overflow-hidden bg-slate-950">
       <img src={loginBg} alt="" className="absolute inset-0 w-full h-full object-cover z-0" />
       <div className="absolute inset-0 bg-gradient-to-br from-blue-900/75 via-blue-800/65 to-violet-900/75 z-[1]" />
       <div className="absolute inset-0 bg-[radial-gradient(circle_at_30%_20%,rgba(255,255,255,0.15)_0%,transparent_50%)] z-[1]" />
@@ -157,7 +157,7 @@ const RegisterScreen = () => {
           </button>
         </div>
 
-        <div className="flex-1 flex flex-col items-center overflow-y-auto px-6 py-4 no-scrollbar">
+        <div className="flex-1 flex min-h-0 flex-col items-center overflow-y-auto overscroll-y-contain px-6 py-4 no-scrollbar">
           <motion.div initial={{ scale: 0 }} animate={{ scale: 1 }} transition={{ type: 'spring', damping: 15 }} className="relative mb-4">
             <div className="w-16 h-16 rounded-2xl bg-white/15 backdrop-blur-md flex items-center justify-center shadow-2xl border border-white/20">
               <MercotraceIcon size={32} color="white" className="drop-shadow-lg" />

@@ -149,6 +149,9 @@ public final class ArrivalDTOs {
 
         private String vehicleNumber;
 
+        /** Optional global-unique vehicle mark/alias (null or blank = unset). */
+        private String vehicleMarkAlias;
+
         /** Null when omitted in JSON — treated as multi-seller in service (matches UI default). */
         private Boolean multiSeller;
 
@@ -191,6 +194,14 @@ public final class ArrivalDTOs {
 
         public void setVehicleNumber(String vehicleNumber) {
             this.vehicleNumber = vehicleNumber;
+        }
+
+        public String getVehicleMarkAlias() {
+            return vehicleMarkAlias;
+        }
+
+        public void setVehicleMarkAlias(String vehicleMarkAlias) {
+            this.vehicleMarkAlias = vehicleMarkAlias;
         }
 
         public Boolean getMultiSeller() {
@@ -334,6 +345,7 @@ public final class ArrivalDTOs {
 
         private Long vehicleId;
         private String vehicleNumber;
+        private String vehicleMarkAlias;
         private int sellerCount;
         private int lotCount;
         private double netWeight;
@@ -369,6 +381,14 @@ public final class ArrivalDTOs {
 
         public void setVehicleNumber(String vehicleNumber) {
             this.vehicleNumber = vehicleNumber;
+        }
+
+        public String getVehicleMarkAlias() {
+            return vehicleMarkAlias;
+        }
+
+        public void setVehicleMarkAlias(String vehicleMarkAlias) {
+            this.vehicleMarkAlias = vehicleMarkAlias;
         }
 
         public int getSellerCount() {
@@ -523,6 +543,8 @@ public final class ArrivalDTOs {
     public static class ArrivalSellerDetailDTO implements Serializable {
 
         private String sellerName;
+        /** Seller mark (contact mark or free-text seller mark on vehicle). */
+        private String sellerMark;
         private Long contactId;
         private String origin;
         private List<ArrivalLotDetailDTO> lots;
@@ -533,6 +555,14 @@ public final class ArrivalDTOs {
 
         public void setSellerName(String sellerName) {
             this.sellerName = sellerName;
+        }
+
+        public String getSellerMark() {
+            return sellerMark;
+        }
+
+        public void setSellerMark(String sellerMark) {
+            this.sellerMark = sellerMark;
         }
 
         public Long getContactId() {
@@ -567,6 +597,7 @@ public final class ArrivalDTOs {
 
         private Long vehicleId;
         private String vehicleNumber;
+        private String vehicleMarkAlias;
         private Instant arrivalDatetime;
         private String godown;
         private String origin;
@@ -586,6 +617,14 @@ public final class ArrivalDTOs {
 
         public void setVehicleNumber(String vehicleNumber) {
             this.vehicleNumber = vehicleNumber;
+        }
+
+        public String getVehicleMarkAlias() {
+            return vehicleMarkAlias;
+        }
+
+        public void setVehicleMarkAlias(String vehicleMarkAlias) {
+            this.vehicleMarkAlias = vehicleMarkAlias;
         }
 
         public Instant getArrivalDatetime() {
@@ -674,6 +713,7 @@ public final class ArrivalDTOs {
     public static class ArrivalFullDetailDTO implements Serializable {
         private Long vehicleId;
         private String vehicleNumber;
+        private String vehicleMarkAlias;
         private Instant arrivalDatetime;
         private String godown;
         private String gatepassNumber;
@@ -700,6 +740,8 @@ public final class ArrivalDTOs {
         public void setVehicleId(Long vehicleId) { this.vehicleId = vehicleId; }
         public String getVehicleNumber() { return vehicleNumber; }
         public void setVehicleNumber(String vehicleNumber) { this.vehicleNumber = vehicleNumber; }
+        public String getVehicleMarkAlias() { return vehicleMarkAlias; }
+        public void setVehicleMarkAlias(String vehicleMarkAlias) { this.vehicleMarkAlias = vehicleMarkAlias; }
         public Instant getArrivalDatetime() { return arrivalDatetime; }
         public void setArrivalDatetime(Instant arrivalDatetime) { this.arrivalDatetime = arrivalDatetime; }
         public String getGodown() { return godown; }
@@ -745,6 +787,7 @@ public final class ArrivalDTOs {
     /** Request body for PATCH /api/arrivals/:id (full update; all fields optional). When sellers present, replaces all sellers/lots. */
     public static class ArrivalUpdateDTO implements Serializable {
         private String vehicleNumber;
+        private String vehicleMarkAlias;
         private String godown;
         private String gatepassNumber;
         private String origin;
@@ -768,6 +811,8 @@ public final class ArrivalDTOs {
         public void setPartiallyCompleted(Boolean partiallyCompleted) { this.partiallyCompleted = partiallyCompleted; }
         public String getVehicleNumber() { return vehicleNumber; }
         public void setVehicleNumber(String vehicleNumber) { this.vehicleNumber = vehicleNumber; }
+        public String getVehicleMarkAlias() { return vehicleMarkAlias; }
+        public void setVehicleMarkAlias(String vehicleMarkAlias) { this.vehicleMarkAlias = vehicleMarkAlias; }
         public String getGodown() { return godown; }
         public void setGodown(String godown) { this.godown = godown; }
         public String getGatepassNumber() { return gatepassNumber; }

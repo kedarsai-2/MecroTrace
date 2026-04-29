@@ -5,6 +5,8 @@ import java.util.List;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 @Repository
@@ -15,5 +17,17 @@ public interface VehicleRepository extends JpaRepository<Vehicle, Long> {
     Page<Vehicle> findAllByTraderIdOrderByArrivalDatetimeDesc(Long traderId, Pageable pageable);
 
     Page<Vehicle> findAllByTraderIdAndPartiallyCompletedOrderByArrivalDatetimeDesc(Long traderId, Boolean partiallyCompleted, Pageable pageable);
+
+    @Query(
+        "SELECT CASE WHEN COUNT(v) > 0 THEN true ELSE false END FROM Vehicle v WHERE LOWER(TRIM(v.vehicleMarkAlias)) = :normalized " +
+        "AND v.vehicleMarkAlias IS NOT NULL AND TRIM(v.vehicleMarkAlias) <> ''"
+    )
+    boolean existsByNormalizedVehicleMarkAlias(@Param("normalized") String normalized);
+
+    @Query(
+        "SELECT CASE WHEN COUNT(v) > 0 THEN true ELSE false END FROM Vehicle v WHERE LOWER(TRIM(v.vehicleMarkAlias)) = :normalized " +
+        "AND v.id <> :excludeId AND v.vehicleMarkAlias IS NOT NULL AND TRIM(v.vehicleMarkAlias) <> ''"
+    )
+    boolean existsByNormalizedVehicleMarkAliasExcludingId(@Param("normalized") String normalized, @Param("excludeId") Long excludeId);
 }
 

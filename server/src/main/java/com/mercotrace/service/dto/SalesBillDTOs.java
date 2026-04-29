@@ -26,10 +26,20 @@ public final class SalesBillDTOs {
         private Long auctionEntryId;
         private Long selfSaleUnitId;
         private String sellerName;
+        /** Lot-level bag count for canonical lot identifier; optional on legacy rows. */
+        private Integer lotTotalQty;
+        private Integer vehicleTotalQty;
+        private Integer sellerVehicleQty;
+        @Size(max = 32)
+        private String vehicleMark;
+        @Size(max = 32)
+        private String sellerMark;
         private Integer quantity;
         private BigDecimal weight;
         private BigDecimal baseRate;
         private BigDecimal brokerage;
+        /** Signed preset (auction margin); not included in {@link #otherCharges}. */
+        private BigDecimal presetApplied;
         private BigDecimal otherCharges;
         private BigDecimal newRate;
         private BigDecimal amount;
@@ -50,6 +60,16 @@ public final class SalesBillDTOs {
         public void setSelfSaleUnitId(Long selfSaleUnitId) { this.selfSaleUnitId = selfSaleUnitId; }
         public String getSellerName() { return sellerName; }
         public void setSellerName(String sellerName) { this.sellerName = sellerName; }
+        public Integer getLotTotalQty() { return lotTotalQty; }
+        public void setLotTotalQty(Integer lotTotalQty) { this.lotTotalQty = lotTotalQty; }
+        public Integer getVehicleTotalQty() { return vehicleTotalQty; }
+        public void setVehicleTotalQty(Integer vehicleTotalQty) { this.vehicleTotalQty = vehicleTotalQty; }
+        public Integer getSellerVehicleQty() { return sellerVehicleQty; }
+        public void setSellerVehicleQty(Integer sellerVehicleQty) { this.sellerVehicleQty = sellerVehicleQty; }
+        public String getVehicleMark() { return vehicleMark; }
+        public void setVehicleMark(String vehicleMark) { this.vehicleMark = vehicleMark; }
+        public String getSellerMark() { return sellerMark; }
+        public void setSellerMark(String sellerMark) { this.sellerMark = sellerMark; }
         public Integer getQuantity() { return quantity; }
         public void setQuantity(Integer quantity) { this.quantity = quantity; }
         public BigDecimal getWeight() { return weight; }
@@ -58,6 +78,8 @@ public final class SalesBillDTOs {
         public void setBaseRate(BigDecimal baseRate) { this.baseRate = baseRate; }
         public BigDecimal getBrokerage() { return brokerage; }
         public void setBrokerage(BigDecimal brokerage) { this.brokerage = brokerage; }
+        public BigDecimal getPresetApplied() { return presetApplied; }
+        public void setPresetApplied(BigDecimal presetApplied) { this.presetApplied = presetApplied; }
         public BigDecimal getOtherCharges() { return otherCharges; }
         public void setOtherCharges(BigDecimal otherCharges) { this.otherCharges = otherCharges; }
         public BigDecimal getNewRate() { return newRate; }
@@ -77,8 +99,16 @@ public final class SalesBillDTOs {
         private BigDecimal userFeePercent;
         private BigDecimal coolieRate;
         private BigDecimal coolieAmount;
+        /** Nullable: when absent, server uses sum of line quantities for coolie amount. */
+        @Min(value = 0, message = "coolieChargeQty must be >= 0")
+        @Max(value = 1_000_000, message = "coolieChargeQty too large")
+        private Integer coolieChargeQty;
         private BigDecimal weighmanChargeRate;
         private BigDecimal weighmanChargeAmount;
+        /** Nullable: when absent, server uses sum of line quantities for weighman amount. */
+        @Min(value = 0, message = "weighmanChargeQty must be >= 0")
+        @Max(value = 1_000_000, message = "weighmanChargeQty too large")
+        private Integer weighmanChargeQty;
         private BigDecimal discount;
         private String discountType; // PERCENT | AMOUNT
         private BigDecimal manualRoundOff;
@@ -112,10 +142,14 @@ public final class SalesBillDTOs {
         public void setCoolieRate(BigDecimal coolieRate) { this.coolieRate = coolieRate; }
         public BigDecimal getCoolieAmount() { return coolieAmount; }
         public void setCoolieAmount(BigDecimal coolieAmount) { this.coolieAmount = coolieAmount; }
+        public Integer getCoolieChargeQty() { return coolieChargeQty; }
+        public void setCoolieChargeQty(Integer coolieChargeQty) { this.coolieChargeQty = coolieChargeQty; }
         public BigDecimal getWeighmanChargeRate() { return weighmanChargeRate; }
         public void setWeighmanChargeRate(BigDecimal weighmanChargeRate) { this.weighmanChargeRate = weighmanChargeRate; }
         public BigDecimal getWeighmanChargeAmount() { return weighmanChargeAmount; }
         public void setWeighmanChargeAmount(BigDecimal weighmanChargeAmount) { this.weighmanChargeAmount = weighmanChargeAmount; }
+        public Integer getWeighmanChargeQty() { return weighmanChargeQty; }
+        public void setWeighmanChargeQty(Integer weighmanChargeQty) { this.weighmanChargeQty = weighmanChargeQty; }
         public BigDecimal getDiscount() { return discount; }
         public void setDiscount(BigDecimal discount) { this.discount = discount; }
         public String getDiscountType() { return discountType; }

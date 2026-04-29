@@ -19,7 +19,17 @@ import BottomNav from '@/components/BottomNav';
 import { toast } from 'sonner';
 import { useAuth } from '@/context/AuthContext';
 import { useAuctionResults } from '@/hooks/useAuctionResults';
-import { commodityApi, printLogApi, printSettingsApi, weighingApi, billingApi, arrivalsApi, contactApi, auctionApi } from '@/services/api';
+import {
+  commodityApi,
+  printLogApi,
+  printSettingsApi,
+  parsePrintCopiesJson,
+  weighingApi,
+  billingApi,
+  arrivalsApi,
+  contactApi,
+  auctionApi,
+} from '@/services/api';
 import { ContactApiError } from '@/services/api/contacts';
 import type { Contact } from '@/types/models';
 import type {
@@ -31,6 +41,7 @@ import type {
   LotSummaryDTO,
 } from '@/services/api/auction';
 import ForbiddenPage from '@/components/ForbiddenPage';
+import { MAX_MARK_LEN } from '@/components/InlineScribblePad';
 import { ConfirmDeleteDialog } from '@/components/ConfirmDeleteDialog';
 import { usePermissions } from '@/lib/permissions';
 import useUnsavedChangesGuard from '@/hooks/useUnsavedChangesGuard';
@@ -38,7 +49,14 @@ import type { FullCommodityConfigDto } from '@/services/api/commodities';
 import type { SalesBillDTO } from '@/services/api/billing';
 import type { ArrivalDetail } from '@/services/api/arrivals';
 import { directPrint } from '@/utils/printTemplates';
-import { generateSalesBillPrintHTML, generateNonGstSalesBillPrintHTML, type BillPrintData } from '@/utils/printDocumentTemplates';
+import {
+  generateNonGstSalesBillPrintHTML,
+  generateNonGstSalesBillPrintHTMLForCopies,
+  generateSalesBillPrintHTML,
+  generateSalesBillPrintHTMLForCopies,
+  type BillPrintData,
+} from '@/utils/printDocumentTemplates';
+import { formatAuctionLotIdentifier } from '@/utils/auctionLotIdentifier';
 import {
   billGroupSubtotalWithTaxAndCharges,
   effectiveGstPercent,
@@ -66,8 +84,17 @@ const arrSolidSm = cn(arrSolid, 'h-8 px-2.5 text-xs');
 const arrSolidWide10 = cn(arrSolid, 'w-full h-10');
 const arrSolidWide14 = cn(arrSolid, 'w-full h-14');
 const numberInputNoSpinnerClass = '[appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none';
-const billingSummaryInputClass = `h-10 w-24 lg:h-6 lg:w-20 rounded text-right tabular-nums text-[11px] lg:text-[10px] px-2 lg:px-1 py-1 lg:py-0 border border-border bg-background font-bold text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/50 ${numberInputNoSpinnerClass}`;
-const billingSummaryValueClass = 'text-[10px] font-semibold text-foreground ml-auto tabular-nums min-w-[5.75rem] text-right inline-block';
+const billingSummaryInputClass = `h-10 w-[4.5rem] sm:w-24 lg:h-6 lg:w-20 rounded text-right tabular-nums text-[11px] lg:text-[10px] px-1.5 sm:px-2 lg:px-1 py-1 lg:py-0 border border-border bg-background font-bold text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/50 ${numberInputNoSpinnerClass}`;
+/** Computed ₹ column — right edge of cell for manual tally (ledger-style). */
+const billingSummaryValueClass =
+  'text-[10px] font-semibold text-foreground tabular-nums shrink-0 whitespace-nowrap text-right min-w-[5.25rem]';
+/** Commodity column body cells — minimum width so inputs + ₹ totals are not clipped on tablet. */
+const billingSummaryCommodityTdClass =
+  'min-w-[168px] sm:min-w-[172px] px-2 py-1.5 align-top border-b border-border/30 border-l border-border/50 dark:border-border/70 bg-white text-foreground dark:text-neutral-900 dark:[&_.text-muted-foreground]:text-neutral-500';
+/** Inputs left, calculated ₹ right (same column alignment for Indian manual cross-check). */
+const billingSummaryCellOuterClass =
+  'flex w-full min-w-0 items-center justify-between gap-x-2 gap-y-1';
+const billingSummaryCellInputsClass = 'flex flex-wrap items-center gap-x-1 gap-y-1 min-w-0 flex-1';
 const billingLoginImage = '/login-bg.webp';
 
 /** Commodity line: computed fields (not inputs). Muted + dashed border + not-allowed cursor so they read as read-only. */
@@ -122,6 +149,8 @@ interface BillEntry {
   vehicleTotalQty?: number;
   /** Total bags for this seller on the vehicle (all lots of that seller). */
   sellerVehicleQty?: number;
+  vehicleMark?: string;
+  sellerMark?: string;
   presetApplied: number;
   isSelfSale: boolean;
   /** Token advance collected at auction stage for this bid (₹). */
@@ -134,6 +163,12 @@ function getBidSelectionKey(entry: Pick<BillEntry, 'bidNumber' | 'lotId'>): stri
 
 function normalizeLotNameKey(name: string): string {
   return (name || '').trim().toLowerCase();
+}
+
+/** Buyer headline when name optional (temp/scribble): prefer trimmed name, else mark. */
+function billingBuyerDisplayLine(b: { buyerName?: string; buyerMark?: string }): string {
+  const name = (b.buyerName ?? '').trim();
+  return name || (b.buyerMark ?? '').trim();
 }
 
 /**
@@ -211,8 +246,12 @@ interface CommodityGroup {
   userFeePercent: number;
   coolieRate: number; // Per-commodity coolie rate
   coolieAmount: number; // Per-commodity coolie amount (rate * qty)
+  /** Persisted bag count for coolie; when unset, qty = sum(line quantities). */
+  coolieChargeQty?: number;
   weighmanChargeRate: number; // Per-commodity weighman charge rate
   weighmanChargeAmount: number; // Per-commodity weighman charge amount (rate * qty)
+  /** Persisted bag count for weighman; when unset, qty = sum(line quantities). */
+  weighmanChargeQty?: number;
   discount: number; // Per-commodity discount amount or percentage
   discountType: 'PERCENT' | 'AMOUNT'; // Per-commodity discount type
   manualRoundOff: number; // Per-commodity manual round off
@@ -221,6 +260,26 @@ interface CommodityGroup {
   commissionAmount: number;
   userFeeAmount: number;
   totalCharges: number;
+}
+
+const MAX_COOLIE_WEIGHMAN_CHARGE_QTY = 1_000_000;
+
+function sumGroupItemQuantity(g: Pick<CommodityGroup, 'items'>): number {
+  return g.items.reduce((s, i) => s + (Number(i.quantity) || 0), 0);
+}
+
+function effectiveCoolieChargeQty(g: CommodityGroup): number {
+  if (g.coolieChargeQty != null && Number.isFinite(g.coolieChargeQty)) {
+    return Math.max(0, Math.round(g.coolieChargeQty));
+  }
+  return sumGroupItemQuantity(g);
+}
+
+function effectiveWeighmanChargeQty(g: CommodityGroup): number {
+  if (g.weighmanChargeQty != null && Number.isFinite(g.weighmanChargeQty)) {
+    return Math.max(0, Math.round(g.weighmanChargeQty));
+  }
+  return sumGroupItemQuantity(g);
 }
 
 interface BillLineItem {
@@ -236,13 +295,15 @@ interface BillLineItem {
   vehicleTotalQty?: number;
   /** Total bags for this seller on the vehicle (all lots of that seller). */
   sellerVehicleQty?: number;
+  vehicleMark?: string;
+  sellerMark?: string;
   sellerName: string;
   quantity: number;
   weight: number;
   baseRate: number; // B = Auction bid
   presetApplied: number; // P = Preset
   brokerage: number; // BRK
-  otherCharges: number; // Other (from preset or manual)
+  otherCharges: number; // Buyer dynamic other charges only (not preset)
   sellerOtherCharges: number; // Other (dynamic, appliesTo=SELLER) - read-only for settlement deductions
   newRate: number; // REQ-BIL-002: NR = B + P + BRK + Other
   amount: number;
@@ -256,6 +317,8 @@ interface BillData {
   buyerName: string;
   buyerMark: string;
   buyerContactId: string | null;
+  /** True when bill buyer is mark-only (scribble/temp) until a contact is linked. Client-only unless API adds field. */
+  buyerIsTemporary?: boolean;
   buyerPhone: string;
   buyerAddress: string;
   buyerAsBroker: boolean;
@@ -302,7 +365,7 @@ function roundBillMoneyValues(b: BillData): BillData {
       quantity: roundMoney2(Number(it.quantity) || 0),
       weight: roundMoney2(Number(it.weight) || 0),
       baseRate: roundMoney2(Number(it.baseRate) || 0),
-      presetApplied: roundMoney2(Number(it.presetApplied) || 0),
+      presetApplied: roundMoney2(Number(it.presetApplied ?? 0)),
       brokerage: roundMoney2(Number(it.brokerage) || 0),
       otherCharges: roundMoney2(Number(it.otherCharges) || 0),
       sellerOtherCharges: roundMoney2(Number(it.sellerOtherCharges) || 0),
@@ -322,8 +385,16 @@ function roundBillMoneyValues(b: BillData): BillData {
       userFeePercent: roundMoney2(Number(g.userFeePercent) || 0),
       coolieRate: roundMoney2(Number(g.coolieRate) || 0),
       coolieAmount: roundMoney2(Number(g.coolieAmount) || 0),
+      coolieChargeQty:
+        g.coolieChargeQty != null && Number.isFinite(Number(g.coolieChargeQty))
+          ? Math.max(0, Math.round(Number(g.coolieChargeQty)))
+          : undefined,
       weighmanChargeRate: roundMoney2(Number(g.weighmanChargeRate) || 0),
       weighmanChargeAmount: roundMoney2(Number(g.weighmanChargeAmount) || 0),
+      weighmanChargeQty:
+        g.weighmanChargeQty != null && Number.isFinite(Number(g.weighmanChargeQty))
+          ? Math.max(0, Math.round(Number(g.weighmanChargeQty)))
+          : undefined,
       discount: roundMoney2(Number(g.discount) || 0),
       manualRoundOff: roundMoney2(Number(g.manualRoundOff) || 0),
       subtotal: roundMoney2(Number(g.subtotal) || 0),
@@ -346,14 +417,30 @@ function roundBillMoneyValues(b: BillData): BillData {
   };
 }
 
-/** Lot identifier for billing rows: Vehicle QTY / Seller QTY / Lot Name - Lot QTY. */
+/** Lot identifier for billing rows (same pattern as Sales Pad / Logistics). */
 function formatLotIdentifierForBillEntry(entry: BillEntry | BillLineItem): string {
-  const lotQty = (entry as any).lotTotalQty ?? (entry as any).quantity ?? 0;
-  const lotName = (entry as any).lotName || String(lotQty || '');
-  // Use auction-lot identifier strictly at lot level (not buyer/vehicle split totals).
-  const vTotal = lotQty;
-  const sTotal = lotQty;
-  return `${vTotal}/${sTotal}/${lotName}-${lotQty}`;
+  const e = entry as any;
+  const lineQty = Number(e.quantity ?? 0) || 0;
+  const rawLt = e.lotTotalQty;
+  const lotQty =
+    rawLt != null && Number.isFinite(Number(rawLt)) && Number(rawLt) > 0 ? Number(rawLt) : lineQty;
+  const lotName = String(e.lotName || lotQty || '');
+  const rawVt = e.vehicleTotalQty;
+  const vTotal =
+    rawVt != null && Number.isFinite(Number(rawVt)) && Number(rawVt) > 0 ? Number(rawVt) : lotQty;
+  const rawSv = e.sellerVehicleQty;
+  const sTotal =
+    rawSv != null && Number.isFinite(Number(rawSv)) && Number(rawSv) > 0 ? Number(rawSv) : lotQty;
+  const vm = String(e.vehicleMark ?? '').trim();
+  const sm = String(e.sellerMark ?? '').trim();
+  return formatAuctionLotIdentifier({
+    vehicleMark: vm,
+    vehicleTotalQty: vTotal,
+    sellerMark: sm,
+    sellerTotalQty: sTotal,
+    lotName,
+    lotQty,
+  });
 }
 
 /** Normalize bill from API: add presetApplied (derived) and gstRate to items/groups. */
@@ -397,8 +484,18 @@ function normalizeBillFromApi(b: any, fullConfigs?: FullCommodityConfigDto[], co
     const preferredTaxMode: 'GST' | 'IGST' | 'NONE' = hasAnyTaxConfigured
       ? (Number(resolvedIgstRate) > 0 ? 'IGST' : 'GST')
       : 'NONE';
+    const coolieChargeQtyRaw = g.coolieChargeQty ?? g.coolie_charge_qty;
+    const weighmanChargeQtyRaw = g.weighmanChargeQty ?? g.weighman_charge_qty;
     return {
     ...g,
+    coolieChargeQty:
+      coolieChargeQtyRaw != null && Number.isFinite(Number(coolieChargeQtyRaw))
+        ? Math.max(0, Math.round(Number(coolieChargeQtyRaw)))
+        : undefined,
+    weighmanChargeQty:
+      weighmanChargeQtyRaw != null && Number.isFinite(Number(weighmanChargeQtyRaw))
+        ? Math.max(0, Math.round(Number(weighmanChargeQtyRaw)))
+        : undefined,
     taxMode: preferredTaxMode,
     gstInputMode: (g.gstInputMode === 'AMOUNT' ? 'AMOUNT' : 'PERCENT'),
     sgstInputMode: (g.sgstInputMode === 'AMOUNT' ? 'AMOUNT' : 'PERCENT'),
@@ -414,8 +511,12 @@ function normalizeBillFromApi(b: any, fullConfigs?: FullCommodityConfigDto[], co
       const brk = Number(item.brokerage) || 0;
       const other = Number(item.otherCharges) || 0;
       const nr = Number(item.newRate) || 0;
-      const preset = Math.max(0, nr - base - brk - other);
-      const presetApplied = item.presetApplied ?? preset;
+      const inferredPreset = roundMoney2(nr - base - brk - other);
+      const rawPreset = item.presetApplied ?? item.preset_applied;
+      const presetApplied =
+        rawPreset != null && Number.isFinite(Number(rawPreset))
+          ? roundMoney2(Number(rawPreset))
+          : inferredPreset;
 
       const divisorUsed = (g.divisor ?? configByCommName.get(g.commodityName)?.divisor ?? 50) > 0
         ? (g.divisor ?? configByCommName.get(g.commodityName)?.divisor ?? 50)
@@ -480,9 +581,11 @@ function normalizeBillFromApi(b: any, fullConfigs?: FullCommodityConfigDto[], co
   }
   const tokenAdvance = sumLineTokenAdvances({ commodityGroups: migratedGroups });
 
+  const rawOutboundVehicle = (b as any).outboundVehicle ?? (b as any).outbound_vehicle ?? '';
   return roundBillMoneyValues({
     ...b,
     buyerContactId: (b as any).buyerContactId ?? null,
+    buyerIsTemporary: Boolean((b as any).buyerIsTemporary),
     buyerPhone: (b as any).buyerPhone ?? '',
     buyerAddress: (b as any).buyerAddress ?? '',
     buyerAsBroker: Boolean((b as any).buyerAsBroker),
@@ -491,6 +594,7 @@ function normalizeBillFromApi(b: any, fullConfigs?: FullCommodityConfigDto[], co
     brokerContactId: (b as any).brokerContactId ?? null,
     brokerPhone: (b as any).brokerPhone ?? '',
     brokerAddress: (b as any).brokerAddress ?? '',
+    outboundVehicle: String(rawOutboundVehicle).toUpperCase(),
     tokenAdvance,
     commodityGroups: migratedGroups,
   } as BillData);
@@ -506,12 +610,18 @@ function validateBill(
   const errors: ValidationErrors = {};
   const warnings: ValidationErrors = {};
 
-  const trimmedName = (b.billingName ?? '').trim();
-  if (!trimmedName) {
-    errors.billingName = 'Billing name is required';
-  } else if (trimmedName.length < 2) {
-    errors.billingName = 'Minimum 2 characters';
-  } else if (trimmedName.length > 150) {
+  const trimmedBilling = (b.billingName ?? '').trim();
+  const tempFallback =
+    b.buyerIsTemporary === true
+      ? `${(b.buyerMark ?? '').trim()}${(b.buyerName ?? '').trim()}`.trim() || (b.buyerMark ?? '').trim()
+      : '';
+  const effectiveBillingName = trimmedBilling || (b.buyerIsTemporary === true ? tempFallback : '');
+  if (!effectiveBillingName) {
+    errors.billingName =
+      b.buyerIsTemporary === true ? 'Mark or billing name is required' : 'Billing name is required';
+  } else if (effectiveBillingName.length < (b.buyerIsTemporary === true ? 1 : 2)) {
+    errors.billingName = b.buyerIsTemporary === true ? 'Mark is required' : 'Minimum 2 characters';
+  } else if (effectiveBillingName.length > 150) {
     errors.billingName = 'Maximum 150 characters';
   }
 
@@ -538,15 +648,29 @@ function validateBill(
     errors.globalOtherCharges = 'Cannot exceed ₹1,00,000';
   }
 
-  // Validate per-commodity coolie charges
+  // Validate per-commodity coolie / weighman charges and optional qty overrides
   b.commodityGroups.forEach((g, gi) => {
+    const ccq = g.coolieChargeQty;
+    if (
+      ccq != null
+      && (!Number.isFinite(ccq) || ccq < 0 || ccq > MAX_COOLIE_WEIGHMAN_CHARGE_QTY)
+    ) {
+      errors[`coolieQty-${gi}`] = `Quantity must be 0–${MAX_COOLIE_WEIGHMAN_CHARGE_QTY.toLocaleString('en-IN')}`;
+    }
+    const wcq = g.weighmanChargeQty;
+    if (
+      wcq != null
+      && (!Number.isFinite(wcq) || wcq < 0 || wcq > MAX_COOLIE_WEIGHMAN_CHARGE_QTY)
+    ) {
+      errors[`weighmanQty-${gi}`] = `Quantity must be 0–${MAX_COOLIE_WEIGHMAN_CHARGE_QTY.toLocaleString('en-IN')}`;
+    }
     if (!Number.isFinite(g.coolieAmount) || g.coolieAmount < 0) {
-      errors[`coolie-${gi}`] = 'Must be a positive number';
+      errors[`coolie-${gi}`] = 'Must be zero or positive';
     } else if (g.coolieAmount > 100000) {
       errors[`coolie-${gi}`] = 'Cannot exceed ₹1,00,000';
     }
     if (!Number.isFinite(g.weighmanChargeAmount) || g.weighmanChargeAmount < 0) {
-      errors[`weighman-${gi}`] = 'Must be a positive number';
+      errors[`weighman-${gi}`] = 'Must be zero or positive';
     } else if (g.weighmanChargeAmount > 100000) {
       errors[`weighman-${gi}`] = 'Cannot exceed ₹1,00,000';
     }
@@ -564,12 +688,27 @@ function validateBill(
     }
   });
 
-  if (!Number.isFinite(b.outboundFreight) || b.outboundFreight < 0) {
+    if (!Number.isFinite(b.outboundFreight) || b.outboundFreight < 0) {
     errors.outboundFreight = 'Must be a positive number';
   } else if (b.outboundFreight > 100000) {
     errors.outboundFreight = 'Cannot exceed ₹1,00,000';
   }
 
+  // Non-blocking: coolie / weighman effective qty differs from total bid line quantity for this group.
+  b.commodityGroups.forEach((g, gi) => {
+    const lineQty = sumGroupItemQuantity(g);
+    const cEff = effectiveCoolieChargeQty(g);
+    const wEff = effectiveWeighmanChargeQty(g);
+    const label = (g.commodityName || '').trim() || `Commodity ${gi + 1}`;
+    if (cEff !== lineQty) {
+      warnings[`chargeQty.coolie.${gi}`] =
+        `${label}: coolie charge qty (${cEff}) does not match bill line qty (${lineQty}).`;
+    }
+    if (wEff !== lineQty) {
+      warnings[`chargeQty.weighman.${gi}`] =
+        `${label}: weighman charge qty (${wEff}) does not match bill line qty (${lineQty}).`;
+    }
+  });
 
   b.commodityGroups.forEach((group, gi) => {
     group.items.forEach((item, ii) => {
@@ -592,6 +731,11 @@ function validateBill(
         errors[`items.${gi}.${ii}.brokerage`] = 'Invalid';
       } else if (item.brokerage > 10000000) {
         errors[`items.${gi}.${ii}.brokerage`] = 'Too large';
+      }
+      if (!Number.isFinite(item.presetApplied)) {
+        errors[`items.${gi}.${ii}.presetApplied`] = 'Invalid';
+      } else if (item.presetApplied < -10000 || item.presetApplied > 10000) {
+        errors[`items.${gi}.${ii}.presetApplied`] = 'Out of range (±₹10,000)';
       }
       if (!Number.isFinite(item.otherCharges) || item.otherCharges < 0) {
         errors[`items.${gi}.${ii}.otherCharges`] = 'Invalid';
@@ -621,6 +765,9 @@ const BillingPage = () => {
 
   // Bill state
   const [bill, setBill] = useState<BillData | null>(null);
+  /** Latest bill for save payload (avoids stale closure if Save runs before input blur/live commit flushes). */
+  const billRef = useRef<BillData | null>(null);
+  billRef.current = bill;
   const [editLocked, setEditLocked] = useState(true);
   const [hasSavedOnce, setHasSavedOnce] = useState(false);
   const [selectedPrintVersion, setSelectedPrintVersion] = useState<'latest' | number>('latest');
@@ -634,6 +781,8 @@ const BillingPage = () => {
   );
   /** Page size used when the bill has no GST on any commodity. Defaults to A5. */
   const [nonGstPrintSize, setNonGstPrintSize] = useState<'A4' | 'A5'>('A5');
+  /** Footer copy labels from print settings (BILLING row); order = print order. */
+  const [billingPrintCopyLabels, setBillingPrintCopyLabels] = useState<string[]>(['ORIGINAL COPY']);
 
   type BillingMainTab = 'create' | 'progress' | 'saved';
   const [billingMainTab, setBillingMainTab] = useState<BillingMainTab>('create');
@@ -643,8 +792,6 @@ const BillingPage = () => {
   const [selectedBuyerFromDropdown, setSelectedBuyerFromDropdown] = useState<BuyerPurchase | null>(null);
   const [showBuyerSuggestions, setShowBuyerSuggestions] = useState(false);
   const buyerSelectRef = useRef<HTMLDivElement | null>(null);
-  const summaryTableScrollRef = useRef<HTMLDivElement | null>(null);
-  const summarySnapTimerRef = useRef<number | null>(null);
   const latestVersionSnapshotRef = useRef<BillData | null>(null);
   const mobileCommodityCarouselRef = useRef<HTMLDivElement | null>(null);
   const mobileLotCarouselRefs = useRef<Record<number, HTMLDivElement | null>>({});
@@ -660,7 +807,7 @@ const BillingPage = () => {
   const [weighingSessions, setWeighingSessions] = useState<any[]>([]);
   const [arrivalDetails, setArrivalDetails] = useState<ArrivalDetail[]>([]);
   const [collapsedCommodityIndexes, setCollapsedCommodityIndexes] = useState<number[]>([]);
-  const SUMMARY_COMMODITY_COL_WIDTH = 150;
+  const SUMMARY_COMMODITY_COL_WIDTH = 168;
 
   useEffect(() => {
     const loadPrintSetting = async () => {
@@ -672,6 +819,7 @@ const BillingPage = () => {
           setBillingPaperWithHeader(gstRow.paper_size_with_header === 'A5' ? 'A5' : 'A4');
           setBillingPaperWithoutHeader(gstRow.paper_size_without_header === 'A5' ? 'A5' : 'A4');
           setBillingIncludeHeader(gstRow.include_header !== false);
+          setBillingPrintCopyLabels(parsePrintCopiesJson(gstRow.print_copies_json ?? null).map((c) => c.label));
         }
         if (nonGstRow?.paper_size_without_header) {
           setNonGstPrintSize(nonGstRow.paper_size_without_header);
@@ -720,32 +868,61 @@ const BillingPage = () => {
     );
   }, [bill]);
 
-  const salesBillPrintHtml = useMemo(() => {
+  /** Show Preset column when any line has a non-zero preset (REQ-BIL-002). */
+  const showPresetColumn = useMemo(() => {
+    if (!bill) return false;
+    return bill.commodityGroups.some(g =>
+      g.items.some(it => roundMoney2(Number(it.presetApplied) || 0) !== 0),
+    );
+  }, [bill]);
+
+  const billingCopyLabelsResolved = useMemo(
+    () => (billingPrintCopyLabels.length > 0 ? billingPrintCopyLabels : ['ORIGINAL COPY']),
+    [billingPrintCopyLabels],
+  );
+
+  const salesBillPreviewPrintHtml = useMemo(() => {
+    if (!billPrintPayload) return '';
+    const previewLabel = billingCopyLabelsResolved[0] || 'ORIGINAL COPY';
+    if (isGstBill) {
+      return generateSalesBillPrintHTML(billPrintPayload, {
+        pageSize: billingEffectivePrintSize,
+        includeHeader: billingIncludeHeader,
+        copyLabel: previewLabel,
+      });
+    }
+    return generateNonGstSalesBillPrintHTML(billPrintPayload, {
+      pageSize: nonGstPrintSize,
+      copyLabel: previewLabel,
+    });
+  }, [
+    billPrintPayload,
+    billingEffectivePrintSize,
+    billingIncludeHeader,
+    nonGstPrintSize,
+    isGstBill,
+    billingCopyLabelsResolved,
+  ]);
+
+  const salesBillPrintJobHtml = useMemo(() => {
     if (!billPrintPayload) return '';
     if (isGstBill) {
-      // GST (or mixed): page size follows default layout (with vs without letterhead) from print settings
-      return generateSalesBillPrintHTML(billPrintPayload, {
+      return generateSalesBillPrintHTMLForCopies(billPrintPayload, billingCopyLabelsResolved, {
         pageSize: billingEffectivePrintSize,
         includeHeader: billingIncludeHeader,
       });
     }
-    // Fully Non-GST: always no header; page size from BILLING_NON_GST print setting
-    return generateNonGstSalesBillPrintHTML(billPrintPayload, {
+    return generateNonGstSalesBillPrintHTMLForCopies(billPrintPayload, billingCopyLabelsResolved, {
       pageSize: nonGstPrintSize,
     });
-  }, [billPrintPayload, billingEffectivePrintSize, billingIncludeHeader, nonGstPrintSize, isGstBill]);
-
-  const handleSummaryTableScroll = useCallback(() => {
-    const el = summaryTableScrollRef.current;
-    if (!el) return;
-    if (summarySnapTimerRef.current != null) {
-      window.clearTimeout(summarySnapTimerRef.current);
-    }
-    summarySnapTimerRef.current = window.setTimeout(() => {
-      const snappedLeft = Math.round(el.scrollLeft / SUMMARY_COMMODITY_COL_WIDTH) * SUMMARY_COMMODITY_COL_WIDTH;
-      el.scrollTo({ left: snappedLeft, behavior: 'smooth' });
-    }, 90);
-  }, []);
+  }, [
+    billPrintPayload,
+    billingEffectivePrintSize,
+    billingIncludeHeader,
+    nonGstPrintSize,
+    isGstBill,
+    billingCopyLabelsResolved,
+  ]);
 
   const toggleCommodityCollapse = useCallback((idx: number) => {
     setCollapsedCommodityIndexes(prev =>
@@ -839,7 +1016,7 @@ const BillingPage = () => {
   const [contactErrors, setContactErrors] = useState<Record<string, string>>({});
   const [contactsRegistry, setContactsRegistry] = useState<Contact[]>([]);
   const [restorePendingPhone, setRestorePendingPhone] = useState<string | null>(null);
-  const [replaceTarget, setReplaceTarget] = useState<'BUYER' | 'BROKER'>('BUYER');
+  const [replaceTarget, setReplaceTarget] = useState<'BUYER' | 'BROKER' | 'TEMP_BUYER'>('BUYER');
   const [replaceMarkInput, setReplaceMarkInput] = useState('');
   const [replaceSearchResults, setReplaceSearchResults] = useState<Contact[]>([]);
   const [replaceSearchLoading, setReplaceSearchLoading] = useState(false);
@@ -859,7 +1036,8 @@ const BillingPage = () => {
   const [addBidRemainingQty, setAddBidRemainingQty] = useState<number>(0);
   const [addBidQty, setAddBidQty] = useState('');
   const [addBidBaseRate, setAddBidBaseRate] = useState('');
-  const [addBidExtraAmount, setAddBidExtraAmount] = useState('0');
+  /** Signed preset margin (₹) — maps to auction `preset_applied` / `preset_margin`, not `extra_rate`. */
+  const [addBidPresetMargin, setAddBidPresetMargin] = useState('0');
   const [addBidTokenAdvance, setAddBidTokenAdvance] = useState('0');
   const [addBidSaving, setAddBidSaving] = useState(false);
   /** Cached session for the selected lot (auction parity: merge, lot increase). */
@@ -893,12 +1071,6 @@ const BillingPage = () => {
   useEffect(() => {
     commodityApi.list().then(setCommodities);
     commodityApi.getAllFullConfigs().then(setFullConfigs);
-  }, []);
-
-  useEffect(() => () => {
-    if (summarySnapTimerRef.current != null) {
-      window.clearTimeout(summarySnapTimerRef.current);
-    }
   }, []);
 
   useEffect(() => {
@@ -976,7 +1148,14 @@ const BillingPage = () => {
     const lotName = lot.lot_name || String(lotQty);
     const vTotal = Number(lot.vehicle_total_qty ?? lotQty) || lotQty;
     const sTotal = Number(lot.seller_total_qty ?? lotQty) || lotQty;
-    return `${vTotal}/${sTotal}/${lotName}-${lotQty}`;
+    return formatAuctionLotIdentifier({
+      vehicleMark: lot.vehicle_mark,
+      vehicleTotalQty: vTotal,
+      sellerMark: lot.seller_mark,
+      sellerTotalQty: sTotal,
+      lotName,
+      lotQty,
+    });
   }, []);
 
   const filteredAddBidLots = useMemo(() => {
@@ -1221,6 +1400,11 @@ const BillingPage = () => {
   };
 
   useEffect(() => {
+    if (replaceTarget === 'TEMP_BUYER') {
+      setReplaceSearchResults([]);
+      setReplaceSearchLoading(false);
+      return;
+    }
     const q = replaceMarkInput.trim();
     const selectedKey = (replaceSelectedContact?.mark || replaceSelectedContact?.name || '').trim().toUpperCase();
     if (replaceSelectedContact && selectedKey && selectedKey === q.toUpperCase()) {
@@ -1253,7 +1437,7 @@ const BillingPage = () => {
       active = false;
       window.clearTimeout(timer);
     };
-  }, [replaceMarkInput, replaceSelectedContact]);
+  }, [replaceMarkInput, replaceSelectedContact, replaceTarget]);
 
   const pickReplacementContact = (contact: Contact) => {
     setReplaceSelectedContact(contact);
@@ -1271,10 +1455,11 @@ const BillingPage = () => {
   const validateReplacementForm = (): boolean => {
     const errs: Record<string, string> = {};
     const trimmedMark = replaceForm.mark.trim().toUpperCase();
-    const trimmedName = replaceForm.name.trim();
     const trimmedPhone = replaceForm.phone.trim();
     if (!trimmedMark) errs.mark = 'Mark is required';
-    if (!trimmedName) errs.name = 'Name is required';
+    else if (replaceTarget === 'TEMP_BUYER' && trimmedMark.length > MAX_MARK_LEN) {
+      errs.mark = `Maximum ${MAX_MARK_LEN} characters`;
+    }
     if (trimmedPhone && !/^[6-9]\d{9}$/.test(trimmedPhone)) errs.phone = 'Enter a valid 10-digit mobile number';
     setReplaceErrors(errs);
     return Object.keys(errs).length === 0;
@@ -1292,7 +1477,7 @@ const BillingPage = () => {
       if (replaceTarget === 'BROKER') {
         return {
           ...prev,
-          brokerName: nextName,
+          brokerName: nextName || nextMark,
           brokerMark: nextMark,
           brokerContactId: contact.contact_id,
           brokerPhone: contact.phone ?? '',
@@ -1300,7 +1485,7 @@ const BillingPage = () => {
           buyerAsBroker: false,
         };
       }
-      return {
+      const buyerNext = {
         ...prev,
         buyerName: nextName,
         buyerMark: nextMark,
@@ -1308,11 +1493,83 @@ const BillingPage = () => {
         buyerPhone: contact.phone ?? '',
         buyerAddress: contact.address ?? '',
         billingName: nextName,
+        buyerIsTemporary: false,
+      };
+      if (!buyerNext.buyerAsBroker) return buyerNext;
+      return {
+        ...buyerNext,
+        brokerName: billingBuyerDisplayLine(buyerNext) || buyerNext.buyerMark,
+        brokerMark: buyerNext.buyerMark,
+        brokerContactId: buyerNext.buyerContactId,
+        brokerPhone: buyerNext.buyerPhone,
+        brokerAddress: buyerNext.buyerAddress,
       };
     });
   };
 
   const submitReplacement = async () => {
+    if (replaceTarget === 'TEMP_BUYER') {
+      if (!bill) return;
+      if (!validateReplacementForm()) return;
+      const trimmedMark = replaceForm.mark.trim().toUpperCase();
+      const trimmedName = replaceForm.name.trim();
+      const trimmedPhone = replaceForm.phone.trim();
+      const markLower = trimmedMark.toLowerCase();
+      try {
+        const hits = await contactApi.search(trimmedMark);
+        const usedByRegisteredContact = hits.some(
+          c => (c.mark || '').trim().toLowerCase() === markLower,
+        );
+        if (usedByRegisteredContact) {
+          setReplaceErrors({ mark: 'This mark is already used by a registered contact' });
+          return;
+        }
+      } catch {
+        toast.error('Could not verify mark against contacts');
+        return;
+      }
+      const billingEff = trimmedName || trimmedMark;
+      setSelectedBuyer(prev =>
+        prev
+          ? {
+              ...prev,
+              buyerName: trimmedName,
+              buyerMark: trimmedMark,
+              buyerContactId: null,
+            }
+          : prev,
+      );
+      setBill(prev => {
+        if (!prev) return prev;
+        const base = {
+          ...prev,
+          buyerName: trimmedName,
+          buyerMark: trimmedMark,
+          buyerContactId: null,
+          buyerPhone: trimmedPhone,
+          buyerAddress: '',
+          billingName: billingEff,
+          buyerIsTemporary: true,
+        };
+        if (!base.buyerAsBroker) return base;
+        const brokerHeadline = billingBuyerDisplayLine({
+          buyerName: trimmedName,
+          buyerMark: trimmedMark,
+        });
+        return {
+          ...base,
+          brokerName: brokerHeadline || trimmedMark,
+          brokerMark: trimmedMark,
+          brokerContactId: null,
+          brokerPhone: trimmedPhone,
+          brokerAddress: '',
+        };
+      });
+      clearReplacementInline();
+      toast.success('Temp buyer set on this bill. Save the bill to update auction bids.');
+      return;
+    }
+
     const hadExistingSelection = !!replaceSelectedContact;
     let resolved: Contact | null = replaceSelectedContact;
     if (!resolved) {
@@ -1323,7 +1580,7 @@ const BillingPage = () => {
       if (!validateReplacementForm()) return;
       try {
         resolved = await contactApi.create({
-          name: replaceForm.name.trim(),
+          name: replaceForm.name.trim() || replaceForm.mark.trim().toUpperCase(),
           phone: replaceForm.phone.trim(),
           mark: replaceForm.mark.trim().toUpperCase(),
           trader_id: '',
@@ -1358,6 +1615,7 @@ const BillingPage = () => {
         buyerPhone: resolved.phone ?? '',
         buyerAddress: resolved.address ?? '',
         billingName: nextName || bill.billingName,
+        buyerIsTemporary: false,
       };
       void (async () => {
         try {
@@ -1405,6 +1663,8 @@ const BillingPage = () => {
       let sellerName = auction.sellerName || 'Unknown';
       let lotName = auction.lotName || '';
       const commodityName = auction.commodityName || '';
+      let vehicleMark = String(auction.vehicleMark ?? '').trim();
+      let sellerMark = String(auction.sellerMark ?? '').trim();
 
       arrivalDetails.forEach((arr) => {
         (arr.sellers || []).forEach((seller) => {
@@ -1412,6 +1672,8 @@ const BillingPage = () => {
             if (String(lot.id) === String(auction.lotId)) {
               sellerName = seller.sellerName;
               lotName = lot.lotName || lotName;
+              if (!vehicleMark) vehicleMark = String(arr.vehicleMarkAlias ?? '').trim();
+              if (!sellerMark) sellerMark = String(seller.sellerMark ?? '').trim();
             }
           });
         });
@@ -1419,6 +1681,8 @@ const BillingPage = () => {
 
       const vKey = auction.vehicleNumber || '';
       const sKey = `${vKey}||${sellerName || ''}`;
+      const apiVTot = Number(auction.vehicleTotalQty);
+      const apiSTot = Number(auction.sellerTotalQty);
 
       (auction.entries || []).forEach((entry: any) => {
         if (entry.isSelfSale) return;
@@ -1458,9 +1722,13 @@ const BillingPage = () => {
           rate: entry.rate,
           quantity: entry.quantity,
           weight,
-          vehicleTotalQty: vehicleTotals.get(vKey) ?? entry.quantity,
-          sellerVehicleQty: vehicleSellerTotals.get(sKey) ?? entry.quantity,
-          presetApplied: entry.presetApplied || 0,
+          vehicleTotalQty:
+            Number.isFinite(apiVTot) && apiVTot > 0 ? apiVTot : (vehicleTotals.get(vKey) ?? entry.quantity),
+          sellerVehicleQty:
+            Number.isFinite(apiSTot) && apiSTot > 0 ? apiSTot : (vehicleSellerTotals.get(sKey) ?? entry.quantity),
+          vehicleMark: vehicleMark || undefined,
+          sellerMark: sellerMark || undefined,
+          presetApplied: Number(entry.presetApplied ?? 0),
           isSelfSale: Boolean(entry.isSelfSale),
           tokenAdvance,
         });
@@ -1528,6 +1796,12 @@ const BillingPage = () => {
       next.commissionAmount = charges.commissionAmount;
       next.userFeeAmount = charges.userFeeAmount;
       next.totalCharges = charges.totalCharges;
+      const cr = Number(next.coolieRate) || 0;
+      const wr = Number(next.weighmanChargeRate) || 0;
+      const cq = effectiveCoolieChargeQty(next);
+      const wq = effectiveWeighmanChargeQty(next);
+      next.coolieAmount = cr > 0 ? roundMoney2(cr * cq) : 0;
+      next.weighmanChargeAmount = wr > 0 ? roundMoney2(wr * wq) : 0;
       return next;
     });
 
@@ -1578,6 +1852,7 @@ const BillingPage = () => {
       brokerageValue: b.brokerageValue,
       globalOtherCharges: b.globalOtherCharges,
       pendingBalance: b.pendingBalance,
+      buyerIsTemporary: b.buyerIsTemporary,
     });
   }, []);
 
@@ -1775,14 +2050,13 @@ const BillingPage = () => {
 
       const group = commodityMap.get(commName)!;
 
-      // REQ-BIL-002: NR = B + P + BRK + Other Charges
+      // REQ-BIL-002: NR = B + P + BRK + Other (preset and buyer dynamic other charges are separate)
       const brokerage = 0; // default, can be edited
-      const presetApplied = entry.presetApplied ?? 0;
-      // Show preset inside "Other Charges" so UI displays total rate-add in one field.
-      const otherCharges = presetApplied + computeBuyerOtherChargesRateAdd(entry, commName, group.divisor);
+      const presetApplied = roundMoney2(Number(entry.presetApplied ?? 0));
+      const otherCharges = roundMoney2(computeBuyerOtherChargesRateAdd(entry, commName, group.divisor));
       const sellerOtherCharges = computeSellerOtherChargesRateAdd(entry, commName, group.divisor);
       const div = group.divisor > 0 ? group.divisor : 50;
-      const newRate = roundMoney2(entry.rate + brokerage + otherCharges);
+      const newRate = roundMoney2(entry.rate + brokerage + presetApplied + otherCharges);
       const amount = roundMoney2((entry.weight * newRate) / div);
 
       group.items.push({
@@ -1802,6 +2076,8 @@ const BillingPage = () => {
         sellerOtherCharges: roundMoney2(sellerOtherCharges),
         vehicleTotalQty: (entry as any).vehicleTotalQty,
         sellerVehicleQty: (entry as any).sellerVehicleQty,
+        vehicleMark: (entry as any).vehicleMark,
+        sellerMark: (entry as any).sellerMark,
         newRate,
         amount,
         tokenAdvance: roundMoney2(Number(entry.tokenAdvance) || 0),
@@ -1836,6 +2112,7 @@ const BillingPage = () => {
       buyerName: buyer.buyerName,
       buyerMark: buyer.buyerMark,
       buyerContactId: buyer.buyerContactId ?? null,
+      buyerIsTemporary: false,
       buyerPhone: '',
       buyerAddress: '',
       buyerAsBroker: false,
@@ -2047,7 +2324,7 @@ const BillingPage = () => {
     setAddBidDuplicateDialog(null);
     setAddBidQty('');
     setAddBidBaseRate('');
-    setAddBidExtraAmount('0');
+    setAddBidPresetMargin('0');
     setAddBidTokenAdvance('0');
   }, []);
 
@@ -2166,7 +2443,9 @@ const BillingPage = () => {
         weight: 0,
         vehicleTotalQty: addBidSelectedLot.vehicle_total_qty ?? matchedAuction.quantity ?? 0,
         sellerVehicleQty: addBidSelectedLot.seller_total_qty ?? matchedAuction.quantity ?? 0,
-        presetApplied: Number(matchedAuction.preset_margin) || 0,
+        vehicleMark: String(addBidSelectedLot.vehicle_mark ?? '').trim() || undefined,
+        sellerMark: String(addBidSelectedLot.seller_mark ?? '').trim() || undefined,
+        presetApplied: Number(matchedAuction.preset_margin ?? 0),
         isSelfSale: !!matchedAuction.is_self_sale,
         tokenAdvance: Number(matchedAuction.token_advance) || 0,
       };
@@ -2213,9 +2492,12 @@ const BillingPage = () => {
         toast.error('Open a buyer bill first');
         return;
       }
-      const qty = roundMoney2(Number(addBidQty));
+      const qtyDigits = String(addBidQty).replace(/[^\d]/g, '');
+      const qty = qtyDigits === '' ? NaN : Math.max(1, parseInt(qtyDigits, 10));
       const rate = roundMoney2(Number(addBidBaseRate));
-      const extra = roundMoney2(Number(addBidExtraAmount || 0));
+      const presetRaw = String(addBidPresetMargin ?? '0').replace(/,/g, '').trim();
+      const presetMargin =
+        presetRaw === '' || presetRaw === '-' ? 0 : roundMoney2(Number(presetRaw));
       const tokenAdvance = roundMoney2(Number(addBidTokenAdvance || 0));
       if (!Number.isFinite(qty) || qty <= 0) {
         toast.error('Enter valid bid quantity');
@@ -2225,8 +2507,8 @@ const BillingPage = () => {
         toast.error('Enter valid base rate');
         return;
       }
-      if (!Number.isFinite(extra) || !Number.isFinite(tokenAdvance)) {
-        toast.error('Enter valid extra/token values');
+      if (!Number.isFinite(presetMargin) || !Number.isFinite(tokenAdvance)) {
+        toast.error('Enter valid preset margin and token values');
         return;
       }
 
@@ -2242,10 +2524,10 @@ const BillingPage = () => {
         buyer_mark: (bill.buyerMark || '').trim(),
         rate,
         quantity: qty,
-        extra_rate: extra,
+        extra_rate: 0,
         token_advance: tokenAdvance,
-        preset_applied: 0,
-        preset_type: 'PROFIT',
+        preset_applied: presetMargin,
+        preset_type: presetMargin < 0 ? 'LOSS' : 'PROFIT',
         is_scribble: false,
         is_self_sale: false,
         allow_lot_increase: allow,
@@ -2276,7 +2558,7 @@ const BillingPage = () => {
     },
     [
       addBidBaseRate,
-      addBidExtraAmount,
+      addBidPresetMargin,
       addBidQty,
       addBidRetryAllowIncrease,
       addBidSelectedLot,
@@ -2303,10 +2585,10 @@ const BillingPage = () => {
         toast.error('Lot session not loaded — re-select the lot');
         return;
       }
-      const qty = Number(addBidQty);
+      const qty = Math.max(0, parseInt(String(addBidQty).replace(/[^\d]/g, '') || '0', 10));
       const rate = Number(addBidBaseRate);
       if (!Number.isFinite(qty) || qty <= 0) {
-        toast.error('Enter valid bid quantity');
+        toast.error('Enter a whole-number bid quantity (bags)');
         return;
       }
       if (!Number.isFinite(rate) || rate <= 0) {
@@ -2460,7 +2742,7 @@ const BillingPage = () => {
   const updateLineItem = (
     commIdx: number,
     itemIdx: number,
-    field: 'quantity' | 'weight' | 'baseRate' | 'brokerage' | 'otherCharges' | 'tokenAdvance',
+    field: 'quantity' | 'weight' | 'baseRate' | 'brokerage' | 'otherCharges' | 'presetApplied' | 'tokenAdvance',
     value: number,
   ) => {
     if (!bill) return;
@@ -2481,7 +2763,7 @@ const BillingPage = () => {
     const item = { ...group.items[itemIdx] };
     (item as any)[field] = v;
     const preset = (item as { presetApplied?: number }).presetApplied ?? 0;
-    item.newRate = roundMoney2(item.baseRate + item.brokerage + item.otherCharges);
+    item.newRate = roundMoney2(item.baseRate + preset + item.brokerage + item.otherCharges);
     const divisorUsed = group.divisor > 0 ? group.divisor : 50;
     item.amount = roundMoney2((item.weight * item.newRate) / divisorUsed);
 
@@ -2559,10 +2841,12 @@ const BillingPage = () => {
     setPendingDeleteTarget({ commIdx, itemIdx });
   };
 
-  // Apply global brokerage/charges to all items
-  const applyGlobalCharges = () => {
-    if (!bill) return;
-    const updated = { ...bill };
+  /**
+   * Push bill-level brokerage / global other charges onto every line item and refresh group subtotals.
+   * Used by the Apply button and by live edits so New Rate / Amount update immediately.
+   */
+  const applyGlobalChargesToBillState = (root: BillData): BillData => {
+    const updated = { ...root };
     updated.commodityGroups = updated.commodityGroups.map(group => {
       const commodity = commodities.find((c: any) => c.commodity_name === group.commodityName);
       const fullCfg = commodity
@@ -2571,15 +2855,15 @@ const BillingPage = () => {
       const dynCharges = fullCfg?.dynamicCharges ?? [];
       const items = group.items.map(item => {
         const preset = item.presetApplied ?? 0;
-        const brk = bill.brokerageType === 'PERCENT'
-          ? percentOfAmount(item.baseRate + preset, bill.brokerageValue)
-          : roundMoney2(bill.brokerageValue);
-        const globalOther = roundMoney2(bill.globalOtherCharges);
+        const brk = root.brokerageType === 'PERCENT'
+          ? percentOfAmount(item.baseRate + preset, root.brokerageValue)
+          : roundMoney2(root.brokerageValue);
+        const globalOther = roundMoney2(root.globalOtherCharges);
         const newItem = {
           ...item,
           brokerage: brk,
           otherCharges: globalOther,
-          newRate: roundMoney2(item.baseRate + brk + globalOther),
+          newRate: roundMoney2(item.baseRate + preset + brk + globalOther),
           amount: 0,
         };
         newItem.amount = roundMoney2(
@@ -2634,7 +2918,12 @@ const BillingPage = () => {
         ),
       };
     });
-    setBill(recalcGrandTotal(updated));
+    return updated;
+  };
+
+  const applyGlobalCharges = () => {
+    if (!bill) return;
+    setBill(recalcGrandTotal(applyGlobalChargesToBillState(bill)));
     toast.success('Global charges applied to all line items');
   };
 
@@ -2651,8 +2940,14 @@ const BillingPage = () => {
       }
       return null;
     }
+    /** Backend @NotBlank buyerName; temp buyer may leave display name empty — mirror mark / billing name. */
+    const buyerNameForApi =
+      billingBuyerDisplayLine(bill)
+      || (bill.billingName ?? '').trim()
+      || (bill.buyerMark ?? '').trim()
+      || '—';
     const payload = {
-      buyerName: bill.buyerName,
+      buyerName: buyerNameForApi,
       buyerMark: bill.buyerMark,
       buyerContactId: bill.buyerContactId,
       buyerPhone: bill.buyerPhone ?? '',
@@ -2666,22 +2961,28 @@ const BillingPage = () => {
       billingName: bill.billingName,
       billDate: typeof bill.billDate === 'string' ? bill.billDate : new Date(bill.billDate).toISOString(),
       // Keep all persisted commodity-group values; only remove frontend-only helper fields.
-      commodityGroups: bill.commodityGroups.map(({ divisor: _divisor, taxMode: _taxMode, ...g }: any) => ({
-        ...g,
-        ...(g.taxMode === 'IGST'
-          ? { gstRate: 0, sgstRate: 0, cgstRate: 0, igstRate: Number(g.igstRate) || 0 }
-          : { gstRate: Number(g.gstRate) || 0, sgstRate: Number(g.sgstRate) || 0, cgstRate: Number(g.cgstRate) || 0, igstRate: 0 }),
-        items: (g.items ?? []).map((it: any) => {
-          const {
-            sellerOtherCharges: _soc,
-            lotTotalQty: _ltq,
-            vehicleTotalQty: _vtq,
-            sellerVehicleQty: _svq,
-            ...restIt
-          } = it;
-          return restIt;
-        }),
-      })),
+      commodityGroups: bill.commodityGroups.map(({ divisor: _divisor, taxMode: _taxMode, ...g }: any) => {
+        const coolieChargeQty =
+          g.coolieChargeQty != null && Number.isFinite(Number(g.coolieChargeQty))
+            ? Math.max(0, Math.round(Number(g.coolieChargeQty)))
+            : null;
+        const weighmanChargeQty =
+          g.weighmanChargeQty != null && Number.isFinite(Number(g.weighmanChargeQty))
+            ? Math.max(0, Math.round(Number(g.weighmanChargeQty)))
+            : null;
+        return {
+          ...g,
+          ...(g.taxMode === 'IGST'
+            ? { gstRate: 0, sgstRate: 0, cgstRate: 0, igstRate: Number(g.igstRate) || 0 }
+            : { gstRate: Number(g.gstRate) || 0, sgstRate: Number(g.sgstRate) || 0, cgstRate: Number(g.cgstRate) || 0, igstRate: 0 }),
+          coolieChargeQty,
+          weighmanChargeQty,
+          items: (g.items ?? []).map((it: any) => {
+            const { sellerOtherCharges: _soc, ...restIt } = it;
+            return restIt;
+          }),
+        };
+      }),
       outboundFreight: bill.outboundFreight ?? 0,
       outboundVehicle: bill.outboundVehicle ?? '',
       tokenAdvance: sumLineTokenAdvances(bill),
@@ -2774,8 +3075,12 @@ const BillingPage = () => {
     // Assign bill number on save (completed bill), idempotent if already numbered.
     const assigned = await billingApi.assignNumber(result.billId);
     const normalized = recalcGrandTotal(normalizeBillFromApi(assigned, fullConfigs, commodities) as BillData);
-    setBill(normalized);
-    billDirtyBaselineRef.current = serializeBillForDirty(normalized);
+    const withTempFlag: BillData = {
+      ...normalized,
+      buyerIsTemporary: !normalized.buyerContactId && Boolean(bill.buyerIsTemporary),
+    };
+    setBill(withTempFlag);
+    billDirtyBaselineRef.current = serializeBillForDirty(withTempFlag);
     setHasSavedOnce(true);
     toast.success(result.billNumber ? `Bill ${result.billNumber} updated.` : 'Bill saved.');
     void loadSavedBills();
@@ -2813,8 +3118,9 @@ const BillingPage = () => {
     when: isBillingDirty,
     title: 'Save your progress?',
     description: 'You have unsaved changes. Would you like to save your progress before leaving?',
-    continueLabel: 'Save',
+    continueLabel: 'Save to Bill In Progress',
     stayLabel: 'Discard',
+    closeLabel: 'Stay On Page',
     onBeforeContinue: handleBillingPartialSave,
   });
   billingTabConfirmIfDirtyRef.current = confirmIfDirty;
@@ -2951,7 +3257,7 @@ const BillingPage = () => {
   if (showPrint && bill) {
     const activePrintBill: BillData = bill;
     return (
-      <div className="min-h-[100dvh] bg-gradient-to-b from-background via-background to-blue-50/30 dark:to-blue-950/10 pb-28 lg:pb-6">
+      <div className="min-h-[100dvh] bg-background bg-gradient-to-b from-background via-background to-blue-50/30 dark:to-blue-950/10 pb-28 lg:pb-6">
         <UnsavedChangesDialog />
         {!isDesktop ? (
           <div className="bg-gradient-to-br from-indigo-400 via-blue-500 to-cyan-500 pt-[max(1.5rem,env(safe-area-inset-top))] pb-5 px-4 rounded-b-[2rem]">
@@ -2986,8 +3292,14 @@ const BillingPage = () => {
           <iframe
             title="GST sales bill print preview"
             className="w-full min-h-[72vh] border border-border rounded-xl bg-white shadow-lg"
-            srcDoc={salesBillPrintHtml}
+            srcDoc={salesBillPreviewPrintHtml}
           />
+          <p className="text-xs text-muted-foreground mt-2 text-center">
+            Preview shows first copy ({billingCopyLabelsResolved[0] || 'ORIGINAL COPY'})
+            {billingCopyLabelsResolved.length > 1
+              ? ` · Print job includes: ${billingCopyLabelsResolved.join(', ')}`
+              : ''}
+          </p>
 
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-end gap-3 mt-4">
             <div className="flex gap-3 w-full sm:w-auto">
@@ -3005,14 +3317,7 @@ const BillingPage = () => {
                   } catch {
                     // backend optional
                   }
-                  const printHtml = isGstBill
-                    ? generateSalesBillPrintHTML(billPrintPayload!, {
-                        pageSize: billingEffectivePrintSize,
-                        includeHeader: billingIncludeHeader,
-                      })
-                    : generateNonGstSalesBillPrintHTML(billPrintPayload!, {
-                        pageSize: nonGstPrintSize,
-                      });
+                  const printHtml = salesBillPrintJobHtml;
                   const ok = await directPrint(printHtml, { mode: "system" });
                   ok ? toast.success('Sales Bill sent to printer!') : toast.error('Printer not connected.');
                 }}
@@ -3087,7 +3392,12 @@ const BillingPage = () => {
   const tabHint = (code: string) => (isDesktop ? ` (${code})` : '');
 
   return (
-    <div className={cn("min-h-[100dvh] bg-gradient-to-b from-background via-background to-blue-50/30 dark:to-blue-950/10 pb-28 lg:pb-6", (searchBidDialogOpen || addBidDialogOpen) && "no-hover")}>
+    <div
+      className={cn(
+        'min-h-[100dvh] bg-background bg-gradient-to-b from-background via-background to-blue-50/30 dark:to-blue-950/10 pb-28 lg:pb-6',
+        (searchBidDialogOpen || addBidDialogOpen) && 'no-hover',
+      )}
+    >
       {(searchBidDialogOpen || addBidDialogOpen) && (
         <style dangerouslySetInnerHTML={{
           __html: `
@@ -3161,7 +3471,7 @@ const BillingPage = () => {
                 <span>Item</span>
                 <span>Quantity</span>
                 <span>Base Rate</span>
-                <span>Extra Rate</span>
+                <span>Preset</span>
               </div>
               {searchBidVisibleEntries.map(entry => {
                 const checked = searchBidSelectedKeys.includes(getBidSelectionKey(entry));
@@ -3188,7 +3498,7 @@ const BillingPage = () => {
                       </div>
                       <p className="text-xs">{entry.quantity}</p>
                       <p className="text-xs">{Number(entry.rate || 0)}</p>
-                      <p className="text-xs">{Number(entry.presetApplied || 0)}</p>
+                      <p className="text-xs">{formatBillingInr(Number(entry.presetApplied ?? 0))}</p>
                     </div>
                   </button>
                 );
@@ -3313,12 +3623,12 @@ const BillingPage = () => {
             </div>
             <div className="grid grid-cols-2 gap-2 sm:gap-3 sm:grid-cols-4">
               <div className="space-y-1">
-                <Label className="text-xs">Qty *</Label>
+                <Label className="text-xs">Qty (bags) *</Label>
                 <BillingMoneyInput
                   value={Number(addBidQty) || 0}
                   min={0}
                   integerOnly
-                  onCommit={n => setAddBidQty(n > 0 ? String(roundMoney2(n)) : '')}
+                  onCommit={(n) => setAddBidQty(n > 0 ? String(Math.max(1, Math.round(n))) : '')}
                   placeholder={String(addBidRemainingQty)}
                   className={cn('h-10 sm:h-9 rounded-lg text-sm', numberInputNoSpinnerClass)}
                   title={`Remaining bags: ${addBidRemainingQty}`}
@@ -3334,12 +3644,16 @@ const BillingPage = () => {
                 />
               </div>
               <div className="space-y-1">
-                <Label className="text-xs">Extra</Label>
+                <Label className="text-xs">Preset (margin)</Label>
                 <BillingMoneyInput
-                  value={Number(addBidExtraAmount) || 0}
-                  min={0}
-                  onCommit={n => setAddBidExtraAmount(String(roundMoney2(n)))}
+                  value={(() => {
+                    const t = String(addBidPresetMargin ?? '').replace(/,/g, '').trim();
+                    const n = parseFloat(t);
+                    return Number.isFinite(n) ? n : 0;
+                  })()}
+                  onCommit={(n) => setAddBidPresetMargin(String(roundMoney2(n)))}
                   className={cn('h-10 sm:h-9 rounded-lg text-sm', numberInputNoSpinnerClass)}
+                  title="Signed margin per bag (matches auction preset). Use negative for loss preset."
                 />
               </div>
               <div className="space-y-1">
@@ -3561,11 +3875,11 @@ const BillingPage = () => {
               <div className="flex-shrink-0" />
             </div>
 
-            <div className="flex gap-2 mb-3 overflow-x-auto pb-1 -mx-1 px-1 touch-pan-x" role="tablist" aria-label="Billing views">
+            <div className="flex gap-2 mb-3 overflow-x-auto pb-1 -mx-1 px-1 touch-[pan-x_pan-y] lg:touch-auto" role="tablist" aria-label="Billing views">
               <button type="button" onClick={() => requestBillingMainTab('create')}
                 className={billingToggleTabBtnOnHero(billingMainTab === 'create')}>
                 <Plus className="w-4 h-4 shrink-0 hidden sm:block" />
-                <span>Create New Bill{tabHint('Alt X')}</span>
+                <span>Bill Operations{tabHint('Alt X')}</span>
               </button>
               <button type="button" onClick={() => requestBillingMainTab('progress')}
                 className={billingToggleTabBtnOnHero(billingMainTab === 'progress')}>
@@ -3604,7 +3918,7 @@ const BillingPage = () => {
           <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:gap-4 mb-4">
             <div className="flex items-center gap-2 w-full lg:w-auto overflow-x-auto" role="tablist" aria-label="Billing views">
               <button type="button" onClick={() => requestBillingMainTab('create')} className={billingToggleTabBtn(billingMainTab === 'create')}>
-                <Plus className="w-4 h-4" /> Create New Bill{tabHint('Alt X')}
+                <Plus className="w-4 h-4" /> Bill Operations{tabHint('Alt X')}
               </button>
               <button type="button" onClick={() => requestBillingMainTab('progress')} className={billingToggleTabBtn(billingMainTab === 'progress')}>
                 <Clock className="w-4 h-4" /> Bill In Progress{tabHint('Alt Y')}
@@ -3697,7 +4011,7 @@ const BillingPage = () => {
                 disabled={!bill && !selectedBuyer}
                 className={cn(arrSolidLg, 'sm:self-end')}
               >
-                Change Bill
+                Create New Bill
               </Button>
             </div>
             <p className="text-xs text-muted-foreground leading-relaxed">
@@ -3879,14 +4193,18 @@ const BillingPage = () => {
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 sm:gap-3">
                 <div className="rounded-xl border border-border/40 p-3">
                   <p className="text-[10px] text-primary font-semibold uppercase">Buyer</p>
-                  <p className="text-sm sm:text-base font-bold text-foreground truncate">{bill.buyerName || '—'}</p>
+                  <p className="text-sm sm:text-base font-bold text-foreground truncate">
+                    {(bill.buyerName || '').trim() || bill.buyerMark || '—'}
+                  </p>
                   <p className="text-xs text-muted-foreground">{bill.buyerPhone || 'No phone'}</p>
                   <p className="text-xs text-muted-foreground truncate">{bill.buyerAddress || 'No address'}</p>
                 </div>
                 <div className="rounded-xl border border-border/40 p-3">
                   <p className="text-[10px] text-primary font-semibold uppercase">Broker</p>
                   <p className="text-sm sm:text-base font-bold text-foreground truncate">
-                    {bill.buyerAsBroker ? (bill.buyerName || 'Not selected') : (bill.brokerName || 'Not selected')}
+                    {bill.buyerAsBroker
+                      ? (billingBuyerDisplayLine(bill) || 'Not selected')
+                      : (bill.brokerName || 'Not selected')}
                   </p>
                   <p className="text-xs text-muted-foreground">
                     {bill.buyerAsBroker ? (bill.buyerPhone || 'No phone') : (bill.brokerPhone || 'No phone')}
@@ -3928,12 +4246,12 @@ const BillingPage = () => {
                 <RadioGroup
                   value={replaceTarget}
                   onValueChange={v => {
-                    if (v === 'BUYER' || v === 'BROKER') {
+                    if (v === 'BUYER' || v === 'BROKER' || v === 'TEMP_BUYER') {
                       setReplaceTarget(v);
                       clearReplacementInline();
                     }
                   }}
-                  className="flex flex-row gap-x-3 min-h-9 shrink-0 items-center rounded-xl border border-border/30 bg-muted/20 px-2.5 py-1.5"
+                  className="flex flex-row flex-wrap gap-x-3 gap-y-1 min-h-9 shrink-0 items-center rounded-xl border border-border/30 bg-muted/20 px-2.5 py-1.5"
                   disabled={!bill}
                 >
                   <div className="flex items-center gap-1.5">
@@ -3948,21 +4266,33 @@ const BillingPage = () => {
                       Broker
                     </Label>
                   </div>
+                  <div className="flex items-center gap-1.5">
+                    <RadioGroupItem value="TEMP_BUYER" id="billing-replace-target-temp-buyer" disabled={!bill} />
+                    <Label htmlFor="billing-replace-target-temp-buyer" className="cursor-pointer text-sm font-medium whitespace-nowrap">
+                      Temp Buyer
+                    </Label>
+                  </div>
                 </RadioGroup>
                 <div className="relative min-w-[7rem] flex-1 basis-[10rem]">
                   <Input
                     value={replaceMarkInput}
                     onChange={e => {
-                      const value = e.target.value.toUpperCase();
+                      const raw = e.target.value.toUpperCase();
+                      const value =
+                        replaceTarget === 'TEMP_BUYER' ? raw.slice(0, MAX_MARK_LEN) : raw;
                       setReplaceMarkInput(value);
                       setReplaceSelectedContact(null);
                       setReplaceForm(prev => ({ ...prev, mark: value }));
                     }}
-                    placeholder="Mark"
+                    placeholder={replaceTarget === 'TEMP_BUYER' ? 'Mark (required)' : 'Mark'}
                     className={cn('h-9 rounded-lg bg-muted/10 border-border/30 text-sm font-medium', replaceErrors.mark && 'border-destructive')}
                     disabled={!bill}
                   />
-                  {!replaceSearchLoading && replaceMarkInput.trim() && replaceSearchResults.length > 0 && !searchBidDialogOpen && (
+                  {!replaceSearchLoading
+                    && replaceTarget !== 'TEMP_BUYER'
+                    && replaceMarkInput.trim()
+                    && replaceSearchResults.length > 0
+                    && !searchBidDialogOpen && (
                     <div className={cn("absolute mt-1 max-h-44 w-full min-w-[12rem] overflow-y-auto rounded-xl border border-border/50 bg-background shadow-lg", searchBidDialogOpen ? "z-[20]" : "z-[90]")}>
                       {replaceSearchResults.map(c => (
                         <button
@@ -3987,7 +4317,7 @@ const BillingPage = () => {
                     setReplaceSelectedContact(null);
                     setReplaceForm(prev => ({ ...prev, phone: e.target.value.replace(/\D/g, '').slice(0, 10) }));
                   }}
-                  placeholder="Mobile"
+                  placeholder={replaceTarget === 'TEMP_BUYER' ? 'Mobile (optional)' : 'Mobile'}
                   inputMode="numeric"
                   autoComplete="tel"
                   className={cn('h-9 w-[9.25rem] shrink-0 rounded-lg bg-muted/10 border-border/30 text-sm font-medium sm:w-40', replaceErrors.phone && 'border-destructive')}
@@ -3999,7 +4329,7 @@ const BillingPage = () => {
                     setReplaceSelectedContact(null);
                     setReplaceForm(prev => ({ ...prev, name: e.target.value }));
                   }}
-                  placeholder="Name"
+                  placeholder="Name (optional)"
                   className={cn(
                     'h-9 rounded-lg bg-muted/10 border-border/30 text-sm font-medium min-w-[5.5rem] flex-1 basis-[10rem] max-w-[14rem]',
                     replaceErrors.name && 'border-destructive',
@@ -4021,11 +4351,11 @@ const BillingPage = () => {
                       setBill({
                         ...bill,
                         buyerAsBroker: true,
-                        brokerName: bill.buyerName,
+                        brokerName: billingBuyerDisplayLine(bill) || bill.buyerMark,
                         brokerMark: bill.buyerMark,
                         brokerContactId: bill.buyerContactId,
-                        brokerPhone: bill.buyerPhone,
-                        brokerAddress: bill.buyerAddress,
+                        brokerPhone: bill.buyerPhone ?? '',
+                        brokerAddress: bill.buyerAddress ?? '',
                       });
                     }}
                     disabled={!bill}
@@ -4038,17 +4368,20 @@ const BillingPage = () => {
                   className={cn(arrSolidMd, 'whitespace-nowrap shrink-0')}
                   onClick={() => void submitReplacement()}
                   disabled={
-                    !bill || (!replaceSelectedContact && !canCreateContact)
+                    !bill
+                    || (!replaceSelectedContact && replaceTarget !== 'TEMP_BUYER' && !canCreateContact)
                   }
                   title={
-                    !replaceSelectedContact && !canCreateContact
+                    !replaceSelectedContact && replaceTarget !== 'TEMP_BUYER' && !canCreateContact
                       ? 'You do not have permission to create contacts.'
                       : undefined
                   }
                 >
                   {replaceSelectedContact
                     ? `${replaceTarget === 'BROKER' ? 'Update Broker' : 'Change Buyer'}`
-                    : `Add ${replaceTarget === 'BROKER' ? 'Broker' : 'Buyer'}`}
+                    : replaceTarget === 'TEMP_BUYER'
+                      ? 'Add Temp Buyer'
+                      : `Add ${replaceTarget === 'BROKER' ? 'Broker' : 'Buyer'}`}
                
                 </Button>
                 <Button type="button" variant="outline" className={cn(arrSolidMd, 'shrink-0')} onClick={clearReplacementInline}>
@@ -4065,9 +4398,13 @@ const BillingPage = () => {
                       <p
                         className="text-[10px] font-semibold text-muted-foreground mb-1 uppercase tracking-wide cursor-pointer select-none"
                         onClick={() =>
-                          setBill({
-                            ...bill,
-                            brokerageType: bill.brokerageType === 'PERCENT' ? 'AMOUNT' : 'PERCENT',
+                          setBill(prev => {
+                            if (!prev) return prev;
+                            const next: BillData = {
+                              ...prev,
+                              brokerageType: prev.brokerageType === 'PERCENT' ? 'AMOUNT' : 'PERCENT',
+                            };
+                            return recalcGrandTotal(applyGlobalChargesToBillState(next));
                           })
                         }
                         title={`Click to switch type (${bill.brokerageType === 'PERCENT' ? '%' : '₹'})`}
@@ -4078,7 +4415,10 @@ const BillingPage = () => {
                         value={bill.brokerageValue}
                         min={0}
                         onCommit={n => {
-                          setBill({ ...bill, brokerageValue: n });
+                          setBill(prev => {
+                            if (!prev) return prev;
+                            return recalcGrandTotal(applyGlobalChargesToBillState({ ...prev, brokerageValue: n }));
+                          });
                         }}
                         placeholder={bill.brokerageType === 'PERCENT' ? '% Brokerage' : '₹ Brokerage'}
                         className={cn(
@@ -4103,7 +4443,10 @@ const BillingPage = () => {
                           value={bill.globalOtherCharges}
                           min={0}
                           onCommit={n => {
-                            setBill({ ...bill, globalOtherCharges: n });
+                            setBill(prev => {
+                              if (!prev) return prev;
+                              return recalcGrandTotal(applyGlobalChargesToBillState({ ...prev, globalOtherCharges: n }));
+                            });
                           }}
                           placeholder="Other Charges (₹)"
                           className={cn(
@@ -4208,11 +4551,19 @@ const BillingPage = () => {
                       {!isCollapsed && (
                         <div className="p-3 space-y-2">
                           {/* Table header for commodity items */}
-                          <div className="hidden lg:grid lg:grid-cols-[minmax(140px,1.6fr),repeat(9,minmax(0,1fr)),minmax(44px,0.5fr)] gap-1.5 px-1 pb-1 text-[10px] font-semibold text-muted-foreground uppercase text-center">
+                          <div
+                            className={cn(
+                              'hidden lg:grid gap-1.5 px-1 pb-1 text-[10px] font-semibold text-muted-foreground uppercase text-center',
+                              showPresetColumn
+                                ? 'lg:grid-cols-[minmax(140px,1.6fr),repeat(10,minmax(0,1fr)),minmax(44px,0.5fr)]'
+                                : 'lg:grid-cols-[minmax(140px,1.6fr),repeat(9,minmax(0,1fr)),minmax(44px,0.5fr)]',
+                            )}
+                          >
                             <span>Item</span>
                             <span>Qty</span>
                             <span>Weight (kg)</span>
                             <span>Avg Wt (kg)</span>
+                            {showPresetColumn && <span>Preset (₹)</span>}
                             <span>Other Charges</span>
                             <span>Brokerage (₹)</span>
                             <span>Token (₹)</span>
@@ -4259,7 +4610,12 @@ const BillingPage = () => {
                               return (
                                 <div
                                   key={ii}
-                                  className="relative shrink-0 w-full snap-start grid grid-cols-2 sm:grid-cols-3 gap-x-2 gap-y-1 text-[11px] lg:text-[10px] lg:grid-cols-[minmax(140px,1.6fr),repeat(9,minmax(0,1fr)),minmax(44px,0.5fr)] lg:gap-x-1.5 items-start lg:items-center rounded-xl bg-card border border-border/60 shadow-[0_1px_2px_rgba(15,23,42,0.04)] px-2.5 py-2 lg:px-2 lg:py-1.5 text-center lg:w-auto"
+                                  className={cn(
+                                    'relative shrink-0 w-full snap-start grid grid-cols-2 sm:grid-cols-3 gap-x-2 gap-y-1 text-[11px] lg:text-[10px] lg:gap-x-1.5 items-start lg:items-center rounded-xl bg-card border border-border/60 shadow-[0_1px_2px_rgba(15,23,42,0.04)] px-2.5 py-2 lg:px-2 lg:py-1.5 text-center lg:w-auto',
+                                    showPresetColumn
+                                      ? 'lg:grid-cols-[minmax(140px,1.6fr),repeat(10,minmax(0,1fr)),minmax(44px,0.5fr)]'
+                                      : 'lg:grid-cols-[minmax(140px,1.6fr),repeat(9,minmax(0,1fr)),minmax(44px,0.5fr)]',
+                                  )}
                                 >
                                   <button
                                     type="button"
@@ -4351,6 +4707,35 @@ const BillingPage = () => {
                                     )}
                                   </div>
 
+                                  {showPresetColumn && (
+                                    <div>
+                                      <p className="lg:hidden text-[9px] font-semibold text-muted-foreground uppercase tracking-wide mb-0.5 text-center">
+                                        Preset ₹
+                                      </p>
+                                      <BillingMoneyInput
+                                        value={item.presetApplied ?? 0}
+                                        onCommit={n => {
+                                          updateLineItem(gi, ii, 'presetApplied', n);
+                                        }}
+                                        title={
+                                          item.auctionEntryId != null
+                                            ? 'Preset (editable; may differ from auction)'
+                                            : 'Per-line preset (signed)'
+                                        }
+                                        className={cn(
+                                          'h-10 lg:h-6 text-[11px] lg:text-[10px] text-center px-2 lg:px-1 py-1 lg:py-0 border border-border rounded bg-background font-bold text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/50',
+                                          validationErrors[`items.${gi}.${ii}.presetApplied`] &&
+                                            'ring-1 ring-destructive/40 rounded',
+                                        )}
+                                      />
+                                      {validationErrors[`items.${gi}.${ii}.presetApplied`] && (
+                                        <p className="text-[9px] lg:text-[8px] text-destructive mt-0.5 text-center">
+                                          {validationErrors[`items.${gi}.${ii}.presetApplied`]}
+                                        </p>
+                                      )}
+                                    </div>
+                                  )}
+
                                   <div>
                                     <p className="lg:hidden text-[9px] font-semibold text-muted-foreground uppercase tracking-wide mb-0.5 text-center">Other ₹</p>
                                     <BillingMoneyInput
@@ -4423,7 +4808,7 @@ const BillingPage = () => {
                                         billingCommodityReadOnlyCellClass,
                                         'font-bold text-primary/85 dark:text-primary/75 border-primary/25 bg-primary/[0.07]',
                                       )}
-                                      title="Calculated from bid rate, brokerage, and other charges (not editable)"
+                                      title="Calculated from bid rate, preset, brokerage, and other charges (not editable)"
                                       aria-label={`New rate ₹${formatBillingInr(item.newRate)}, calculated, read-only`}
                                     >
                                       ₹{formatBillingInr(item.newRate)}
@@ -4524,15 +4909,30 @@ const BillingPage = () => {
               <p className="text-[11px] font-bold text-foreground uppercase tracking-wider">
                 Bill Summary
               </p>
-              <div className="flex items-stretch gap-2">
+              {Object.keys(validationWarnings).some(k => k.startsWith('chargeQty.')) && (
                 <div
-                  ref={summaryTableScrollRef}
-                  onScroll={handleSummaryTableScroll}
-                  className="overflow-x-auto rounded-xl border border-border/50 bg-background/40 shadow-sm xl:flex-none xl:w-fit xl:max-w-[78%]"
+                  className="rounded-lg border border-destructive/45 bg-destructive/10 px-3 py-2 text-[11px] text-destructive"
+                  role="status"
+                >
+                  <p className="font-semibold leading-snug">Charge quantity differs from total bill line quantity</p>
+                  <ul className="mt-1.5 list-disc pl-4 space-y-0.5">
+                    {Object.entries(validationWarnings)
+                      .filter(([k]) => k.startsWith('chargeQty.'))
+                      .map(([k, msg]) => (
+                        <li key={k} className="leading-snug">
+                          {msg}
+                        </li>
+                      ))}
+                  </ul>
+                </div>
+              )}
+              <div className="flex flex-col gap-2 xl:flex-row xl:items-stretch xl:gap-2 min-w-0">
+                <div
+                  className="w-full min-w-0 flex-1 overflow-x-auto overflow-y-clip rounded-xl border border-border/50 bg-background/40 shadow-sm overscroll-x-contain xl:flex-none xl:min-w-0 xl:max-w-[min(100%,calc(100%-14rem))]"
                 >
                   <table
-                    className="w-max text-[11px] leading-tight border-separate border-spacing-0"
-                    style={{ minWidth: `${110 + (bill.commodityGroups.length * 150)}px` }}
+                    className="w-max max-w-none text-[11px] leading-tight border-separate border-spacing-0"
+                    style={{ minWidth: `${110 + bill.commodityGroups.length * SUMMARY_COMMODITY_COL_WIDTH}px` }}
                   >
                   <thead>
                     <tr className="bg-[linear-gradient(90deg,#4B7CF3_0%,#5B8CFF_45%,#7B61FF_100%)] shadow-sm">
@@ -4541,7 +4941,7 @@ const BillingPage = () => {
                         <th
                           key={`${g.commodityName}-${gi}`}
                           className={cn(
-                            'lg:sticky lg:top-0 z-20 text-center px-3 py-3 font-extrabold text-white uppercase tracking-widest min-w-[150px] border-b border-white/30 border-l border-white/20 bg-[linear-gradient(90deg,#4B7CF3_0%,#5B8CFF_45%,#7B61FF_100%)] shadow-sm',
+                            'lg:sticky lg:top-0 z-20 text-center px-3 py-3 font-extrabold text-white uppercase tracking-widest min-w-[168px] sm:min-w-[172px] border-b border-white/30 border-l border-white/20 bg-[linear-gradient(90deg,#4B7CF3_0%,#5B8CFF_45%,#7B61FF_100%)] shadow-sm',
                             gi === bill.commodityGroups.length - 1 && 'border-r border-white/20',
                           )}
                         >
@@ -4558,7 +4958,8 @@ const BillingPage = () => {
                         <td
                           key={`gross-${gi}`}
                           className={cn(
-                            'px-2 py-1.5 text-foreground dark:text-neutral-900 font-semibold border-b border-border/30 border-l border-border/50 dark:border-border/70 bg-white',
+                            billingSummaryCommodityTdClass,
+                            'font-semibold text-right tabular-nums',
                             gi === bill.commodityGroups.length - 1 && 'border-r border-border/50 dark:border-border/70',
                           )}
                         >
@@ -4581,30 +4982,32 @@ const BillingPage = () => {
                         <td
                           key={`com-${gi}`}
                           className={cn(
-                            'px-2 py-1.5 border-b border-border/30 border-l border-border/50 dark:border-border/70 bg-white text-foreground dark:text-neutral-900 dark:[&_.text-muted-foreground]:text-neutral-500',
+                            billingSummaryCommodityTdClass,
                             gi === bill.commodityGroups.length - 1 && 'border-r border-border/50 dark:border-border/70',
                           )}
                         >
-                          <div className="flex items-center justify-start gap-1 w-full">
-                            <BillingMoneyInput
-                              value={g.commissionPercent}
-                              min={0}
-                              commitMode="blur"
-                              onCommit={val => {
-                                const v = Math.max(0, val);
-                                const updated = { ...bill };
-                                const cg = { ...updated.commodityGroups[gi] };
-                                cg.commissionPercent = v;
-                                cg.commissionAmount = percentOfAmount(cg.subtotal, cg.commissionPercent);
-                                const gst = gstOnSubtotal(cg.subtotal, effectiveGstPercent(cg));
-                                cg.totalCharges = roundMoney2(cg.commissionAmount + cg.userFeeAmount + gst);
-                                updated.commodityGroups = [...updated.commodityGroups];
-                                updated.commodityGroups[gi] = cg;
-                                setBill(recalcGrandTotal(updated));
-                              }}
-                              className={billingSummaryInputClass}
-                            />
-                            <span className="text-[10px] font-semibold text-muted-foreground">%</span>
+                          <div className={billingSummaryCellOuterClass}>
+                            <div className={billingSummaryCellInputsClass}>
+                              <BillingMoneyInput
+                                value={g.commissionPercent}
+                                min={0}
+                                commitMode="live"
+                                onCommit={val => {
+                                  const v = Math.max(0, val);
+                                  const updated = { ...bill };
+                                  const cg = { ...updated.commodityGroups[gi] };
+                                  cg.commissionPercent = v;
+                                  cg.commissionAmount = percentOfAmount(cg.subtotal, cg.commissionPercent);
+                                  const gst = gstOnSubtotal(cg.subtotal, effectiveGstPercent(cg));
+                                  cg.totalCharges = roundMoney2(cg.commissionAmount + cg.userFeeAmount + gst);
+                                  updated.commodityGroups = [...updated.commodityGroups];
+                                  updated.commodityGroups[gi] = cg;
+                                  setBill(recalcGrandTotal(updated));
+                                }}
+                                className={billingSummaryInputClass}
+                              />
+                              <span className="text-[10px] font-semibold text-muted-foreground">%</span>
+                            </div>
                             <span className={billingSummaryValueClass}>₹{formatBillingInr(g.commissionAmount || 0)}</span>
                           </div>
                         </td>
@@ -4616,30 +5019,32 @@ const BillingPage = () => {
                         <td
                           key={`uf-${gi}`}
                           className={cn(
-                            'px-2 py-1.5 border-b border-border/30 border-l border-border/50 dark:border-border/70 bg-white text-foreground dark:text-neutral-900 dark:[&_.text-muted-foreground]:text-neutral-500',
+                            billingSummaryCommodityTdClass,
                             gi === bill.commodityGroups.length - 1 && 'border-r border-border/50 dark:border-border/70',
                           )}
                         >
-                          <div className="flex items-center justify-start gap-1 w-full">
-                            <BillingMoneyInput
-                              value={g.userFeePercent}
-                              min={0}
-                              commitMode="blur"
-                              onCommit={val => {
-                                const v = Math.max(0, val);
-                                const updated = { ...bill };
-                                const cg = { ...updated.commodityGroups[gi] };
-                                cg.userFeePercent = v;
-                                cg.userFeeAmount = percentOfAmount(cg.subtotal, cg.userFeePercent);
-                                const gst = gstOnSubtotal(cg.subtotal, effectiveGstPercent(cg));
-                                cg.totalCharges = roundMoney2(cg.commissionAmount + cg.userFeeAmount + gst);
-                                updated.commodityGroups = [...updated.commodityGroups];
-                                updated.commodityGroups[gi] = cg;
-                                setBill(recalcGrandTotal(updated));
-                              }}
-                              className={billingSummaryInputClass}
-                            />
-                            <span className="text-[10px] font-semibold text-muted-foreground">%</span>
+                          <div className={billingSummaryCellOuterClass}>
+                            <div className={billingSummaryCellInputsClass}>
+                              <BillingMoneyInput
+                                value={g.userFeePercent}
+                                min={0}
+                                commitMode="live"
+                                onCommit={val => {
+                                  const v = Math.max(0, val);
+                                  const updated = { ...bill };
+                                  const cg = { ...updated.commodityGroups[gi] };
+                                  cg.userFeePercent = v;
+                                  cg.userFeeAmount = percentOfAmount(cg.subtotal, cg.userFeePercent);
+                                  const gst = gstOnSubtotal(cg.subtotal, effectiveGstPercent(cg));
+                                  cg.totalCharges = roundMoney2(cg.commissionAmount + cg.userFeeAmount + gst);
+                                  updated.commodityGroups = [...updated.commodityGroups];
+                                  updated.commodityGroups[gi] = cg;
+                                  setBill(recalcGrandTotal(updated));
+                                }}
+                                className={billingSummaryInputClass}
+                              />
+                              <span className="text-[10px] font-semibold text-muted-foreground">%</span>
+                            </div>
                             <span className={billingSummaryValueClass}>₹{formatBillingInr(g.userFeeAmount || 0)}</span>
                           </div>
                         </td>
@@ -4648,82 +5053,122 @@ const BillingPage = () => {
 
                     <tr className="border-t border-border/30">
                       <td className="sticky left-0 z-20 px-2 py-1.5 text-[10px] font-semibold text-foreground bg-background dark:bg-slate-900 border-r border-border/50 whitespace-normal min-w-[110px] max-w-[110px] w-[110px]">Coolie Charge</td>
-                      {bill.commodityGroups.map((g, gi) => {
-                        const qty = g.items.reduce((s, i) => s + (i.quantity || 0), 0);
-                        return (
+                      {bill.commodityGroups.map((g, gi) => (
                           <td
                             key={`coolie-${gi}`}
                             className={cn(
-                              'px-2 py-1.5 border-b border-border/30 border-l border-border/50 dark:border-border/70 bg-white text-foreground dark:text-neutral-900 dark:[&_.text-muted-foreground]:text-neutral-500',
+                              billingSummaryCommodityTdClass,
                               gi === bill.commodityGroups.length - 1 && 'border-r border-border/50 dark:border-border/70',
                             )}
                           >
-                            <div className="flex items-center justify-start gap-1 w-full">
-                              <BillingMoneyInput
-                                value={g.coolieRate || 0}
-                                min={0}
-                                commitMode="blur"
-                                onCommit={rate => {
-                                  const updated = { ...bill };
-                                  const cg = { ...updated.commodityGroups[gi] };
-                                  cg.coolieRate = rate;
-                                  cg.coolieAmount = rate > 0 && qty > 0 ? roundMoney2(rate * qty) : 0;
-                                  updated.commodityGroups = [...updated.commodityGroups];
-                                  updated.commodityGroups[gi] = cg;
-                                  setBill(recalcGrandTotal(updated));
-                                }}
-                                className={cn(billingSummaryInputClass, validationErrors[`coolie-${gi}`] && 'border-destructive ring-1 ring-destructive/30')}
-                                placeholder="Rate"
-                              />
-                              <span className="text-[10px] font-semibold text-muted-foreground">x</span>
-                              <span className="h-10 lg:h-6 px-2 inline-flex items-center justify-center rounded border border-border bg-background text-[10px] font-bold text-foreground min-w-[2.5rem]">
-                                {formatBillingInr(qty)}
-                              </span>
+                            <div className={billingSummaryCellOuterClass}>
+                              <div className={billingSummaryCellInputsClass}>
+                                <BillingMoneyInput
+                                  value={g.coolieRate || 0}
+                                  min={0}
+                                  commitMode="live"
+                                  onCommit={rate => {
+                                    const updated = { ...bill };
+                                    const cg = { ...updated.commodityGroups[gi] };
+                                    cg.coolieRate = rate;
+                                    updated.commodityGroups = [...updated.commodityGroups];
+                                    updated.commodityGroups[gi] = cg;
+                                    setBill(recalcGrandTotal(updated));
+                                  }}
+                                  className={cn(billingSummaryInputClass, validationErrors[`coolie-${gi}`] && 'border-destructive ring-1 ring-destructive/30')}
+                                  placeholder="Rate"
+                                />
+                                <span className="text-[10px] font-semibold text-muted-foreground">x</span>
+                                <BillingMoneyInput
+                                  value={effectiveCoolieChargeQty(g)}
+                                  min={0}
+                                  integerOnly
+                                  commitMode="live"
+                                  onCommit={qtyVal => {
+                                    const updated = { ...bill };
+                                    const cg = { ...updated.commodityGroups[gi] };
+                                    cg.coolieChargeQty = Math.min(
+                                      MAX_COOLIE_WEIGHMAN_CHARGE_QTY,
+                                      Math.max(0, Math.round(qtyVal)),
+                                    );
+                                    updated.commodityGroups = [...updated.commodityGroups];
+                                    updated.commodityGroups[gi] = cg;
+                                    setBill(recalcGrandTotal(updated));
+                                  }}
+                                  className={cn(
+                                    billingSummaryInputClass,
+                                    (validationErrors[`coolieQty-${gi}`] || validationErrors[`coolie-${gi}`])
+                                      && 'border-destructive ring-1 ring-destructive/30',
+                                    validationWarnings[`chargeQty.coolie.${gi}`]
+                                      && 'ring-1 ring-destructive/50 border-destructive/50',
+                                  )}
+                                  placeholder="Qty"
+                                />
+                              </div>
                               <span className={billingSummaryValueClass}>₹{formatBillingInr(g.coolieAmount || 0)}</span>
                             </div>
                           </td>
-                        );
-                      })}
+                        ))}
                     </tr>
 
                     <tr className="border-t border-border/30">
                       <td className="sticky left-0 z-20 px-2 py-1.5 text-[10px] font-semibold text-foreground bg-background dark:bg-slate-900 border-r border-border/50 whitespace-normal min-w-[110px] max-w-[110px] w-[110px]">Weighman Charge</td>
-                      {bill.commodityGroups.map((g, gi) => {
-                        const qty = g.items.reduce((s, i) => s + (i.quantity || 0), 0);
-                        return (
+                      {bill.commodityGroups.map((g, gi) => (
                           <td
                             key={`weighman-${gi}`}
                             className={cn(
-                              'px-2 py-1.5 border-b border-border/30 border-l border-border/50 dark:border-border/70 bg-white text-foreground dark:text-neutral-900 dark:[&_.text-muted-foreground]:text-neutral-500',
+                              billingSummaryCommodityTdClass,
                               gi === bill.commodityGroups.length - 1 && 'border-r border-border/50 dark:border-border/70',
                             )}
                           >
-                            <div className="flex items-center justify-start gap-1 w-full">
-                              <BillingMoneyInput
-                                value={g.weighmanChargeRate || 0}
-                                min={0}
-                                commitMode="blur"
-                                onCommit={rate => {
-                                  const updated = { ...bill };
-                                  const cg = { ...updated.commodityGroups[gi] };
-                                  cg.weighmanChargeRate = rate;
-                                  cg.weighmanChargeAmount = rate > 0 && qty > 0 ? roundMoney2(rate * qty) : 0;
-                                  updated.commodityGroups = [...updated.commodityGroups];
-                                  updated.commodityGroups[gi] = cg;
-                                  setBill(recalcGrandTotal(updated));
-                                }}
-                                className={cn(billingSummaryInputClass, validationErrors[`weighman-${gi}`] && 'border-destructive ring-1 ring-destructive/30')}
-                                placeholder="Rate"
-                              />
-                              <span className="text-[10px] font-semibold text-muted-foreground">x</span>
-                              <span className="h-10 lg:h-6 px-2 inline-flex items-center justify-center rounded border border-border bg-background text-[10px] font-bold text-foreground min-w-[2.5rem]">
-                                {formatBillingInr(qty)}
-                              </span>
+                            <div className={billingSummaryCellOuterClass}>
+                              <div className={billingSummaryCellInputsClass}>
+                                <BillingMoneyInput
+                                  value={g.weighmanChargeRate || 0}
+                                  min={0}
+                                  commitMode="live"
+                                  onCommit={rate => {
+                                    const updated = { ...bill };
+                                    const cg = { ...updated.commodityGroups[gi] };
+                                    cg.weighmanChargeRate = rate;
+                                    updated.commodityGroups = [...updated.commodityGroups];
+                                    updated.commodityGroups[gi] = cg;
+                                    setBill(recalcGrandTotal(updated));
+                                  }}
+                                  className={cn(billingSummaryInputClass, validationErrors[`weighman-${gi}`] && 'border-destructive ring-1 ring-destructive/30')}
+                                  placeholder="Rate"
+                                />
+                                <span className="text-[10px] font-semibold text-muted-foreground">x</span>
+                                <BillingMoneyInput
+                                  value={effectiveWeighmanChargeQty(g)}
+                                  min={0}
+                                  integerOnly
+                                  commitMode="live"
+                                  onCommit={qtyVal => {
+                                    const updated = { ...bill };
+                                    const cg = { ...updated.commodityGroups[gi] };
+                                    cg.weighmanChargeQty = Math.min(
+                                      MAX_COOLIE_WEIGHMAN_CHARGE_QTY,
+                                      Math.max(0, Math.round(qtyVal)),
+                                    );
+                                    updated.commodityGroups = [...updated.commodityGroups];
+                                    updated.commodityGroups[gi] = cg;
+                                    setBill(recalcGrandTotal(updated));
+                                  }}
+                                  className={cn(
+                                    billingSummaryInputClass,
+                                    (validationErrors[`weighmanQty-${gi}`] || validationErrors[`weighman-${gi}`])
+                                      && 'border-destructive ring-1 ring-destructive/30',
+                                    validationWarnings[`chargeQty.weighman.${gi}`]
+                                      && 'ring-1 ring-destructive/50 border-destructive/50',
+                                  )}
+                                  placeholder="Qty"
+                                />
+                              </div>
                               <span className={billingSummaryValueClass}>₹{formatBillingInr(g.weighmanChargeAmount || 0)}</span>
                             </div>
                           </td>
-                        );
-                      })}
+                        ))}
                     </tr>
 
                     <tr className="border-t border-border/30">
@@ -4738,7 +5183,7 @@ const BillingPage = () => {
                           <td
                             key={`tax-mode-${gi}`}
                             className={cn(
-                              'px-2 py-1.5 border-b border-border/30 border-l border-border/50 dark:border-border/70 bg-white text-foreground dark:text-neutral-900 dark:[&_.text-muted-foreground]:text-neutral-500',
+                              billingSummaryCommodityTdClass,
                               gi === bill.commodityGroups.length - 1 && 'border-r border-border/50 dark:border-border/70',
                             )}
                           >
@@ -4802,55 +5247,57 @@ const BillingPage = () => {
                         <td
                           key={`sgst-${gi}`}
                           className={cn(
-                            'px-2 py-1.5 border-b border-border/30 border-l border-border/50 dark:border-border/70 bg-white text-foreground dark:text-neutral-900 dark:[&_.text-muted-foreground]:text-neutral-500',
+                            billingSummaryCommodityTdClass,
                             gi === bill.commodityGroups.length - 1 && 'border-r border-border/50 dark:border-border/70',
                           )}
                         >
                           {!hasTax || !gstMode ? (
                             <div className="text-[10px] text-muted-foreground font-semibold">—</div>
                           ) : (
-                          <div className="flex flex-wrap items-center gap-1 justify-start w-full">
-                            <Select
-                              value={g.sgstInputMode || 'PERCENT'}
-                              onValueChange={(value: 'PERCENT' | 'AMOUNT') => {
-                                const updated = { ...bill };
-                                const cg = { ...updated.commodityGroups[gi] };
-                                cg.sgstInputMode = value;
-                                updated.commodityGroups = [...updated.commodityGroups];
-                                updated.commodityGroups[gi] = cg;
-                                setBill(recalcGrandTotal(updated));
-                              }}
-                            >
-                              <SelectTrigger className="h-10 w-12 lg:h-6 lg:w-11 rounded text-center text-[10px] px-1 py-1 lg:py-0">
-                                <SelectValue placeholder="%" />
-                              </SelectTrigger>
-                              <SelectContent>
-                                <SelectItem value="PERCENT">%</SelectItem>
-                                <SelectItem value="AMOUNT">₹</SelectItem>
-                              </SelectContent>
-                            </Select>
-                            <BillingMoneyInput
-                              value={g.sgstInputMode === 'AMOUNT'
-                                ? gstOnSubtotal(g.subtotal || 0, g.sgstRate ?? 0)
-                                : g.sgstRate}
-                              min={0}
-                              commitMode="blur"
-                              onCommit={val => {
-                                const v = Math.max(0, val);
-                                const updated = { ...bill };
-                                const cg = { ...updated.commodityGroups[gi] };
-                                cg.sgstRate = (cg.sgstInputMode === 'AMOUNT')
-                                  ? (cg.subtotal > 0 ? roundMoney2((v * 100) / cg.subtotal) : 0)
-                                  : v;
-                                updated.commodityGroups = [...updated.commodityGroups];
-                                updated.commodityGroups[gi] = cg;
-                                setBill(recalcGrandTotal(updated));
-                              }}
-                              className={billingSummaryInputClass}
-                            />
-                            <span className="text-[10px] font-semibold text-muted-foreground">
-                              {g.sgstInputMode === 'AMOUNT' ? '₹' : '%'}
-                            </span>
+                          <div className={billingSummaryCellOuterClass}>
+                            <div className={billingSummaryCellInputsClass}>
+                              <Select
+                                value={g.sgstInputMode || 'PERCENT'}
+                                onValueChange={(value: 'PERCENT' | 'AMOUNT') => {
+                                  const updated = { ...bill };
+                                  const cg = { ...updated.commodityGroups[gi] };
+                                  cg.sgstInputMode = value;
+                                  updated.commodityGroups = [...updated.commodityGroups];
+                                  updated.commodityGroups[gi] = cg;
+                                  setBill(recalcGrandTotal(updated));
+                                }}
+                              >
+                                <SelectTrigger className="h-10 w-12 lg:h-6 lg:w-11 rounded text-center text-[10px] px-1 py-1 lg:py-0">
+                                  <SelectValue placeholder="%" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value="PERCENT">%</SelectItem>
+                                  <SelectItem value="AMOUNT">₹</SelectItem>
+                                </SelectContent>
+                              </Select>
+                              <BillingMoneyInput
+                                value={g.sgstInputMode === 'AMOUNT'
+                                  ? gstOnSubtotal(g.subtotal || 0, g.sgstRate ?? 0)
+                                  : g.sgstRate}
+                                min={0}
+                                commitMode="live"
+                                onCommit={val => {
+                                  const v = Math.max(0, val);
+                                  const updated = { ...bill };
+                                  const cg = { ...updated.commodityGroups[gi] };
+                                  cg.sgstRate = (cg.sgstInputMode === 'AMOUNT')
+                                    ? (cg.subtotal > 0 ? roundMoney2((v * 100) / cg.subtotal) : 0)
+                                    : v;
+                                  updated.commodityGroups = [...updated.commodityGroups];
+                                  updated.commodityGroups[gi] = cg;
+                                  setBill(recalcGrandTotal(updated));
+                                }}
+                                className={billingSummaryInputClass}
+                              />
+                              <span className="text-[10px] font-semibold text-muted-foreground">
+                                {g.sgstInputMode === 'AMOUNT' ? '₹' : '%'}
+                              </span>
+                            </div>
                             <span className={billingSummaryValueClass}>
                               ₹{formatBillingInr(gstOnSubtotal(g.subtotal || 0, g.sgstRate ?? 0))}
                             </span>
@@ -4878,55 +5325,57 @@ const BillingPage = () => {
                         <td
                           key={`cgst-${gi}`}
                           className={cn(
-                            'px-2 py-1.5 border-b border-border/30 border-l border-border/50 dark:border-border/70 bg-white text-foreground dark:text-neutral-900 dark:[&_.text-muted-foreground]:text-neutral-500',
+                            billingSummaryCommodityTdClass,
                             gi === bill.commodityGroups.length - 1 && 'border-r border-border/50 dark:border-border/70',
                           )}
                         >
                           {!hasTax || !gstMode ? (
                             <div className="text-[10px] text-muted-foreground font-semibold">—</div>
                           ) : (
-                          <div className="flex flex-wrap items-center gap-1 justify-start w-full">
-                            <Select
-                              value={g.cgstInputMode || 'PERCENT'}
-                              onValueChange={(value: 'PERCENT' | 'AMOUNT') => {
-                                const updated = { ...bill };
-                                const cg = { ...updated.commodityGroups[gi] };
-                                cg.cgstInputMode = value;
-                                updated.commodityGroups = [...updated.commodityGroups];
-                                updated.commodityGroups[gi] = cg;
-                                setBill(recalcGrandTotal(updated));
-                              }}
-                            >
-                              <SelectTrigger className="h-10 w-12 lg:h-6 lg:w-11 rounded text-center text-[10px] px-1 py-1 lg:py-0">
-                                <SelectValue placeholder="%" />
-                              </SelectTrigger>
-                              <SelectContent>
-                                <SelectItem value="PERCENT">%</SelectItem>
-                                <SelectItem value="AMOUNT">₹</SelectItem>
-                              </SelectContent>
-                            </Select>
-                            <BillingMoneyInput
-                              value={g.cgstInputMode === 'AMOUNT'
-                                ? gstOnSubtotal(g.subtotal || 0, g.cgstRate ?? 0)
-                                : g.cgstRate}
-                              min={0}
-                              commitMode="blur"
-                              onCommit={val => {
-                                const v = Math.max(0, val);
-                                const updated = { ...bill };
-                                const cg = { ...updated.commodityGroups[gi] };
-                                cg.cgstRate = (cg.cgstInputMode === 'AMOUNT')
-                                  ? (cg.subtotal > 0 ? roundMoney2((v * 100) / cg.subtotal) : 0)
-                                  : v;
-                                updated.commodityGroups = [...updated.commodityGroups];
-                                updated.commodityGroups[gi] = cg;
-                                setBill(recalcGrandTotal(updated));
-                              }}
-                              className={billingSummaryInputClass}
-                            />
-                            <span className="text-[10px] font-semibold text-muted-foreground">
-                              {g.cgstInputMode === 'AMOUNT' ? '₹' : '%'}
-                            </span>
+                          <div className={billingSummaryCellOuterClass}>
+                            <div className={billingSummaryCellInputsClass}>
+                              <Select
+                                value={g.cgstInputMode || 'PERCENT'}
+                                onValueChange={(value: 'PERCENT' | 'AMOUNT') => {
+                                  const updated = { ...bill };
+                                  const cg = { ...updated.commodityGroups[gi] };
+                                  cg.cgstInputMode = value;
+                                  updated.commodityGroups = [...updated.commodityGroups];
+                                  updated.commodityGroups[gi] = cg;
+                                  setBill(recalcGrandTotal(updated));
+                                }}
+                              >
+                                <SelectTrigger className="h-10 w-12 lg:h-6 lg:w-11 rounded text-center text-[10px] px-1 py-1 lg:py-0">
+                                  <SelectValue placeholder="%" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value="PERCENT">%</SelectItem>
+                                  <SelectItem value="AMOUNT">₹</SelectItem>
+                                </SelectContent>
+                              </Select>
+                              <BillingMoneyInput
+                                value={g.cgstInputMode === 'AMOUNT'
+                                  ? gstOnSubtotal(g.subtotal || 0, g.cgstRate ?? 0)
+                                  : g.cgstRate}
+                                min={0}
+                                commitMode="live"
+                                onCommit={val => {
+                                  const v = Math.max(0, val);
+                                  const updated = { ...bill };
+                                  const cg = { ...updated.commodityGroups[gi] };
+                                  cg.cgstRate = (cg.cgstInputMode === 'AMOUNT')
+                                    ? (cg.subtotal > 0 ? roundMoney2((v * 100) / cg.subtotal) : 0)
+                                    : v;
+                                  updated.commodityGroups = [...updated.commodityGroups];
+                                  updated.commodityGroups[gi] = cg;
+                                  setBill(recalcGrandTotal(updated));
+                                }}
+                                className={billingSummaryInputClass}
+                              />
+                              <span className="text-[10px] font-semibold text-muted-foreground">
+                                {g.cgstInputMode === 'AMOUNT' ? '₹' : '%'}
+                              </span>
+                            </div>
                             <span className={billingSummaryValueClass}>
                               ₹{formatBillingInr(gstOnSubtotal(g.subtotal || 0, g.cgstRate ?? 0))}
                             </span>
@@ -4954,55 +5403,57 @@ const BillingPage = () => {
                         <td
                           key={`igst-${gi}`}
                           className={cn(
-                            'px-2 py-1.5 border-b border-border/30 border-l border-border/50 dark:border-border/70 bg-white text-foreground dark:text-neutral-900 dark:[&_.text-muted-foreground]:text-neutral-500',
+                            billingSummaryCommodityTdClass,
                             gi === bill.commodityGroups.length - 1 && 'border-r border-border/50 dark:border-border/70',
                           )}
                         >
                           {!hasTax || !igstMode ? (
                             <div className="text-[10px] text-muted-foreground font-semibold">—</div>
                           ) : (
-                          <div className="flex flex-wrap items-center gap-1 justify-start w-full">
-                            <Select
-                              value={g.igstInputMode || 'PERCENT'}
-                              onValueChange={(value: 'PERCENT' | 'AMOUNT') => {
-                                const updated = { ...bill };
-                                const cg = { ...updated.commodityGroups[gi] };
-                                cg.igstInputMode = value;
-                                updated.commodityGroups = [...updated.commodityGroups];
-                                updated.commodityGroups[gi] = cg;
-                                setBill(recalcGrandTotal(updated));
-                              }}
-                            >
-                              <SelectTrigger className="h-10 w-12 lg:h-6 lg:w-11 rounded text-center text-[10px] px-1 py-1 lg:py-0">
-                                <SelectValue placeholder="%" />
-                              </SelectTrigger>
-                              <SelectContent>
-                                <SelectItem value="PERCENT">%</SelectItem>
-                                <SelectItem value="AMOUNT">₹</SelectItem>
-                              </SelectContent>
-                            </Select>
-                            <BillingMoneyInput
-                              value={g.igstInputMode === 'AMOUNT'
-                                ? gstOnSubtotal(g.subtotal || 0, g.igstRate ?? 0)
-                                : g.igstRate}
-                              min={0}
-                              commitMode="blur"
-                              onCommit={val => {
-                                const v = Math.max(0, val);
-                                const updated = { ...bill };
-                                const cg = { ...updated.commodityGroups[gi] };
-                                cg.igstRate = (cg.igstInputMode === 'AMOUNT')
-                                  ? (cg.subtotal > 0 ? roundMoney2((v * 100) / cg.subtotal) : 0)
-                                  : v;
-                                updated.commodityGroups = [...updated.commodityGroups];
-                                updated.commodityGroups[gi] = cg;
-                                setBill(recalcGrandTotal(updated));
-                              }}
-                              className={billingSummaryInputClass}
-                            />
-                            <span className="text-[10px] font-semibold text-muted-foreground">
-                              {g.igstInputMode === 'AMOUNT' ? '₹' : '%'}
-                            </span>
+                          <div className={billingSummaryCellOuterClass}>
+                            <div className={billingSummaryCellInputsClass}>
+                              <Select
+                                value={g.igstInputMode || 'PERCENT'}
+                                onValueChange={(value: 'PERCENT' | 'AMOUNT') => {
+                                  const updated = { ...bill };
+                                  const cg = { ...updated.commodityGroups[gi] };
+                                  cg.igstInputMode = value;
+                                  updated.commodityGroups = [...updated.commodityGroups];
+                                  updated.commodityGroups[gi] = cg;
+                                  setBill(recalcGrandTotal(updated));
+                                }}
+                              >
+                                <SelectTrigger className="h-10 w-12 lg:h-6 lg:w-11 rounded text-center text-[10px] px-1 py-1 lg:py-0">
+                                  <SelectValue placeholder="%" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value="PERCENT">%</SelectItem>
+                                  <SelectItem value="AMOUNT">₹</SelectItem>
+                                </SelectContent>
+                              </Select>
+                              <BillingMoneyInput
+                                value={g.igstInputMode === 'AMOUNT'
+                                  ? gstOnSubtotal(g.subtotal || 0, g.igstRate ?? 0)
+                                  : g.igstRate}
+                                min={0}
+                                commitMode="live"
+                                onCommit={val => {
+                                  const v = Math.max(0, val);
+                                  const updated = { ...bill };
+                                  const cg = { ...updated.commodityGroups[gi] };
+                                  cg.igstRate = (cg.igstInputMode === 'AMOUNT')
+                                    ? (cg.subtotal > 0 ? roundMoney2((v * 100) / cg.subtotal) : 0)
+                                    : v;
+                                  updated.commodityGroups = [...updated.commodityGroups];
+                                  updated.commodityGroups[gi] = cg;
+                                  setBill(recalcGrandTotal(updated));
+                                }}
+                                className={billingSummaryInputClass}
+                              />
+                              <span className="text-[10px] font-semibold text-muted-foreground">
+                                {g.igstInputMode === 'AMOUNT' ? '₹' : '%'}
+                              </span>
+                            </div>
                             <span className={billingSummaryValueClass}>
                               ₹{formatBillingInr(gstOnSubtotal(g.subtotal || 0, g.igstRate ?? 0))}
                             </span>
@@ -5036,43 +5487,45 @@ const BillingPage = () => {
                           <td
                             key={`discount-${gi}`}
                             className={cn(
-                              'px-2 py-1.5 border-b border-border/30 border-l border-border/50 dark:border-border/70 bg-white text-foreground dark:text-neutral-900 dark:[&_.text-muted-foreground]:text-neutral-500',
+                              billingSummaryCommodityTdClass,
                               gi === bill.commodityGroups.length - 1 && 'border-r border-border/50 dark:border-border/70',
                             )}
                           >
-                            <div className="flex items-center justify-start gap-1 w-full">
-                              <Select value={g.discountType || 'AMOUNT'} onValueChange={(value: any) => {
-                                const updated = { ...bill };
-                                const cg = { ...updated.commodityGroups[gi] };
-                                cg.discountType = value;
-                                updated.commodityGroups = [...updated.commodityGroups];
-                                updated.commodityGroups[gi] = cg;
-                                setBill(recalcGrandTotal(updated));
-                              }}>
-                                <SelectTrigger className="h-10 w-12 lg:h-6 lg:w-11 rounded text-center text-[10px] px-1 py-1 lg:py-0">
-                                  <SelectValue placeholder="%" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                  <SelectItem value="PERCENT">%</SelectItem>
-                                  <SelectItem value="AMOUNT">₹</SelectItem>
-                                </SelectContent>
-                              </Select>
-                              <BillingMoneyInput
-                                value={g.discount || 0}
-                                min={0}
-                                commitMode="blur"
-                                onCommit={val => {
-                                  const v = Math.max(0, val);
+                            <div className={billingSummaryCellOuterClass}>
+                              <div className={billingSummaryCellInputsClass}>
+                                <Select value={g.discountType || 'AMOUNT'} onValueChange={(value: any) => {
                                   const updated = { ...bill };
                                   const cg = { ...updated.commodityGroups[gi] };
-                                  cg.discount = v;
+                                  cg.discountType = value;
                                   updated.commodityGroups = [...updated.commodityGroups];
                                   updated.commodityGroups[gi] = cg;
                                   setBill(recalcGrandTotal(updated));
-                                }}
-                                className={billingSummaryInputClass}
-                                placeholder="0"
-                              />
+                                }}>
+                                  <SelectTrigger className="h-10 w-12 lg:h-6 lg:w-11 rounded text-center text-[10px] px-1 py-1 lg:py-0">
+                                    <SelectValue placeholder="%" />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    <SelectItem value="PERCENT">%</SelectItem>
+                                    <SelectItem value="AMOUNT">₹</SelectItem>
+                                  </SelectContent>
+                                </Select>
+                                <BillingMoneyInput
+                                  value={g.discount || 0}
+                                  min={0}
+                                  commitMode="live"
+                                  onCommit={val => {
+                                    const v = Math.max(0, val);
+                                    const updated = { ...bill };
+                                    const cg = { ...updated.commodityGroups[gi] };
+                                    cg.discount = v;
+                                    updated.commodityGroups = [...updated.commodityGroups];
+                                    updated.commodityGroups[gi] = cg;
+                                    setBill(recalcGrandTotal(updated));
+                                  }}
+                                  className={billingSummaryInputClass}
+                                  placeholder="0"
+                                />
+                              </div>
                               <span className={billingSummaryValueClass}>₹{formatBillingInr(discountAmount)}</span>
                             </div>
                           </td>
@@ -5086,24 +5539,26 @@ const BillingPage = () => {
                         <td
                           key={`roundoff-${gi}`}
                           className={cn(
-                            'px-2 py-1.5 border-b border-border/30 border-l border-border/50 dark:border-border/70 bg-white text-foreground dark:text-neutral-900 dark:[&_.text-muted-foreground]:text-neutral-500',
+                            billingSummaryCommodityTdClass,
                             gi === bill.commodityGroups.length - 1 && 'border-r border-border/50 dark:border-border/70',
                           )}
                         >
-                          <BillingMoneyInput
-                            value={g.manualRoundOff || 0}
-                            commitMode="blur"
-                            onCommit={val => {
-                              const updated = { ...bill };
-                              const cg = { ...updated.commodityGroups[gi] };
-                              cg.manualRoundOff = val;
-                              updated.commodityGroups = [...updated.commodityGroups];
-                              updated.commodityGroups[gi] = cg;
-                              setBill(recalcGrandTotal(updated));
-                            }}
-                            className={billingSummaryInputClass}
-                            placeholder="0"
-                          />
+                          <div className="flex w-full justify-end">
+                            <BillingMoneyInput
+                              value={g.manualRoundOff || 0}
+                              commitMode="live"
+                              onCommit={val => {
+                                const updated = { ...bill };
+                                const cg = { ...updated.commodityGroups[gi] };
+                                cg.manualRoundOff = val;
+                                updated.commodityGroups = [...updated.commodityGroups];
+                                updated.commodityGroups[gi] = cg;
+                                setBill(recalcGrandTotal(updated));
+                              }}
+                              className={billingSummaryInputClass}
+                              placeholder="0"
+                            />
+                          </div>
                         </td>
                       ))}
                     </tr>
@@ -5123,7 +5578,8 @@ const BillingPage = () => {
                           <td
                             key={`overallrate-${gi}`}
                             className={cn(
-                              'px-2 py-1.5 border-b border-border/30 border-l border-border/50 dark:border-border/70 bg-white text-foreground dark:text-neutral-900 dark:[&_.text-muted-foreground]:text-neutral-500 font-bold tabular-nums text-right',
+                              billingSummaryCommodityTdClass,
+                              'font-bold tabular-nums text-right',
                               gi === bill.commodityGroups.length - 1 && 'border-r border-border/50 dark:border-border/70',
                             )}
                           >
@@ -5148,7 +5604,7 @@ const BillingPage = () => {
                           <BillingMoneyInput
                             value={bill.outboundFreight || 0}
                             min={0}
-                            commitMode="blur"
+                            commitMode="live"
                             onCommit={n => {
                               setBill(recalcGrandTotal({ ...bill, outboundFreight: n }));
                             }}
@@ -5164,7 +5620,7 @@ const BillingPage = () => {
                         <Input
                           value={bill.outboundVehicle}
                           onChange={e => {
-                            setBill({ ...bill, outboundVehicle: e.target.value });
+                            setBill({ ...bill, outboundVehicle: e.target.value.toUpperCase() });
                           }}
                           placeholder="AP03 CK 4323"
                           className={cn("h-10 w-40 lg:h-6 lg:w-36 rounded text-left text-[11px] lg:text-[10px] px-2 lg:px-1 py-1 lg:py-0 border border-border bg-background font-bold text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/50", validationErrors.outboundVehicle && "border-destructive ring-1 ring-destructive/30")}

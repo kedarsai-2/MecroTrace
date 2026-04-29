@@ -54,6 +54,9 @@ import ContactsPage from "./pages/ContactsPage";
 import ArrivalsPage from "./pages/ArrivalsPage";
 import ScribblePadPage from "./pages/ScribblePadPage";
 import LogisticsPage from "./pages/LogisticsPage";
+import WeighingPage from "./pages/WeighingPage";
+import SummaryPage from "./pages/SummaryPage";
+import WritersPadPage from "./pages/WritersPadPage";
 import SettlementPage from "./pages/SettlementPage";
 import BillingPage from "./pages/BillingPage";
 import StockPurchasePage from "./pages/StockPurchasePage";
@@ -143,6 +146,8 @@ const router = createBrowserRouter(
         <Route path="/home" element={<Homepage />} />
         <Route path="/commodity-settings" element={<CommoditySettings />} />
         <Route path="/auctions" element={<AuctionsPage />} />
+        <Route path="/summary-after-auction" element={<Navigate to="/summary-page" replace />} />
+        <Route path="/summary-page/*" element={<SummaryPage />} />
         <Route path="/profile" element={<ProfilePage />} />
         <Route path="/contacts" element={<ContactsPage />} />
         <Route path="/arrivals" element={<ArrivalsPage />} />

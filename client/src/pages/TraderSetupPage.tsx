@@ -323,7 +323,7 @@ const TraderSetupPage = () => {
   };
 
   return (
-    <div className="h-[100dvh] relative overflow-hidden flex flex-col">
+    <div className="fixed inset-0 z-0 flex flex-col overflow-hidden bg-slate-950">
       <UnsavedChangesDialog />
       {/* Background — identical to login/register */}
       <img src={loginBg} alt="" className="absolute inset-0 w-full h-full object-cover z-0" fetchPriority="high" decoding="async" width={1920} height={1080} />
@@ -365,7 +365,7 @@ const TraderSetupPage = () => {
         </div>
 
         {/* Scrollable form area */}
-        <div className="flex-1 flex flex-col items-center overflow-y-auto px-6 py-4 no-scrollbar">
+        <div className="flex-1 flex min-h-0 flex-col items-center overflow-y-auto overscroll-y-contain px-6 py-4 no-scrollbar">
           {/* Logo */}
           <motion.div initial={{ scale: 0 }} animate={{ scale: 1 }} transition={{ type: 'spring', damping: 15 }} className="relative mb-4">
             <div className="w-16 h-16 rounded-2xl bg-white/15 backdrop-blur-md flex items-center justify-center shadow-2xl border border-white/20">

@@ -4,8 +4,8 @@ import {
   ArrowLeft, Gavel, Plus, Trash2,
   ShoppingCart, User, Users, Package, Truck, Banknote, ChevronDown,
   Search, AlertTriangle, Merge, Hash,
-  ChevronLeft, ChevronRight, List, Filter, Printer,
-  Pencil, Check, X,
+  ChevronLeft, ChevronRight, ChevronUp, List, Filter, Printer,
+  Pencil, Check, X, RotateCcw,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useDesktopMode } from '@/hooks/use-desktop';
@@ -13,7 +13,6 @@ import { isNative, hapticSelection, hapticImpact, hapticNotification, hideNative
 import { cn } from '@/lib/utils';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import { Switch } from '@/components/ui/switch';
 import BottomNav from '@/components/BottomNav';
 import ScribblePad from '@/components/ScribblePad';
 import InlineScribblePad, { MAX_MARK_LEN, type MarkDetectionMeta } from '@/components/InlineScribblePad';
@@ -33,6 +32,15 @@ import type { Contact } from '@/types/models';
 import { toast } from 'sonner';
 import ForbiddenPage from '@/components/ForbiddenPage';
 import { usePermissions } from '@/lib/permissions';
+import { formatAuctionLotIdentifier } from '@/utils/auctionLotIdentifier';
+
+/** API may send snake_case or camelCase; normalize for lot identifier. */
+function pickVehicleMarkFromDto(dto: { vehicle_mark?: string; vehicleMark?: string }): string | undefined {
+  const raw = dto.vehicle_mark ?? dto.vehicleMark;
+  if (raw == null || typeof raw !== 'string') return undefined;
+  const t = raw.trim();
+  return t ? t : undefined;
+}
 import { ConfirmDeleteDialog } from '@/components/ConfirmDeleteDialog';
 import { directPrint } from '@/utils/printTemplates';
 import { generateAuctionCompletionPrintHTML } from '@/utils/printDocumentTemplates';
@@ -48,6 +56,8 @@ interface LotInfo {
   commodity_name: string;
   seller_name: string;
   seller_mark: string;
+  /** Vehicle mark alias from arrival. */
+  vehicle_mark?: string;
   seller_vehicle_id: string;
   vehicle_number: string;
   was_modified: boolean;
@@ -66,6 +76,8 @@ interface LotInfo {
     buyerMark: string;
     registered: boolean;
   }>;
+  /** Latest auction bags sold (list + session sync). Self-sale: derived from unit qty − remaining. */
+  sold_bags?: number;
 }
 
 type LotStatus = 'available' | 'sold' | 'partial' | 'pending' | 'self_sale';
@@ -144,15 +156,17 @@ const STATUS_CONFIG: Record<LotStatus, { label: string; bg: string; text: string
 };
 
 /**
- * Lot identifier format: Vehicle QTY / Seller QTY / Lot Name - Lot QTY
- * e.g. 200/150/50-50 (vehicle 200, seller 150, lot "50" with 50 bags)
- * Falls back to legacy format when vehicle/seller totals are not available.
+ * Lot identifier: {vehicleMark}-{vehicleTotal}/{sellerMark}-{sellerTotal}/{lotName}/{lotQty}
+ * e.g. AB-200/SA-122/SA1/22
  */
 function formatLotDisplayName(lot: {
   vehicle_number: string;
   seller_name: string;
   bag_count: number;
   lot_name?: string;
+  vehicle_mark?: string;
+  vehicleMark?: string;
+  seller_mark?: string;
   vehicle_total_qty?: number;
   seller_total_qty?: number;
 }): string {
@@ -160,7 +174,14 @@ function formatLotDisplayName(lot: {
   const sTotal = lot.seller_total_qty ?? lot.bag_count;
   const lotName = lot.lot_name ?? String(lot.bag_count);
   const lotQty = lot.bag_count;
-  return `${vTotal}/${sTotal}/${lotName}-${lotQty}`;
+  return formatAuctionLotIdentifier({
+    vehicleMark: pickVehicleMarkFromDto(lot),
+    vehicleTotalQty: vTotal,
+    sellerMark: lot.seller_mark,
+    sellerTotalQty: sTotal,
+    lotName,
+    lotQty,
+  });
 }
 
 // ── Map API DTOs to UI types ──────────────────────────────
@@ -176,9 +197,11 @@ function lotSummaryToLotInfo(dto: LotSummaryDTO): LotInfo {
     lot_name: dto.lot_name ?? '',
     bag_count: dto.bag_count ?? 0,
     original_bag_count: dto.original_bag_count ?? dto.bag_count ?? 0,
+    sold_bags: dto.sold_bags ?? 0,
     commodity_name: dto.commodity_name ?? '',
     seller_name: dto.seller_name ?? '',
     seller_mark: dto.seller_mark ?? '',
+    vehicle_mark: pickVehicleMarkFromDto(dto as LotSummaryDTO & { vehicleMark?: string }),
     seller_vehicle_id: String(dto.seller_vehicle_id ?? ''),
     vehicle_number: dto.vehicle_number ?? '',
     was_modified: dto.was_modified ?? false,
@@ -190,19 +213,25 @@ function lotSummaryToLotInfo(dto: LotSummaryDTO): LotInfo {
 }
 
 function selfSaleUnitToLotInfo(dto: AuctionSelfSaleUnitDTO): LotInfo {
+  const remaining = dto.remaining_qty ?? dto.bag_count ?? 0;
+  const unitQty = dto.self_sale_qty ?? 0;
   return {
     lot_id: String(dto.lot_id),
     selfSaleUnitId: String(dto.self_sale_unit_id),
     lot_name: dto.lot_name ?? '',
-    bag_count: dto.remaining_qty ?? dto.bag_count ?? 0,
+    bag_count: remaining,
     original_bag_count: dto.original_bag_count ?? dto.self_sale_qty ?? dto.bag_count ?? 0,
+    sold_bags: Math.max(0, unitQty - remaining),
     commodity_name: dto.commodity_name ?? '',
     seller_name: dto.seller_name ?? '',
     seller_mark: dto.seller_mark ?? '',
+    vehicle_mark: pickVehicleMarkFromDto(dto as AuctionSelfSaleUnitDTO & { vehicleMark?: string }),
     seller_vehicle_id: String(dto.seller_vehicle_id ?? ''),
     vehicle_number: dto.vehicle_number ?? '',
     was_modified: false,
     status: 'self_sale',
+    vehicle_total_qty: dto.vehicle_total_qty,
+    seller_total_qty: dto.seller_total_qty,
     selfSaleQty: dto.self_sale_qty ?? 0,
     remainingQty: dto.remaining_qty ?? 0,
     selfSaleRate: dto.rate ?? 0,
@@ -220,6 +249,40 @@ function formatPresetMarginCell(margin: number): string {
   const m = Number(margin);
   if (!Number.isFinite(m) || m === 0) return '—';
   return m > 0 ? `+${m}` : String(m);
+}
+
+/** Pill switch matching Commodity Settings (Deduction / Round-off). */
+function PresetMarginSwitch({
+  checked,
+  onCheckedChange,
+  'aria-label': ariaLabel,
+  disabled,
+}: {
+  checked: boolean;
+  onCheckedChange: (next: boolean) => void;
+  'aria-label'?: string;
+  disabled?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={ariaLabel}
+      disabled={disabled}
+      onClick={() => onCheckedChange(!checked)}
+      className={cn(
+        'relative h-8 w-14 shrink-0 rounded-full shadow-inner transition-all disabled:pointer-events-none disabled:opacity-50',
+        checked ? 'bg-gradient-to-r from-violet-500 to-purple-600 shadow-violet-500/30' : 'bg-slate-300 dark:bg-slate-600'
+      )}
+    >
+      <motion.div
+        className="pointer-events-none absolute top-1 h-6 w-6 rounded-full bg-white shadow-md"
+        animate={{ x: checked ? 28 : 4 }}
+        transition={{ type: 'spring', stiffness: 500, damping: 30 }}
+      />
+    </button>
+  );
 }
 
 function normalizeScribbleBuyerName(name: string, isScribble: boolean): string {
@@ -271,12 +334,15 @@ function AuctionsGridScrollPanel({
   contentLayoutKey,
   autoScrollToBottomKey,
   gridSectionRef,
+  scrollPageIntoViewOnAutoScroll = true,
 }: {
   className?: string;
   children: React.ReactNode;
   contentLayoutKey: number;
   autoScrollToBottomKey: number;
   gridSectionRef?: React.RefObject<HTMLDivElement>;
+  /** When false (e.g. mobile), skip scrolling the window to the grid — avoids hiding sticky hero / fighting inner scroll. */
+  scrollPageIntoViewOnAutoScroll?: boolean;
 }) {
   const outerRef = useRef<HTMLDivElement | null>(null);
   /** User scrolled away from bottom — do not fight them with auto scroll-to-bottom. */
@@ -354,13 +420,13 @@ function AuctionsGridScrollPanel({
     const rafs: number[] = [];
 
     const scrollPageToGrid = () => {
-      if (cleanedUp) return;
-      
+      if (cleanedUp || !scrollPageIntoViewOnAutoScroll) return;
+
       if (gridSectionRef?.current) {
-        gridSectionRef.current.scrollIntoView({ 
-          behavior: 'smooth', 
+        gridSectionRef.current.scrollIntoView({
+          behavior: 'smooth',
           block: 'start',
-          inline: 'nearest'
+          inline: 'nearest',
         });
       }
     };
@@ -402,7 +468,7 @@ function AuctionsGridScrollPanel({
       const rows = Array.from(
         outer.querySelectorAll('tr[data-auction-entry-row="true"]')
       ) as HTMLTableRowElement[];
-      
+
       if (rows.length === 0) return true;
 
       const latestRow = rows.reduce<HTMLTableRowElement | null>((latest, row) => {
@@ -416,11 +482,16 @@ function AuctionsGridScrollPanel({
 
       const outerRect = outer.getBoundingClientRect();
       const rowRect = latestRow.getBoundingClientRect();
-      
-      const rowBottomRelative = rowRect.bottom - outerRect.top;
-      const containerHeight = outer.clientHeight;
-      
-      return rowBottomRelative <= containerHeight;
+      const thead = outer.querySelector('thead');
+      const theadH = thead ? thead.getBoundingClientRect().height : 0;
+      /** Visible band inside scrollport below sticky thead (tbody rows must sit here, not under thead). */
+      const visibleTop = outerRect.top + theadH;
+      const visibleBottom = outerRect.bottom;
+
+      return (
+        rowRect.top >= visibleTop - AUCTION_SCROLL_EPS &&
+        rowRect.bottom <= visibleBottom + AUCTION_SCROLL_EPS
+      );
     };
 
     const checkAndScroll = () => {
@@ -464,7 +535,7 @@ function AuctionsGridScrollPanel({
       resizeObserver?.disconnect();
       mutationObserver?.disconnect();
     };
-  }, [autoScrollToBottomKey, gridSectionRef]);
+  }, [autoScrollToBottomKey, gridSectionRef, scrollPageIntoViewOnAutoScroll]);
 
   const setScrollLeftFromPointerX = useCallback((clientX: number) => {
     const outer = outerRef.current;
@@ -502,7 +573,7 @@ function AuctionsGridScrollPanel({
       <div
         ref={outerRef}
         className={cn(
-          'auctions-grid-scroll-panel lot-fields-x-scroll min-h-0 overflow-y-auto overflow-x-auto overscroll-contain touch-auto pb-5',
+          'auctions-grid-scroll-panel lot-fields-x-scroll isolate min-h-0 overflow-y-auto overflow-x-auto overscroll-contain touch-auto pb-5',
           className
         )}
         style={{ WebkitOverflowScrolling: 'touch', scrollbarWidth: 'none', msOverflowStyle: 'none' }}
@@ -616,6 +687,9 @@ const AuctionsPage = () => {
   const qtyInputRef = useRef<HTMLInputElement>(null);
   const userClearedRateRef = useRef(false);
   const [preferRateForFirstBidFormFocus, setPreferRateForFirstBidFormFocus] = useState(true);
+  /** Session-local MRU for buyer strip ordering (newest first when not searching by prefix). */
+  const [contactLastUsedMs, setContactLastUsedMs] = useState<Record<string, number>>({});
+  const [tempMarkLastUsedMs, setTempMarkLastUsedMs] = useState<Record<string, number>>({});
 
   // Lot selection
   const [showLotSelector, setShowLotSelector] = useState(true);
@@ -629,6 +703,13 @@ const AuctionsPage = () => {
   const [lotNumberSearch, setLotNumberSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<LotStatus | 'all'>('all');
   const [showLotList, setShowLotList] = useState(false);
+  /** Mobile/tablet: collapse gradient hero to maximize auction grid vertical space. */
+  const [mobileAuctionHeroCollapsed, setMobileAuctionHeroCollapsed] = useState(false);
+  /** Matches fixed collapsed hero + spacer — sticky auction block / thead sit below this offset. */
+  const auctionCollapsedBarHeight = 'calc(max(0.5rem, env(safe-area-inset-top, 0px)) + 2.75rem + 0.5rem)';
+  /** Expanded mobile hero height — ResizeObserver so sticky grid section pins below hero when scrolling. */
+  const expandedHeroMeasureRef = useRef<HTMLDivElement>(null);
+  const [expandedHeroHeightPx, setExpandedHeroHeightPx] = useState(0);
 
   // Duplicate mark dialog
   const [duplicateMarkDialog, setDuplicateMarkDialog] = useState<{
@@ -876,7 +957,7 @@ const AuctionsPage = () => {
     });
   }, [selectedLot, entries, rate, qty, preset, presetType, showPresetMargin, scribbleMark]);
 
-  // Filter lots (lot identifier format e.g. 320/320/110-110 also searchable)
+  // Filter lots (lot identifier format e.g. AB-200/SA-122/SA1/22 also searchable)
   const filteredLots = useMemo(() => {
     let result = statusFilter === 'self_sale' ? selfSaleLots : availableLots;
     if (lotSearchQuery) {
@@ -950,21 +1031,34 @@ const AuctionsPage = () => {
   const filteredContacts = useMemo(() => {
     const q = (scribbleMark || '').trim().toLowerCase();
     const list = buyers;
-    if (!q) return list;
-    return list.filter(b =>
-      b.name?.toLowerCase().startsWith(q) ||
-      (b.phone && b.phone.startsWith(q)) ||
-      (b.mark && b.mark.toLowerCase().startsWith(q))
-    );
-  }, [buyers, scribbleMark]);
+    const filtered = !q
+      ? list
+      : list.filter(
+          b =>
+            b.name?.toLowerCase().startsWith(q) ||
+            (b.phone && b.phone.startsWith(q)) ||
+            (b.mark && b.mark.toLowerCase().startsWith(q))
+        );
+    return [...filtered].sort((a, b) => {
+      const ta = contactLastUsedMs[String(a.contact_id)] ?? 0;
+      const tb = contactLastUsedMs[String(b.contact_id)] ?? 0;
+      if (tb !== ta) return tb - ta;
+      return (a.name || '').localeCompare(b.name || '', undefined, { sensitivity: 'base' });
+    });
+  }, [buyers, scribbleMark, contactLastUsedMs]);
 
   // Row 2: Temporary (scribble) marks for today — server-scoped; filter by search box
   const filteredTemporaryMarks = useMemo(() => {
     const q = (scribbleMark || '').trim().toLowerCase();
     const list = temporaryBuyerMarks;
-    if (!q) return list;
-    return list.filter(m => m.toLowerCase().startsWith(q));
-  }, [temporaryBuyerMarks, scribbleMark]);
+    const filtered = !q ? list : list.filter(m => m.toLowerCase().startsWith(q));
+    return [...filtered].sort((a, b) => {
+      const ta = tempMarkLastUsedMs[a] ?? 0;
+      const tb = tempMarkLastUsedMs[b] ?? 0;
+      if (tb !== ta) return tb - ta;
+      return a.localeCompare(b, undefined, { sensitivity: 'base' });
+    });
+  }, [temporaryBuyerMarks, scribbleMark, tempMarkLastUsedMs]);
 
   const clampInsideClosingParen = useCallback((value: string, proposedPos: number, allowManualExit = false) => {
     if (!braceLockActiveRef.current) return proposedPos;
@@ -1070,6 +1164,25 @@ const AuctionsPage = () => {
     return () => window.clearTimeout(timeoutId);
   }, [entries.length]);
 
+  /** Mobile/tablet: when token row opens, scroll it above fixed scribble/numpad dock. */
+  useEffect(() => {
+    if (!showTokenInput || isDesktop) return;
+    const id = showTokenInput;
+    const t = window.setTimeout(() => {
+      try {
+        const safe = typeof CSS !== 'undefined' && typeof CSS.escape === 'function' ? CSS.escape(id) : id.replace(/"/g, '\\"');
+        document.querySelector(`[data-auction-token-panel="${safe}"]`)?.scrollIntoView({
+          block: 'nearest',
+          behavior: 'smooth',
+          inline: 'nearest',
+        });
+      } catch {
+        document.querySelector(`[data-auction-token-panel="${id}"]`)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      }
+    }, 100);
+    return () => window.clearTimeout(t);
+  }, [showTokenInput, isDesktop]);
+
   /**
    * When preset is on, the rate field shows buyer total (bid + preset); this returns seller bid for API / grid `rate`.
    * When preset is off, the field is the seller bid.
@@ -1091,13 +1204,23 @@ const AuctionsPage = () => {
     const lotId = selectedLot?.lot_id;
     const selfSaleUnitId = selectedLot?.selfSaleUnitId;
     if (session.lot && lotId) {
+      const sl = session.lot as LotSummaryDTO & { vehicleMark?: string };
+      const vm = pickVehicleMarkFromDto(sl);
       setSelectedLot(prev =>
         prev && prev.lot_id === lotId
           ? {
             ...prev,
-            bag_count: session.lot!.bag_count ?? prev.bag_count,
-            original_bag_count: session.lot!.original_bag_count ?? prev.original_bag_count,
-            was_modified: session.lot!.was_modified ?? prev.was_modified,
+            bag_count: sl.bag_count ?? prev.bag_count,
+            original_bag_count: sl.original_bag_count ?? prev.original_bag_count,
+            sold_bags: sl.sold_bags ?? session.total_sold_bags ?? prev.sold_bags,
+            was_modified: sl.was_modified ?? prev.was_modified,
+            vehicle_mark: vm ?? prev.vehicle_mark,
+            seller_mark: sl.seller_mark ?? prev.seller_mark,
+            vehicle_total_qty: sl.vehicle_total_qty ?? prev.vehicle_total_qty,
+            seller_total_qty: sl.seller_total_qty ?? prev.seller_total_qty,
+            vehicle_number: sl.vehicle_number ?? prev.vehicle_number,
+            seller_name: sl.seller_name ?? prev.seller_name,
+            commodity_name: sl.commodity_name ?? prev.commodity_name,
           }
           : prev
       );
@@ -1106,9 +1229,17 @@ const AuctionsPage = () => {
           l.lot_id === lotId && session.lot
             ? {
               ...l,
-              bag_count: session.lot!.bag_count ?? l.bag_count,
-              original_bag_count: session.lot!.original_bag_count ?? l.original_bag_count,
-              was_modified: session.lot!.was_modified ?? l.was_modified,
+              bag_count: sl.bag_count ?? l.bag_count,
+              original_bag_count: sl.original_bag_count ?? l.original_bag_count,
+              sold_bags: sl.sold_bags ?? session.total_sold_bags ?? l.sold_bags,
+              was_modified: sl.was_modified ?? l.was_modified,
+              vehicle_mark: vm ?? l.vehicle_mark,
+              seller_mark: sl.seller_mark ?? l.seller_mark,
+              vehicle_total_qty: sl.vehicle_total_qty ?? l.vehicle_total_qty,
+              seller_total_qty: sl.seller_total_qty ?? l.seller_total_qty,
+              vehicle_number: sl.vehicle_number ?? l.vehicle_number,
+              seller_name: sl.seller_name ?? l.seller_name,
+              commodity_name: sl.commodity_name ?? l.commodity_name,
             }
             : l
         )
@@ -1118,10 +1249,23 @@ const AuctionsPage = () => {
           l.selfSaleUnitId === selfSaleUnitId && session.lot
             ? {
               ...l,
-              bag_count: session.lot!.bag_count ?? l.bag_count,
-              original_bag_count: session.lot!.original_bag_count ?? l.original_bag_count,
-              was_modified: session.lot!.was_modified ?? l.was_modified,
-              remainingQty: session.lot!.bag_count ?? l.remainingQty,
+              bag_count: session.remaining_bags ?? sl.bag_count ?? l.bag_count,
+              original_bag_count: sl.original_bag_count ?? l.original_bag_count,
+              was_modified: sl.was_modified ?? l.was_modified,
+              remainingQty: session.remaining_bags ?? sl.bag_count ?? l.remainingQty,
+              sold_bags: Math.max(
+                0,
+                (sl.original_bag_count ?? l.selfSaleQty ?? l.original_bag_count ?? 0) -
+                  (session.remaining_bags ?? sl.bag_count ?? l.bag_count ?? 0)
+              ),
+              selfSaleQty: l.selfSaleQty ?? sl.original_bag_count,
+              vehicle_mark: vm ?? l.vehicle_mark,
+              seller_mark: sl.seller_mark ?? l.seller_mark,
+              vehicle_total_qty: sl.vehicle_total_qty ?? l.vehicle_total_qty,
+              seller_total_qty: sl.seller_total_qty ?? l.seller_total_qty,
+              vehicle_number: sl.vehicle_number ?? l.vehicle_number,
+              seller_name: sl.seller_name ?? l.seller_name,
+              commodity_name: sl.commodity_name ?? l.commodity_name,
             }
             : l
         )
@@ -1249,6 +1393,24 @@ const AuctionsPage = () => {
   const canGoPrev = currentLotIndex > 0;
   const canGoNext = currentLotIndex >= 0 && currentLotIndex < navigationLots.length - 1;
 
+  /** Mobile expanded hero height → sticky offset for auction grid below gradient header. */
+  useLayoutEffect(() => {
+    if (isDesktop || mobileAuctionHeroCollapsed) {
+      setExpandedHeroHeightPx(0);
+      return;
+    }
+    const el = expandedHeroMeasureRef.current;
+    if (!el) return;
+    const measure = () => {
+      const h = Math.round(el.offsetHeight || el.getBoundingClientRect().height);
+      setExpandedHeroHeightPx(h);
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [isDesktop, mobileAuctionHeroCollapsed, selectedLot?.lot_id]);
+
   // Status counts for lot selector
   const statusCounts = useMemo(() => {
     const counts = { available: 0, sold: 0, partial: 0, pending: 0, self_sale: 0 };
@@ -1330,6 +1492,13 @@ const AuctionsPage = () => {
       applyAuctionSession(session);
       void loadTemporaryBuyerMarks();
       hapticNotification(NotificationType.Success);
+      const t = Date.now();
+      if (entry.buyerContactId) {
+        setContactLastUsedMs(p => ({ ...p, [String(entry.buyerContactId)]: t }));
+      } else if (entry.isScribble && !entry.isSelfSale) {
+        const m = (entry.buyerMark || '').trim();
+        if (m) setTempMarkLastUsedMs(p => ({ ...p, [m]: t }));
+      }
       setRate('');
       setQty('');
       setSelectedBuyer(null);
@@ -1380,6 +1549,14 @@ const AuctionsPage = () => {
         });
         applyAuctionSession(session);
         void loadTemporaryBuyerMarks();
+        {
+          const t = Date.now();
+          if (duplicateMarkDialog.buyerContactId) {
+            setContactLastUsedMs(p => ({ ...p, [String(duplicateMarkDialog.buyerContactId)]: t }));
+          } else if (duplicateMarkDialog.isScribble) {
+            setTempMarkLastUsedMs(p => ({ ...p, [duplicateMarkDialog.mark]: t }));
+          }
+        }
         toast.success(`Merged ${newQty} bags into existing bid #${existingEntry.bidNumber}`);
         setRate('');
         setQty('');
@@ -1726,13 +1903,21 @@ const AuctionsPage = () => {
 
   const removeEntry = useCallback(async (id: string) => {
     if (!selectedLot) return;
-    if (editingBidId) {
+    if (editingBidId && editingBidId !== id) {
       toast.info('Finish or cancel bid edit first.');
       return;
     }
     if (!can('Auctions / Sales', 'Delete')) {
       toast.error('You do not have permission to delete auction bids.');
       return;
+    }
+    if (editingBidId === id) {
+      setEditingBidId(null);
+      setEditBidDraft(null);
+      setEditBidRetryAllowIncrease(false);
+      setEditBidQtyDialog(null);
+      setShowTokenInput(null);
+      editBidFormSnapshotRef.current = null;
     }
     try {
       const session = await deleteBidForCurrentSelection(Number(id));
@@ -2098,7 +2283,10 @@ const AuctionsPage = () => {
           status: source === 'self_sale' ? 'self_sale' : info.status,
           seller_name: info.seller_name || lot.seller_name || '',
           seller_mark: info.seller_mark || lot.seller_mark || '',
+          vehicle_mark: info.vehicle_mark || lot.vehicle_mark,
           vehicle_number: info.vehicle_number || lot.vehicle_number || '',
+          vehicle_total_qty: info.vehicle_total_qty ?? lot.vehicle_total_qty,
+          seller_total_qty: info.seller_total_qty ?? lot.seller_total_qty,
           commodity_name: info.commodity_name || lot.commodity_name || '',
         });
         setEntries(mapOrderedSessionEntries(session.entries));
@@ -2251,18 +2439,18 @@ const AuctionsPage = () => {
                 <button onClick={() => navigate('/home')} aria-label="Go back" className="w-12 h-12 rounded-full bg-white/20 backdrop-blur flex items-center justify-center">
                   <ArrowLeft className="w-5 h-5 text-white" />
                 </button>
-                <div className="flex-1">
-                  <h1 className="text-xl font-bold text-white flex items-center gap-2">
-                    <Gavel className="w-5 h-5" /> Sales Pad
+                <div className="flex-1 min-w-0">
+                  <h1 className="text-2xl font-bold text-white flex items-center gap-2 md:text-3xl">
+                    <Gavel className="w-6 h-6 shrink-0 md:w-7 md:h-7" /> Sales Pad
                   </h1>
-                  <p className="text-white/70 text-xs">Select a lot to begin auction</p>
+                  <p className="text-sm text-white/80 md:text-base">Select a lot to begin auction</p>
                 </div>
               </div>
               {/* General search */}
               <div className="relative mb-3">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-white/50" />
                 <input
-                  placeholder="Search lot, seller, vehicle, or 320/320/110-110…"
+                  placeholder="Search lot, seller, vehicle, or AB-200/SA-122/SA1/22…"
                   value={lotSearchQuery}
                   onChange={e => setLotSearchQuery(e.target.value)}
                   className="w-full h-10 pl-10 pr-4 rounded-xl bg-white/20 backdrop-blur text-white placeholder:text-white/50 text-sm border border-white/10 focus:outline-none focus:border-white/30"
@@ -2272,7 +2460,7 @@ const AuctionsPage = () => {
               <div className="relative">
                 <Hash className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-white/50" />
                 <input
-                  placeholder="Lot # or 320/320/110-110…"
+                  placeholder="Lot # or AB-200/SA-122/SA1/22…"
                   value={lotNumberSearch}
                   onChange={e => setLotNumberSearch(e.target.value)}
                   className="w-full h-10 pl-10 pr-4 rounded-xl bg-white/15 backdrop-blur text-white placeholder:text-white/50 text-sm border border-white/10 focus:outline-none focus:border-white/30"
@@ -2296,7 +2484,7 @@ const AuctionsPage = () => {
                 <div className="relative w-56">
                   <Hash className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
                   <input
-                    placeholder="Lot # or 320/320/110-110…"
+                    placeholder="Lot # or AB-200/SA-122/SA1/22…"
                     value={lotNumberSearch}
                     onChange={e => setLotNumberSearch(e.target.value)}
                     className="w-full h-10 pl-10 pr-4 rounded-xl bg-muted/50 text-foreground text-sm border border-border focus:outline-none focus:border-primary/50"
@@ -2305,7 +2493,7 @@ const AuctionsPage = () => {
                 <div className="relative w-64">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
                   <input
-                    placeholder="Search lot, seller, vehicle, or 320/320/110-110…"
+                    placeholder="Search lot, seller, vehicle, or AB-200/SA-122/SA1/22…"
                     value={lotSearchQuery}
                     onChange={e => setLotSearchQuery(e.target.value)}
                     className="w-full h-10 pl-10 pr-4 rounded-xl bg-muted/50 text-foreground text-sm border border-border focus:outline-none focus:border-primary/50"
@@ -2408,12 +2596,14 @@ const AuctionsPage = () => {
           ) : lotNavMode === 'vehicle' ? (
             Array.from(lotsByVehicle.entries())
               .sort(([a], [b]) => (a || '').localeCompare(b || ''))
-              .map(([vehicle, lots]) => (
+              .map(([vehicle, lots]) => {
+                const { sold, pending } = sumLotsPendingSold(lots);
+                return (
                 <div key={vehicle} className="glass-card rounded-2xl overflow-hidden">
                   <div className="p-3 bg-gradient-to-r from-blue-50 to-violet-50 dark:from-blue-950/20 dark:to-violet-950/20 border-b border-border/30 flex items-center gap-2">
                     <Truck className="w-4 h-4 text-primary" />
                     <span className="text-sm font-bold text-foreground">{vehicle}</span>
-                    <span className="ml-auto text-xs text-muted-foreground">{lots.length} lot(s)</span>
+                    <span className="ml-auto text-xs text-muted-foreground tabular-nums">{sold} sold / {pending} pending</span>
                   </div>
                   <div className="divide-y divide-border/20">
                     {lots.map(lot => (
@@ -2421,7 +2611,8 @@ const AuctionsPage = () => {
                     ))}
                   </div>
                 </div>
-              ))
+              );
+              })
           ) : lotNavMode === 'seller' ? (
             (() => {
               const entries = Array.from(lotsBySeller.entries());
@@ -2436,12 +2627,14 @@ const AuctionsPage = () => {
                 return { key, lots, label, sortKey };
               };
               const sorted = entries.map(toLabel).sort((a, b) => a.sortKey.localeCompare(b.sortKey));
-              return sorted.map(({ key, lots, label }) => (
+              return sorted.map(({ key, lots, label }) => {
+                const { sold, pending } = sumLotsPendingSold(lots);
+                return (
                 <div key={key} className="glass-card rounded-2xl overflow-hidden">
                   <div className="p-3 bg-gradient-to-r from-emerald-50 to-green-50 dark:from-emerald-950/20 dark:to-green-950/20 border-b border-border/30 flex items-center gap-2">
                     <User className="w-4 h-4 text-emerald-600 dark:text-emerald-400 flex-shrink-0" />
                     <span className="text-sm font-bold text-foreground truncate min-w-0">{label}</span>
-                    <span className="ml-auto text-xs text-muted-foreground flex-shrink-0">{lots.length} lot(s)</span>
+                    <span className="ml-auto text-xs text-muted-foreground flex-shrink-0 tabular-nums">{sold} sold / {pending} pending</span>
                   </div>
                   <div className="divide-y divide-border/20">
                     {lots.map(lot => (
@@ -2449,7 +2642,8 @@ const AuctionsPage = () => {
                     ))}
                   </div>
                 </div>
-              ));
+              );
+              });
             })()
           ) : lotNavMode === 'buyer' && statusFilter !== 'self_sale' ? (
             (() => {
@@ -2476,7 +2670,9 @@ const AuctionsPage = () => {
                 return { key: groupKey, lots, label, sortKey, registered: pb.registered };
               };
               const sorted = entries.map(toLabel).sort((a, b) => a.sortKey.localeCompare(b.sortKey));
-              return sorted.map(({ key, lots, label, registered }) => (
+              return sorted.map(({ key, lots, label, registered }) => {
+                const { sold, pending } = sumLotsPendingSold(lots);
+                return (
                 <div key={key} className="glass-card rounded-2xl overflow-hidden">
                   <div className="p-3 bg-gradient-to-r from-violet-50 to-fuchsia-50 dark:from-violet-950/20 dark:to-fuchsia-950/20 border-b border-border/30 flex items-center gap-2">
                     <Users className="w-4 h-4 text-violet-600 dark:text-violet-400 flex-shrink-0" />
@@ -2491,7 +2687,7 @@ const AuctionsPage = () => {
                         Registered
                       </span>
                     )}
-                    <span className="ml-auto text-xs text-muted-foreground flex-shrink-0">{lots.length} lot(s)</span>
+                    <span className="ml-auto text-xs text-muted-foreground flex-shrink-0 tabular-nums">{sold} sold / {pending} pending</span>
                   </div>
                   <div className="divide-y divide-border/20">
                     {lots.map(lot => (
@@ -2499,7 +2695,8 @@ const AuctionsPage = () => {
                     ))}
                   </div>
                 </div>
-              ));
+              );
+              });
             })()
           ) : (
             filteredLots.map(lot => (
@@ -2516,88 +2713,173 @@ const AuctionsPage = () => {
   return (
     <div className={cn(
       "min-h-[100dvh] bg-gradient-to-b from-background via-background to-blue-50/30 dark:to-blue-950/10 lg:pb-6",
-      isDesktop ? "pb-28" : "pb-[38rem]"
+      isDesktop ? "pb-28" : "pb-[42rem] md:pb-[48rem]"
     )}>
-      {/* Mobile Header */}
+      {/* Mobile Header — tap empty area to collapse hero and free space for auction grid */}
       {!isDesktop && (
-        <div className="bg-gradient-to-br from-blue-400 via-blue-500 to-violet-500 pt-[max(1.5rem,env(safe-area-inset-top))] pb-6 px-4 rounded-b-[2rem] relative overflow-hidden">
-          <div className="absolute inset-0 bg-[radial-gradient(circle_at_30%_20%,rgba(255,255,255,0.2)_0%,transparent_50%)]" />
-          <div className="absolute inset-0 overflow-hidden pointer-events-none">
-            {[...Array(6)].map((_, i) => (
-              <motion.div key={i} className="absolute w-1.5 h-1.5 bg-white/40 rounded-full"
-                style={{ left: `${10 + Math.random() * 80}%`, top: `${10 + Math.random() * 80}%` }}
-                animate={{ y: [-10, 10], opacity: [0.2, 0.6, 0.2] }}
-                transition={{ duration: 2 + Math.random() * 2, repeat: Infinity, delay: Math.random() * 2 }}
-              />
-            ))}
-          </div>
-
-          <div className="relative z-10">
-            <div className="flex items-center gap-3 mb-4">
-              <button onClick={goBackToSelector}
-                aria-label="Go back" className="w-12 h-12 rounded-full bg-white/20 backdrop-blur flex items-center justify-center">
-                <ArrowLeft className="w-5 h-5 text-white" />
+        mobileAuctionHeroCollapsed ? (
+          <>
+            <div className="fixed inset-x-0 top-0 z-[45] flex w-full items-center gap-1.5 border-b border-white/20 bg-gradient-to-br from-blue-400 via-blue-500 to-violet-500 px-2 pt-[max(0.5rem,env(safe-area-inset-top))] pb-2 shadow-[0_6px_16px_-8px_rgba(59,130,246,0.55)]">
+              <button
+                type="button"
+                data-auction-hero-interactive
+                onClick={(e) => {
+                  e.stopPropagation();
+                  hapticSelection();
+                  goBackToSelector();
+                }}
+                aria-label="Back to lot list"
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white/20 backdrop-blur active:bg-white/30"
+              >
+                <ArrowLeft className="h-4 w-4 text-white" strokeWidth={2.5} />
               </button>
-              <div className="flex-1">
-                <h1 className="text-xl font-bold text-white flex items-center gap-2">
-                  <Gavel className="w-5 h-5" /> Sales Pad
-                </h1>
-                <p className="text-white/70 text-xs">Live auction operations</p>
+
+              <div
+                className="flex min-h-[2.25rem] min-w-0 flex-1 items-center overflow-x-auto overscroll-x-contain py-0.5 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+                role="region"
+                aria-label="Lot summary"
+              >
+                {selectedLot ? (
+                  <p className="whitespace-nowrap pr-1 text-left text-[12px] font-semibold leading-snug tracking-tight text-white md:text-[13px]">
+                    {(isSelfSaleReauction ? (trader?.business_name || 'Trader') : selectedLot.seller_name) || '—'}
+                    <span className="mx-1 text-white/45 md:mx-1.5">|</span>
+                    {selectedLot.vehicle_number?.trim() || '—'}
+                    <span className="mx-1 text-white/45 md:mx-1.5">|</span>
+                    {formatLotDisplayName(selectedLot)}
+                    <span className="mx-1 text-white/45 md:mx-1.5">|</span>
+                    <span className="tabular-nums">{totalSold}/{remaining}</span>
+                  </p>
+                ) : (
+                  <span className="truncate text-sm font-bold text-white">Sales Pad</span>
+                )}
               </div>
-              {/* Lot navigation & list toggle */}
-              <div className="flex items-center gap-1">
-                <button onClick={() => navigateToLot('prev')} disabled={!canGoPrev}
-                  aria-label="Previous lot" className={cn("w-9 h-9 rounded-full flex items-center justify-center transition-all",
-                    canGoPrev ? 'bg-white/20 backdrop-blur' : 'bg-white/10 opacity-40')}>
-                  <ChevronLeft className="w-4 h-4 text-white" />
-                </button>
-                <button onClick={() => setShowLotList(!showLotList)}
-                  aria-label="Lot list" className="w-9 h-9 rounded-full bg-white/20 backdrop-blur flex items-center justify-center">
-                  <List className="w-4 h-4 text-white" />
-                </button>
-                <button onClick={() => navigateToLot('next')} disabled={!canGoNext}
-                  aria-label="Next lot" className={cn("w-9 h-9 rounded-full flex items-center justify-center transition-all",
-                    canGoNext ? 'bg-white/20 backdrop-blur' : 'bg-white/10 opacity-40')}>
-                  <ChevronRight className="w-4 h-4 text-white" />
-                </button>
-              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  hapticSelection();
+                  setMobileAuctionHeroCollapsed(false);
+                }}
+                className="flex h-9 shrink-0 items-center gap-0.5 self-center rounded-full bg-white/20 px-2 text-[9px] font-semibold uppercase tracking-wide text-white active:bg-white/30 sm:px-2.5 sm:text-[10px]"
+                aria-expanded={false}
+                aria-label="Expand Sales Pad header"
+              >
+                <ChevronDown className="h-4 w-4 shrink-0 sm:h-5 sm:w-5" strokeWidth={2.5} />
+                <span>Expand</span>
+              </button>
+            </div>
+            {/* Reserve layout height so scrollable content does not sit under fixed collapsed hero */}
+            <div
+              aria-hidden
+              className="shrink-0 pointer-events-none"
+              style={{ height: auctionCollapsedBarHeight }}
+            />
+          </>
+        ) : (
+          <div
+            ref={expandedHeroMeasureRef}
+            className="sticky top-0 z-[38] cursor-pointer shrink-0 bg-gradient-to-br from-blue-400 via-blue-500 to-violet-500 pt-[max(1.5rem,env(safe-area-inset-top))] pb-6 px-4 rounded-b-[2rem] relative overflow-hidden shadow-[0_8px_24px_-12px_rgba(59,130,246,0.35)]"
+            onClick={(e) => {
+              if ((e.target as HTMLElement).closest('[data-auction-hero-interactive]')) return;
+              hapticSelection();
+              setMobileAuctionHeroCollapsed(true);
+            }}
+          >
+            <div className="absolute inset-0 bg-[radial-gradient(circle_at_30%_20%,rgba(255,255,255,0.2)_0%,transparent_50%)]" />
+            <div className="absolute inset-0 overflow-hidden pointer-events-none">
+              {[...Array(6)].map((_, i) => (
+                <motion.div key={i} className="absolute w-1.5 h-1.5 bg-white/40 rounded-full"
+                  style={{ left: `${10 + Math.random() * 80}%`, top: `${10 + Math.random() * 80}%` }}
+                  animate={{ y: [-10, 10], opacity: [0.2, 0.6, 0.2] }}
+                  transition={{ duration: 2 + Math.random() * 2, repeat: Infinity, delay: Math.random() * 2 }}
+                />
+              ))}
             </div>
 
-            {/* Lot Info Strip */}
-            {selectedLot && (
-              <div className="grid grid-cols-4 gap-2">
-                {(
-                  isSelfSaleReauction
-                    ? [
-                      { icon: User, label: 'Trader', value: trader?.business_name || 'Trader' },
-                      { icon: Package, label: 'Lot', value: formatLotDisplayName(selectedLot) },
-                      { icon: ShoppingCart, label: 'Remaining', value: `${remaining}/${selectedLot.bag_count}${selectedLot.was_modified ? '*' : ''}` },
-                      { icon: Gavel, label: 'Prev Bids', value: String(previousSelfSaleEntries.length) },
-                    ]
-                    : [
-                      { icon: User, label: 'Seller', value: selectedLot.seller_name },
-                      { icon: Truck, label: 'Vehicle', value: selectedLot.vehicle_number },
-                      { icon: Package, label: 'Lot', value: formatLotDisplayName(selectedLot) },
-                      { icon: ShoppingCart, label: 'Bags', value: `${remaining}/${selectedLot.bag_count}${selectedLot.was_modified ? '*' : ''}` },
-                    ]
-                ).map((item) => (
-                  <div key={item.label} className="bg-white/15 backdrop-blur-md rounded-xl p-2 text-center">
-                    <item.icon className="w-3.5 h-3.5 text-white/70 mx-auto mb-0.5" />
-                    <p className="text-[9px] text-white/60 uppercase">{item.label}</p>
-                    <p className="text-[11px] font-semibold text-white truncate">{item.value}</p>
-                  </div>
-                ))}
+            <div className="relative z-10">
+              <div className="flex items-center gap-3 mb-4">
+                <button
+                  type="button"
+                  data-auction-hero-interactive
+                  onClick={(e) => { e.stopPropagation(); goBackToSelector(); }}
+                  aria-label="Go back"
+                  className="w-12 h-12 rounded-full bg-white/20 backdrop-blur flex items-center justify-center"
+                >
+                  <ArrowLeft className="w-5 h-5 text-white" />
+                </button>
+                <div className="flex-1 min-w-0 pointer-events-none">
+                  <h1 className="text-2xl font-bold text-white flex items-center gap-2 md:text-3xl">
+                    <Gavel className="w-6 h-6 shrink-0 md:w-7 md:h-7" /> Sales Pad
+                  </h1>
+                  <p className="text-sm text-white/80 md:text-base">Live auction operations</p>
+                </div>
+                {/* Lot navigation & list toggle */}
+                <div className="flex items-center gap-1" data-auction-hero-interactive onClick={(e) => e.stopPropagation()}>
+                  <button type="button" onClick={() => navigateToLot('prev')} disabled={!canGoPrev}
+                    aria-label="Previous lot" className={cn("w-9 h-9 rounded-full flex items-center justify-center transition-all",
+                      canGoPrev ? 'bg-white/20 backdrop-blur' : 'bg-white/10 opacity-40')}>
+                    <ChevronLeft className="w-4 h-4 text-white" />
+                  </button>
+                  <button type="button" onClick={() => setShowLotList(!showLotList)}
+                    aria-label="Lot list" className="w-9 h-9 rounded-full bg-white/20 backdrop-blur flex items-center justify-center">
+                    <List className="w-4 h-4 text-white" />
+                  </button>
+                  <button type="button" onClick={() => navigateToLot('next')} disabled={!canGoNext}
+                    aria-label="Next lot" className={cn("w-9 h-9 rounded-full flex items-center justify-center transition-all",
+                      canGoNext ? 'bg-white/20 backdrop-blur' : 'bg-white/10 opacity-40')}>
+                    <ChevronRight className="w-4 h-4 text-white" />
+                  </button>
+                </div>
               </div>
-            )}
 
-            {/* Lot position indicator */}
-            {selectedLot && (
-              <div className="mt-2 flex items-center justify-center gap-2">
-                <span className="text-[10px] text-white/60">Lot {currentLotIndex + 1} of {navigationLots.length}</span>
-              </div>
-            )}
+              {/* Lot Info Strip */}
+              {selectedLot && (
+                <div className="grid grid-cols-4 gap-2">
+                  {(
+                    isSelfSaleReauction
+                      ? [
+                        { icon: User, label: 'Trader', value: trader?.business_name || 'Trader' },
+                        { icon: Package, label: 'Lot', value: formatLotDisplayName(selectedLot) },
+                        { icon: ShoppingCart, label: 'Remaining', value: `${remaining}/${selectedLot.bag_count}${selectedLot.was_modified ? '*' : ''}` },
+                        { icon: Gavel, label: 'Prev Bids', value: String(previousSelfSaleEntries.length) },
+                      ]
+                      : [
+                        { icon: User, label: 'Seller', value: selectedLot.seller_name },
+                        { icon: Truck, label: 'Vehicle', value: selectedLot.vehicle_number },
+                        { icon: Package, label: 'Lot', value: formatLotDisplayName(selectedLot) },
+                        { icon: ShoppingCart, label: 'Bags', value: `${remaining}/${selectedLot.bag_count}${selectedLot.was_modified ? '*' : ''}` },
+                      ]
+                  ).map((item) => (
+                    <div key={item.label} className="bg-white/15 backdrop-blur-md rounded-xl p-2.5 text-center md:p-3">
+                      <item.icon className="w-4 h-4 text-white/80 mx-auto mb-1 md:w-[18px] md:h-[18px]" />
+                      <p className="text-[10px] text-white/75 uppercase tracking-wide md:text-[11px]">{item.label}</p>
+                      <p className="text-xs font-semibold text-white truncate md:text-sm">{item.value}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Lot position indicator */}
+              {selectedLot && (
+                <div className="mt-2 flex flex-col items-center justify-center gap-1">
+                  <span className="text-xs text-white/75 md:text-sm">Lot {currentLotIndex + 1} of {navigationLots.length}</span>
+                  <span className="flex items-center gap-1 text-[10px] font-medium uppercase tracking-wide text-white/55">
+                    <ChevronUp className="h-3.5 w-3.5" strokeWidth={2.5} />
+                    Tap to enlarge grid
+                  </span>
+                </div>
+              )}
+              {!selectedLot && (
+                <div className="mt-2 flex justify-center">
+                  <span className="flex items-center gap-1 text-[10px] font-medium uppercase tracking-wide text-white/55">
+                    <ChevronUp className="h-3.5 w-3.5" strokeWidth={2.5} />
+                    Tap to enlarge grid
+                  </span>
+                </div>
+              )}
+            </div>
           </div>
-        </div>
+        )
       )}
 
       {/* Desktop Toolbar */}
@@ -2708,7 +2990,7 @@ const AuctionsPage = () => {
                 <p className="text-xs font-semibold text-muted-foreground uppercase">Quick Lot Navigation</p>
                 <div className="relative w-40">
                   <Hash className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-muted-foreground" />
-                  <input placeholder="Lot # or 320/320/110-110" value={lotNumberSearch} onChange={e => setLotNumberSearch(e.target.value)}
+                  <input placeholder="Lot # or AB-200/SA-122/SA1/22" value={lotNumberSearch} onChange={e => setLotNumberSearch(e.target.value)}
                     className="w-full h-7 pl-7 pr-2 rounded-lg bg-muted/50 text-foreground text-xs border border-border focus:outline-none focus:border-primary/50" />
                 </div>
               </div>
@@ -2742,16 +3024,17 @@ const AuctionsPage = () => {
         )}
       </AnimatePresence>
 
-      <div className="px-4 mt-4 flex flex-col gap-3 h-auto min-h-0">
+      <div className={cn('flex flex-col h-auto min-h-0', isDesktop ? 'mt-4 gap-3 px-4' : 'mt-3 gap-2 px-0')}>
         {/* REQ-AUC-003: Preset margin (preset labels A/B/C; green = profit, red = negative). Toggle to show/hide. */}
         {isDesktop && canUsePreset && (
           <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="glass-card rounded-2xl p-3">
-            <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center justify-between gap-3 mb-2">
               <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Preset Margin</p>
-              <div className="flex items-center gap-2">
-                <span className="text-[10px] text-muted-foreground">Show</span>
-                <Switch checked={showPresetMargin} onCheckedChange={handleShowPresetMarginChange} aria-label="Show preset margin" />
-              </div>
+              <PresetMarginSwitch
+                checked={showPresetMargin}
+                onCheckedChange={handleShowPresetMarginChange}
+                aria-label="Show preset margin on bids"
+              />
             </div>
 
             {showPresetMargin && (
@@ -2848,7 +3131,7 @@ const AuctionsPage = () => {
                         aria-label="Registered buyers"
                         tabIndex={0}
                         {...makeScrollHandlers(contactScrollRef, didDragContactRef)}
-                        className="w-full max-w-full min-w-0 overflow-x-auto overflow-y-hidden flex flex-nowrap gap-2.5 py-1.5 -mx-1 px-0.5 scroll-smooth touch-pan-x select-none cursor-grab active:cursor-grabbing overscroll-x-contain"
+                        className="w-full max-w-full min-w-0 overflow-x-auto overflow-y-hidden flex flex-nowrap gap-2.5 py-1.5 -mx-1 px-0.5 scroll-smooth touch-[pan-x_pan-y] lg:touch-auto select-none cursor-grab active:cursor-grabbing overscroll-x-contain"
                         style={{
                           scrollbarWidth: 'thin',
                           WebkitOverflowScrolling: 'touch',
@@ -2869,6 +3152,7 @@ const AuctionsPage = () => {
                                 hapticSelection();
                                 hideNativeKeyboard();
                                 setSelectedBuyer(b);
+                                setContactLastUsedMs((p) => ({ ...p, [String(b.contact_id)]: Date.now() }));
                                 lastScribbleSegmentRef.current = '';
                                 setScribbleMark((b.mark || b.name.charAt(0) || '').toString());
                                 setScribblePadResetTrigger((t) => t + 1);
@@ -2900,7 +3184,7 @@ const AuctionsPage = () => {
                         aria-label="Temporary buyers"
                         tabIndex={0}
                         {...makeScrollHandlers(markScrollRef, didDragMarkRef)}
-                        className="w-full max-w-full min-w-0 overflow-x-auto overflow-y-hidden flex flex-nowrap gap-2.5 py-1.5 -mx-1 px-0.5 scroll-smooth touch-pan-x select-none cursor-grab active:cursor-grabbing overscroll-x-contain"
+                        className="w-full max-w-full min-w-0 overflow-x-auto overflow-y-hidden flex flex-nowrap gap-2.5 py-1.5 -mx-1 px-0.5 scroll-smooth touch-[pan-x_pan-y] lg:touch-auto select-none cursor-grab active:cursor-grabbing overscroll-x-contain"
                         style={{
                           scrollbarWidth: 'thin',
                           WebkitOverflowScrolling: 'touch',
@@ -2923,6 +3207,7 @@ const AuctionsPage = () => {
                                   hapticSelection();
                                   hideNativeKeyboard();
                                   setSelectedBuyer(null);
+                                  setTempMarkLastUsedMs((p) => ({ ...p, [mark]: Date.now() }));
                                   lastScribbleSegmentRef.current = '';
                                   setScribbleMark(mark);
                                   setScribblePadResetTrigger((t) => t + 1);
@@ -3097,42 +3382,132 @@ const AuctionsPage = () => {
         )}
 
         {/* Auction Grid — entries list */}
-        <motion.div ref={auctionGridSectionRef} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }} className={cn(!isDesktop && "order-2")}>
-          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">
-            Auction Grid · {entries.length} entries
-          </p>
+        <div
+          ref={auctionGridSectionRef}
+          className={cn(!isDesktop && 'w-full min-w-0')}
+          style={
+            !isDesktop
+              ? {
+                  position: 'sticky',
+                  top: mobileAuctionHeroCollapsed
+                    ? auctionCollapsedBarHeight
+                    : `${expandedHeroHeightPx}px`,
+                  zIndex: mobileAuctionHeroCollapsed ? 40 : 36,
+                }
+              : undefined
+          }
+        >
+          {/* Mobile: no y-transform — transform ancestors break sticky thead inside scroll panel */}
+          <motion.div
+            initial={isDesktop ? { opacity: 0, y: 10 } : { opacity: 0 }}
+            animate={isDesktop ? { opacity: 1, y: 0 } : { opacity: 1 }}
+            transition={{ delay: isDesktop ? 0.2 : 0.1 }}
+            className="w-full min-w-0"
+          >
+          {isDesktop && (
+            <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              Auction Grid · {entries.length} entries
+            </p>
+          )}
 
           {entries.length === 0 ? (
-            <div className="glass-card rounded-2xl p-8 text-center">
+            <div className={cn('glass-card rounded-2xl text-center', isDesktop ? 'p-8' : 'p-4')}>
               <Gavel className="w-10 h-10 text-muted-foreground/30 mx-auto mb-3" />
-              <p className="text-sm text-muted-foreground">No bids yet. Start the auction!</p>
+              <p className={cn('text-muted-foreground', isDesktop ? 'text-sm' : 'text-base')}>No bids yet. Start the auction!</p>
             </div>
           ) : (
-            <div className="glass-card rounded-2xl h-auto min-h-0 overflow-hidden">
+            <div
+              className={cn(
+                'glass-card rounded-2xl h-auto min-h-0',
+                /* Mobile: overflow-visible so sticky thead inside inner scrollport is not trapped by glass-card overflow:hidden */
+                isDesktop ? 'overflow-hidden' : '!py-0 !px-1 rounded-xl sm:rounded-2xl !overflow-visible'
+              )}
+            >
               <AuctionsGridScrollPanel
+                scrollPageIntoViewOnAutoScroll={isDesktop}
                 className={cn(
                   isDesktop
                     ? entries.length > 5
                       ? 'max-h-[min(60vh,28rem)] lg:max-h-[min(55vh,26rem)]'
                       : 'max-h-[min(65vh,32rem)] lg:max-h-[min(60vh,30rem)]'
-                    : entries.length > 5
-                      ? 'max-h-[min(42vh,17rem)] sm:max-h-[min(48vh,19rem)] md:max-h-[min(52vh,21rem)]'
-                      : 'max-h-[min(52vh,21rem)]'
+                    : cn(
+                        'scroll-pt-[3.25rem]',
+                        '!pb-[max(14rem,36svh)]',
+                        mobileAuctionHeroCollapsed
+                          ? 'max-h-[min(64vh,30rem)] md:max-h-[min(60vh,34rem)]'
+                          : 'max-h-[min(42vh,18rem)]'
+                      )
                 )}
                 contentLayoutKey={entries.length}
                 autoScrollToBottomKey={autoScrollKey}
                 gridSectionRef={auctionGridSectionRef}
               >
-                <table className={cn("w-[42rem] md:w-full text-sm sm:text-base table-fixed border-collapse", showPresetMargin ? "min-w-[480px]" : "min-w-[420px]")}>
-                  <thead className="sticky top-0 z-[3] bg-background">
-                    <tr className="border-b border-border/50 bg-muted/95 backdrop-blur">
-                      <th className={cn("font-semibold text-muted-foreground uppercase tracking-wider text-left", isDesktop ? "px-3 py-[14px] text-xs" : "px-2 py-[10px] text-[10px]")}>Mark / Buyer</th>
-                      <th className={cn("font-semibold text-muted-foreground uppercase tracking-wider text-center", isDesktop ? "px-3 py-[14px] text-xs" : "px-2 py-[10px] text-[10px]")}>Rate</th>
+                <table
+                  className={cn(
+                    'w-[42rem] md:w-full table-fixed border-collapse',
+                    isDesktop ? 'text-sm sm:text-base' : 'text-base sm:text-lg',
+                    showPresetMargin ? (isDesktop ? 'min-w-[480px]' : 'min-w-[440px]') : isDesktop ? 'min-w-[420px]' : 'min-w-[400px]'
+                  )}
+                >
+                  <thead
+                    className={cn(
+                      'sticky top-0',
+                      isDesktop ? 'z-[3]' : 'z-[42]'
+                    )}
+                  >
+                    <tr className="bg-[linear-gradient(90deg,#4B7CF3_0%,#5B8CFF_45%,#7B61FF_100%)] border-b border-white/25 shadow-[0_8px_20px_-12px_rgba(91,140,255,0.85)] transition-shadow hover:shadow-[0_14px_30px_-12px_rgba(123,97,255,0.9)]">
+                      <th
+                        className={cn(
+                          'border-r border-white/25 text-white uppercase tracking-wider last:border-r-0',
+                          isDesktop
+                            ? 'px-3 py-[14px] text-left text-xs font-semibold'
+                            : 'px-1 py-1.5 text-left text-[15px] font-bold'
+                        )}
+                      >
+                        Mark / Buyer
+                      </th>
+                      <th
+                        className={cn(
+                          'border-r border-white/25 text-white uppercase tracking-wider last:border-r-0',
+                          isDesktop
+                            ? 'px-3 py-[14px] text-center text-xs font-semibold'
+                            : 'px-1 py-1.5 text-center text-[15px] font-bold'
+                        )}
+                      >
+                        Rate
+                      </th>
                       {showPresetMargin && (
-                        <th className={cn("font-semibold text-muted-foreground uppercase tracking-wider text-center", isDesktop ? "px-3 py-[14px] text-xs" : "px-2 py-[10px] text-[10px]")}>Preset</th>
+                        <th
+                          className={cn(
+                            'border-r border-white/25 text-white uppercase tracking-wider last:border-r-0',
+                            isDesktop
+                              ? 'px-3 py-[14px] text-center text-xs font-semibold'
+                              : 'px-1 py-1.5 text-center text-[15px] font-bold'
+                          )}
+                        >
+                          Preset
+                        </th>
                       )}
-                      <th className={cn("font-semibold text-muted-foreground uppercase tracking-wider text-center", isDesktop ? "px-3 py-[14px] text-xs" : "px-2 py-[10px] text-[10px]")}>Qty</th>
-                      <th className={cn("font-semibold text-muted-foreground uppercase tracking-wider text-right", isDesktop ? "px-3 py-[14px] text-xs" : "px-2 py-[10px] text-[10px]")}>Action</th>
+                      <th
+                        className={cn(
+                          'border-r border-white/25 text-white uppercase tracking-wider last:border-r-0',
+                          isDesktop
+                            ? 'px-3 py-[14px] text-center text-xs font-semibold'
+                            : 'px-1 py-1.5 text-center text-[15px] font-bold'
+                        )}
+                      >
+                        Qty
+                      </th>
+                      <th
+                        className={cn(
+                          'text-white uppercase tracking-wider last:border-r-0',
+                          isDesktop
+                            ? 'px-3 py-[14px] text-right text-xs font-semibold'
+                            : 'px-1 py-1.5 text-center text-[15px] font-bold'
+                        )}
+                      >
+                        Action
+                      </th>
                     </tr>
                   </thead>
                   <tbody>
@@ -3151,64 +3526,106 @@ const AuctionsPage = () => {
                           }}
                           className={cn(
                             "border-b border-border/30 hover:bg-muted/20 transition-colors",
+                            !isDesktop && "scroll-mt-[3.25rem]",
                             !isDesktop && can('Auctions / Sales', 'Edit') && !editingBidId && "cursor-pointer",
                             entry.isSelfSale && "border-l-4 border-l-amber-500",
                             entry.isScribble && "border-l-4 border-l-violet-500",
                             editingBidId === entry.id && "bg-primary/5 ring-1 ring-inset ring-primary/35"
                           )}
                         >
-                          <td className={cn("px-3 py-[12px]", isDesktop ? "" : "px-2 py-[10px]")}>
-                            <div className="flex items-center gap-1.5 flex-wrap">
-                              <span className={cn("font-medium text-foreground truncate max-w-[120px]", isDesktop ? "text-base" : "text-sm")} title={entry.buyerName}>
+                          <td className={cn('px-3 py-[12px]', isDesktop ? '' : 'px-1 py-1.5')}>
+                            <div className={cn('flex items-center flex-wrap', isDesktop ? 'gap-1.5' : 'gap-1')}>
+                              <span
+                                className={cn(
+                                  'font-medium text-foreground truncate max-w-[120px]',
+                                  isDesktop ? 'text-base' : 'text-[18px]'
+                                )}
+                                title={entry.buyerName}
+                              >
                                 {normalizeScribbleBuyerName(entry.buyerName, entry.isScribble)}
                               </span>
-                              {entry.isSelfSale && <span className="px-1 py-0.5 rounded bg-amber-500/15 text-amber-600 dark:text-amber-400 text-[8px] font-bold">SELF</span>}
+                              {entry.isSelfSale && (
+                                <span
+                                  className={cn(
+                                    'px-1 py-0.5 rounded bg-amber-500/15 text-amber-600 dark:text-amber-400 font-bold',
+                                    isDesktop ? 'text-[8px]' : 'text-[12px]'
+                                  )}
+                                >
+                                  SELF
+                                </span>
+                              )}
                               {editingBidId === entry.id && (
-                                <span className="px-1 py-0.5 rounded bg-primary/20 text-primary text-[8px] font-bold">EDITING</span>
+                                <span
+                                  className={cn('px-1 py-0.5 rounded bg-primary/20 text-primary font-bold', isDesktop ? 'text-[8px]' : 'text-[12px]')}
+                                >
+                                  EDITING
+                                </span>
                               )}
                             </div>
                           </td>
-                          <td className={cn("align-middle text-center font-semibold text-foreground", isDesktop ? "px-3 py-[12px] text-base" : "px-2 py-[10px] text-sm")}>
+                          <td
+                            className={cn(
+                              'align-middle text-center font-semibold text-foreground',
+                              isDesktop ? 'px-3 py-[12px] text-base' : 'px-1 py-1.5 text-[18px]'
+                            )}
+                          >
                             <div>₹{entry.rate}</div>
                           </td>
                           {showPresetMargin && (
                             <td
                               className={cn(
-                                "align-middle text-center font-medium tabular-nums",
-                                isDesktop ? "px-3 py-[12px] text-base" : "px-2 py-[10px] text-sm",
-                                entry.presetApplied > 0 && "text-success",
-                                entry.presetApplied < 0 && "text-destructive"
+                                'align-middle text-center font-medium tabular-nums',
+                                isDesktop ? 'px-3 py-[12px] text-base' : 'px-1 py-1.5 text-[18px]',
+                                entry.presetApplied > 0 && 'text-success',
+                                entry.presetApplied < 0 && 'text-destructive'
                               )}
                             >
                               {formatPresetMarginCell(entry.presetApplied)}
                             </td>
                           )}
-                          <td className={cn("align-middle text-center text-muted-foreground", isDesktop ? "px-3 py-[12px] text-base" : "px-2 py-[10px] text-sm")}>
+                          <td
+                            className={cn(
+                              'align-middle text-center text-muted-foreground',
+                              isDesktop ? 'px-3 py-[12px] text-base' : 'px-1 py-1.5 text-[18px]'
+                            )}
+                          >
                             {entry.quantity}
                           </td>
-                          <td className={cn("text-right", isDesktop ? "px-3 py-[12px]" : "px-2 py-[10px]")}>
-                            <div className="flex items-center justify-end gap-1.5" onClick={(e) => e.stopPropagation()}>
+                          <td className={cn(isDesktop ? 'px-3 py-[12px] text-right' : 'px-1 py-1.5 text-center')}>
+                            <div
+                              className={cn(
+                                'flex items-center',
+                                isDesktop ? 'justify-end gap-1.5' : 'justify-center gap-1'
+                              )}
+                              onClick={(e) => e.stopPropagation()}
+                            >
                               <button
                                 type="button"
                                 disabled={!!editingBidId}
                                 onClick={() => setShowTokenInput(showTokenInput === entry.id ? null : entry.id)}
                                 className={cn(
-                                  "p-1.5 rounded-md transition-colors disabled:opacity-40",
-                                  entry.tokenAdvance > 0 ? "bg-success/15 text-success" : "bg-muted/50 text-muted-foreground hover:text-foreground"
+                                  'rounded-md transition-colors disabled:opacity-40',
+                                  isDesktop ? 'p-1.5' : 'p-2.5',
+                                  entry.tokenAdvance > 0 ? 'bg-success/15 text-success' : 'bg-muted/50 text-muted-foreground hover:text-foreground'
                                 )}
                                 title="Token advance"
                               >
-                                <Banknote className={cn(isDesktop ? "w-4 h-4" : "w-3.5 h-3.5")} />
+                                <Banknote className={cn(isDesktop ? 'h-4 w-4' : 'h-[22px] w-[22px]')} />
                               </button>
-                              <button
-                                onClick={() => setPendingDeleteBid({ id: entry.id, label: `${entry.buyerName} (${entry.buyerMark})` })}
-                                type="button"
-                                disabled={!!editingBidId}
-                                className="p-1.5 rounded-md bg-destructive/10 text-destructive hover:bg-destructive/20 disabled:opacity-40"
-                                title="Delete bid"
-                              >
-                                <Trash2 className={cn(isDesktop ? "w-4 h-4" : "w-3.5 h-3.5")} />
-                              </button>
+                              {isDesktop && (
+                                <button
+                                  onClick={() => setPendingDeleteBid({ id: entry.id, label: `${entry.buyerName} (${entry.buyerMark})` })}
+                                  type="button"
+                                  disabled={!!editingBidId}
+                                  className={cn(
+                                    'rounded-md bg-destructive/10 text-destructive hover:bg-destructive/20 disabled:opacity-40',
+                                    'p-1.5'
+                                  )}
+                                  title="Delete bid"
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </button>
+                              )}
                               {isDesktop && can('Auctions / Sales', 'Edit') && (
                                 <button
                                   type="button"
@@ -3226,24 +3643,41 @@ const AuctionsPage = () => {
                         <AnimatePresence>
                           {showTokenInput === entry.id && !editingBidId && (
                             <motion.tr
+                              data-auction-token-panel={entry.id}
                               initial={{ opacity: 0 }}
                               animate={{ opacity: 1 }}
                               exit={{ opacity: 0 }}
                               transition={{ duration: 0.15 }}
                               className="border-b border-border/30 bg-muted/10"
                             >
-                              <td colSpan={showPresetMargin ? 5 : 4} className={cn("px-3 py-[12px]", isDesktop ? "" : "px-2 py-[10px]")}>
-                                <div className="flex items-center gap-2">
-                                  <span className="text-[10px] text-muted-foreground whitespace-nowrap">Token ₹</span>
+                              <td colSpan={showPresetMargin ? 5 : 4} className={cn('px-3 py-[12px]', isDesktop ? '' : 'px-1 py-1.5')}>
+                                <div className={cn('flex min-w-0 items-center', isDesktop ? 'gap-2' : 'w-full gap-1.5')}>
+                                  <span
+                                    className={cn(
+                                      'shrink-0 text-muted-foreground whitespace-nowrap',
+                                      isDesktop ? 'text-[10px]' : 'text-sm'
+                                    )}
+                                  >
+                                    Token ₹
+                                  </span>
                                   <Input
                                     type="number"
                                     defaultValue={entry.tokenAdvance || ""}
                                     placeholder="0"
-                                    className={cn("rounded-lg text-center flex-1", isDesktop ? "h-8 text-xs" : "h-7 text-xs")}
+                                    className={cn(
+                                      'text-center',
+                                      isDesktop
+                                        ? 'h-8 flex-1 rounded-lg text-xs'
+                                        : 'h-11 min-h-11 w-full min-w-0 flex-1 rounded-md border-2 border-input px-2 py-0 text-sm leading-tight focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-0'
+                                    )}
                                     onBlur={e => setTokenAdvanceAmount(entry.id, parseInt(e.target.value) || 0)}
                                     onKeyDown={e => { if (e.key === "Enter") setTokenAdvanceAmount(entry.id, parseInt((e.target as HTMLInputElement).value) || 0); }}
                                   />
-                                  {entry.tokenAdvance > 0 && <span className="text-[10px] text-success font-semibold">✓ ₹{entry.tokenAdvance}</span>}
+                                  {entry.tokenAdvance > 0 && (
+                                    <span className={cn('shrink-0 text-success font-semibold', isDesktop ? 'text-[10px]' : 'text-sm')}>
+                                      ✓ ₹{entry.tokenAdvance}
+                                    </span>
+                                  )}
                                 </div>
                               </td>
                             </motion.tr>
@@ -3253,15 +3687,18 @@ const AuctionsPage = () => {
                     ))}
                   </tbody>
                 </table>
+                {/* Extra vertical slack so last tbody rows can scroll fully below sticky thead (not visually under gradient header). */}
+                {!isDesktop && <div className="pointer-events-none h-16 shrink-0 md:h-0" aria-hidden />}
               </AuctionsGridScrollPanel>
             </div>
           )}
-        </motion.div>
+          </motion.div>
+        </div>
 
-        {/* Remaining indicator */}
-        {entries.length > 0 && selectedLot && (
-          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className={cn("glass-card rounded-2xl p-3", !isDesktop && "order-1")}>
-            <div className="flex items-center justify-between text-sm mb-2">
+        {/* Remaining indicator (desktop only; mobile/tablet use lot header strip for bags) */}
+        {entries.length > 0 && selectedLot && isDesktop && (
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="glass-card rounded-2xl p-3">
+            <div className={cn("flex items-center justify-between mb-2", isDesktop ? "text-sm" : "text-base")}>
               <span className="text-muted-foreground">Sold</span>
               <span className="font-bold text-foreground">
                 {totalSold} / {selectedLot.bag_count}{selectedLot.was_modified ? '*' : ''} bags
@@ -3276,7 +3713,9 @@ const AuctionsPage = () => {
             </div>
             {remaining > 0 && (
               <>
-                <p className="text-[10px] text-muted-foreground mt-1">{remaining} bags remaining</p>
+                <p className={cn("text-muted-foreground mt-1", isDesktop ? "text-[10px]" : "text-xs")}>
+                  {remaining} bags remaining
+                </p>
                 {isDesktop && (
                   <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-stretch">
                     <Button
@@ -3300,7 +3739,9 @@ const AuctionsPage = () => {
             )}
             {remaining <= 0 && (
               <>
-                <p className="text-[10px] text-success font-semibold mt-1">✓ All bags sold!</p>
+                <p className={cn("text-success font-semibold mt-1", isDesktop ? "text-[10px]" : "text-xs")}>
+                  ✓ All bags sold!
+                </p>
                 {isDesktop && (
                   <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-stretch">
                     <Button
@@ -3330,8 +3771,8 @@ const AuctionsPage = () => {
 
       {/* Mobile/Tablet Dock: compact layout, preset below rate/qty. */}
       {!isDesktop && (
-        <div className="fixed inset-x-0 bottom-0 z-40 border-t border-border/50 bg-background/95 backdrop-blur-xl px-2 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
-          <div className="space-y-2 mb-1.5">
+        <div className="fixed inset-x-0 bottom-0 z-40 border-t border-border/50 bg-background/95 backdrop-blur-xl px-1 pt-1.5 pb-[max(0.5rem,env(safe-area-inset-bottom))] sm:px-2">
+          <div className="space-y-1 mb-1">
             <div>
               <div
                 ref={contactScrollRef}
@@ -3339,7 +3780,7 @@ const AuctionsPage = () => {
                 aria-label="Registered buyers"
                 tabIndex={0}
                 {...makeScrollHandlers(contactScrollRef, didDragContactRef)}
-                className="overflow-x-auto overflow-y-hidden flex gap-1.5 py-0.5 -mx-1 px-0.5 scroll-smooth touch-pan-x select-none cursor-grab active:cursor-grabbing overscroll-x-contain"
+                className="flex w-full gap-1.5 overflow-x-auto overflow-y-hidden px-0 py-0 scroll-smooth touch-[pan-x_pan-y] lg:touch-auto select-none cursor-grab active:cursor-grabbing overscroll-x-contain"
                 style={{ scrollbarWidth: 'thin', WebkitOverflowScrolling: 'touch', overscrollBehaviorX: 'contain' }}
               >
                 {filteredContacts.length > 0 ? (
@@ -3353,23 +3794,24 @@ const AuctionsPage = () => {
                         hapticSelection();
                         hideNativeKeyboard();
                         setSelectedBuyer(b);
+                        setContactLastUsedMs((p) => ({ ...p, [String(b.contact_id)]: Date.now() }));
                         lastScribbleSegmentRef.current = '';
                         setScribbleMark((b.mark || b.name.charAt(0) || '').toString());
                         setScribblePadResetTrigger((t) => t + 1);
                       }}
-                      className={cn(
-                        'flex-shrink-0 px-2.5 py-1.5 rounded-lg text-left transition-all border border-l-4 border-l-emerald-500 flex items-center gap-1 min-h-[40px]',
+                        className={cn(
+                        'flex-shrink-0 px-3 py-1.5 rounded-md text-left transition-all border border-l-4 border-l-emerald-500 flex items-center gap-1 min-h-[40px]',
                         selectedBuyer?.contact_id === b.contact_id
                           ? 'bg-primary text-primary-foreground border-primary shadow-md border-l-primary'
                           : 'bg-muted/40 border-border/50 hover:bg-muted/60'
                       )}
                     >
-                      <span className="text-xs font-semibold truncate max-w-[78px] sm:max-w-[90px]">{b.name}</span>
-                      {b.mark && <span className="text-[10px] opacity-90 flex-shrink-0">({b.mark})</span>}
+                      <span className="text-[15px] font-semibold truncate max-w-[78px] sm:max-w-[90px]">{b.name}</span>
+                      {b.mark && <span className="text-[13px] opacity-90 flex-shrink-0">({b.mark})</span>}
                     </button>
                   ))
                 ) : (
-                  <div className="flex-shrink-0 px-3 py-2 rounded-lg border border-l-4 border-l-emerald-500 border-dashed bg-emerald-500/5 text-emerald-700 dark:text-emerald-400 text-xs font-medium">
+                  <div className="flex-shrink-0 px-3 py-2 rounded-md border border-l-4 border-l-emerald-500 border-dashed bg-emerald-500/5 text-emerald-700 dark:text-emerald-400 text-[15px] font-medium">
                     No matching contact
                   </div>
                 )}
@@ -3382,7 +3824,7 @@ const AuctionsPage = () => {
                 aria-label="Temporary buyers"
                 tabIndex={0}
                 {...makeScrollHandlers(markScrollRef, didDragMarkRef)}
-                className="overflow-x-auto overflow-y-hidden flex gap-1.5 py-0.5 -mx-1 px-0.5 scroll-smooth touch-pan-x select-none cursor-grab active:cursor-grabbing overscroll-x-contain"
+                className="flex w-full gap-1.5 overflow-x-auto overflow-y-hidden px-0 py-0 scroll-smooth touch-[pan-x_pan-y] lg:touch-auto select-none cursor-grab active:cursor-grabbing overscroll-x-contain"
                 style={{ scrollbarWidth: 'thin', WebkitOverflowScrolling: 'touch', overscrollBehaviorX: 'contain' }}
               >
                 {filteredTemporaryMarks.length > 0 ? (
@@ -3398,30 +3840,31 @@ const AuctionsPage = () => {
                           hapticSelection();
                           hideNativeKeyboard();
                           setSelectedBuyer(null);
+                          setTempMarkLastUsedMs((p) => ({ ...p, [mark]: Date.now() }));
                           lastScribbleSegmentRef.current = '';
                           setScribbleMark(mark);
                           setScribblePadResetTrigger((t) => t + 1);
                         }}
                         className={cn(
-                          'flex-shrink-0 px-2.5 py-1.5 rounded-lg text-left transition-all border border-l-4 border-l-violet-500 flex items-center min-h-[40px]',
+                          'flex-shrink-0 px-3 py-1.5 rounded-md text-left transition-all border border-l-4 border-l-violet-500 flex items-center min-h-[40px]',
                           isSelected ? 'bg-primary text-primary-foreground border-primary shadow-md border-l-primary' : 'bg-muted/40 border-border/50 hover:bg-muted/60'
                         )}
                       >
-                        <span className="text-xs font-semibold truncate max-w-[72px]">{mark}</span>
+                        <span className="text-[15px] font-semibold truncate max-w-[72px]">{mark}</span>
                       </button>
                     );
                   })
                 ) : (
-                  <div className="flex-shrink-0 px-3 py-2 rounded-lg border border-l-4 border-l-violet-400 border-dashed bg-violet-500/5 text-violet-700 dark:text-violet-300 text-xs font-medium">
+                  <div className="flex-shrink-0 px-3 py-2 rounded-md border border-l-4 border-l-violet-400 border-dashed bg-violet-500/5 text-violet-700 dark:text-violet-300 text-[15px] font-medium">
                     No temporary marks yet today
                   </div>
                 )}
               </div>
             </div>
           </div>
-          <div className="flex gap-1.5 mb-1 min-w-0">
+          <div className="flex gap-1.5 mb-0.5 min-w-0">
             <div className="min-w-0 flex-1">
-              <label htmlFor="sales-pad-rate-mobile" className="text-[9px] font-semibold text-muted-foreground uppercase tracking-wide mb-0.5 block truncate">
+              <label htmlFor="sales-pad-rate-mobile" className="text-[13px] font-semibold text-muted-foreground uppercase tracking-wide mb-0 block truncate text-center leading-tight">
                 Rate ₹
               </label>
               <Input
@@ -3451,13 +3894,13 @@ const AuctionsPage = () => {
                 placeholder="0"
                 aria-label="Bid rate in rupees"
                 className={cn(
-                  "h-9 rounded-lg text-center font-bold text-[11px] sm:text-sm bg-muted/20 border-primary/20 min-w-0",
-                  activeNumpadField === 'rate' && "ring-2 ring-primary border-primary shadow-[0_0_0_2px_hsl(var(--primary))]"
+                  'h-11 min-h-[44px] rounded-md border-2 border-primary/45 bg-muted/25 text-center text-[15px] font-bold min-w-0 py-1 leading-none sm:text-[18px]',
+                  activeNumpadField === 'rate' && 'border-primary ring-2 ring-primary shadow-[0_0_0_2px_hsl(var(--primary))]'
                 )}
               />
             </div>
             <div className="min-w-0 flex-[1.15]">
-              <label htmlFor="sales-pad-mark-mobile" className="text-[9px] font-semibold text-muted-foreground uppercase tracking-wide mb-0.5 block truncate text-center">
+              <label htmlFor="sales-pad-mark-mobile" className="text-[13px] font-semibold text-muted-foreground uppercase tracking-wide mb-0 block truncate text-center leading-tight">
                 Mark
               </label>
               <Input
@@ -3493,12 +3936,19 @@ const AuctionsPage = () => {
                 onFocus={() => { setActiveNumpadField('mark'); hideNativeKeyboard(); }}
                 placeholder="Search…"
                 aria-label="Search mark or name"
-                className="h-9 rounded-lg text-[11px] sm:text-xs font-medium text-center bg-muted/20 border-violet-400/20 px-2 min-w-0"
+                className={cn(
+                  'h-11 min-h-[44px] rounded-md border-2 border-violet-500/45 bg-muted/25 px-2 py-1 text-center text-[15px] font-medium min-w-0 leading-none sm:text-[16px]',
+                  activeNumpadField === 'mark' && 'border-violet-600 ring-2 ring-violet-500/60'
+                )}
               />
             </div>
             <div className="min-w-0 flex-1">
-              <label htmlFor="sales-pad-qty-mobile" className="text-[9px] font-semibold text-muted-foreground uppercase tracking-wide mb-0.5 block truncate">
-                Qty
+              <label
+                htmlFor="sales-pad-qty-mobile"
+                className="mb-0 block truncate text-center text-[13px] font-semibold uppercase tracking-wide text-muted-foreground leading-tight"
+                title={`Quantity · ${remaining} bags remaining in lot`}
+              >
+                QTY / <span className="font-black tabular-nums text-foreground">{remaining}</span>
               </label>
               <Input
                 id="sales-pad-qty-mobile"
@@ -3521,67 +3971,81 @@ const AuctionsPage = () => {
                 readOnly={!mobileKeyboardEnabled}
                 inputMode={!mobileKeyboardEnabled ? 'none' : 'numeric'}
                 placeholder="0"
-                aria-label="Quantity in bags"
+                aria-label={`Quantity in bags, ${remaining} bags remaining in lot`}
                 className={cn(
-                  "h-9 rounded-lg text-center font-bold text-[11px] sm:text-sm bg-muted/20 border-primary/20 min-w-0",
-                  activeNumpadField === 'qty' && "ring-2 ring-primary border-primary shadow-[0_0_0_2px_hsl(var(--primary))]"
+                  'h-11 min-h-[44px] rounded-md border-2 border-primary/45 bg-muted/25 text-center text-[15px] font-bold min-w-0 py-1 leading-none sm:text-[18px]',
+                  activeNumpadField === 'qty' && 'border-primary ring-2 ring-primary shadow-[0_0_0_2px_hsl(var(--primary))]'
                 )}
               />
             </div>
           </div>
-          {/* Preset margin: compact row below rate/qty */}
           {canUsePreset && (
-            <div className="flex items-center justify-between gap-2 mb-1 py-0.5">
-              <span className="text-[9px] font-semibold text-muted-foreground uppercase">Preset</span>
-              <div className="flex items-center gap-1.5">
-                <span className="text-[9px] text-muted-foreground">Show</span>
-                <Switch checked={showPresetMargin} onCheckedChange={handleShowPresetMarginChange} aria-label="Show preset margin" className="scale-75 origin-right" />
+            <div className="mb-0.5 flex min-h-[38px] items-center gap-2">
+              <div
+                className="min-w-0 flex-1 overflow-x-auto overflow-y-hidden no-scrollbar overscroll-x-contain scroll-smooth touch-[pan-x_pan-y]"
+                style={{ WebkitOverflowScrolling: 'touch' }}
+              >
+                <div className="inline-flex max-w-none flex-nowrap items-stretch gap-1.5">
+                  {showPresetMargin && presetOptions.length > 0 && (
+                    <>
+                      {presetOptions.map((opt) => (
+                        <button
+                          key={opt.label + String(opt.value)}
+                          type="button"
+                          onClick={() => applyPreset(opt.value)}
+                          className={cn(
+                            'shrink-0 whitespace-nowrap rounded-lg px-3 py-2 text-xs font-bold transition-all min-h-[38px] sm:min-h-[40px] sm:py-2.5 sm:text-sm',
+                            preset === opt.value
+                              ? opt.value >= 0
+                                ? 'bg-gradient-to-r from-emerald-500 to-green-500 text-white'
+                                : 'bg-gradient-to-r from-red-500 to-rose-500 text-white'
+                              : 'bg-muted/40 text-muted-foreground hover:bg-muted/60',
+                            preset !== opt.value && opt.value >= 0 && 'text-success',
+                            preset !== opt.value && opt.value < 0 && 'text-destructive'
+                          )}
+                        >
+                          {opt.label}
+                        </button>
+                      ))}
+                      {preset !== 0 && presetOptions.some((o) => o.value === preset) && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const hit = presetOptions.find((o) => o.value === preset);
+                            if (hit) applyPreset(hit.value);
+                          }}
+                          className="flex size-9 min-h-[38px] shrink-0 items-center justify-center rounded-lg border border-border/60 bg-muted/50 text-muted-foreground hover:bg-muted sm:size-10 sm:min-h-[40px]"
+                          aria-label="Clear preset margin"
+                          title="Reset margin"
+                        >
+                          <RotateCcw className="h-4 w-4" strokeWidth={2.5} />
+                        </button>
+                      )}
+                    </>
+                  )}
+                </div>
+              </div>
+              <div className="flex shrink-0 items-center self-center">
+                <PresetMarginSwitch
+                  checked={showPresetMargin}
+                  onCheckedChange={handleShowPresetMarginChange}
+                  aria-label="Show preset margin on bids"
+                />
               </div>
             </div>
           )}
-          {canUsePreset && showPresetMargin && (
-            presetOptions.length > 0 ? (
-              <div className="flex items-center gap-1 mb-1">
-                {presetOptions.map((opt) => (
-                  <button
-                    key={opt.label + String(opt.value)}
-                    type="button"
-                    onClick={() => applyPreset(opt.value)}
-                    className={cn(
-                      'flex-1 py-1.5 rounded-lg text-[11px] font-bold transition-all',
-                      preset === opt.value
-                        ? opt.value >= 0
-                          ? 'bg-gradient-to-r from-emerald-500 to-green-500 text-white'
-                          : 'bg-gradient-to-r from-red-500 to-rose-500 text-white'
-                        : 'bg-muted/40 text-muted-foreground hover:bg-muted/60',
-                      preset !== opt.value && opt.value >= 0 && 'text-success',
-                      preset !== opt.value && opt.value < 0 && 'text-destructive'
-                    )}
-                  >
-                    {opt.label}
-                  </button>
-                ))}
-              </div>
-            ) : (
-              <p className="text-[10px] text-muted-foreground rounded-md border border-dashed border-border px-2 py-1 mb-1">
-                Preset is not set. Please configure it in Preset Settings.
-              </p>
-            )
-          )}
           <div className="grid grid-cols-[1.4fr_1fr] gap-1.5 items-stretch">
-            <div className="rounded-xl border border-violet-400/20 bg-card/80 p-1.5 h-full min-h-[15rem] flex flex-col gap-1">
-              <p className="text-[10px] sm:text-xs font-semibold uppercase tracking-wide text-muted-foreground px-0.5 shrink-0">
-                Scribble pad
-              </p>
+            <div className="rounded-xl border border-violet-400/20 bg-card/80 p-1.5 h-full min-h-[21rem] md:min-h-[32rem] flex flex-col gap-1">
+              <span className="sr-only">Scribble pad</span>
               <div className="flex-1 min-h-0">
                 <InlineScribblePad
                   appendMode
                   onMarkDetected={handleScribbleSegmentDetected}
-                  canvasHeight={240}
+                  canvasHeight={300}
                   resetTrigger={scribblePadResetTrigger}
                   showStatus={false}
                   fillAvailableHeight
-                  className="h-full"
+                  className="h-full md:min-h-[28rem]"
                 />
               </div>
             </div>
@@ -3592,7 +4056,7 @@ const AuctionsPage = () => {
                     key={k}
                     type="button"
                     onClick={() => handleNumpadKey(k)}
-                    className="h-11 rounded-xl bg-muted/60 hover:bg-muted text-sm font-bold text-foreground transition-colors"
+                    className="h-[54px] rounded-none bg-muted/60 hover:bg-muted text-[18px] font-bold text-foreground transition-colors md:h-[76px] md:text-[20px]"
                   >
                     {k}
                   </button>
@@ -3603,7 +4067,7 @@ const AuctionsPage = () => {
                 <button
                   type="button"
                   onClick={handleNumpadBackspace}
-                  className="h-10 rounded-lg bg-muted/60 hover:bg-muted text-foreground text-xs font-semibold inline-flex items-center justify-center disabled:opacity-50"
+                  className="h-[50px] rounded-none bg-muted/60 hover:bg-muted text-foreground text-[16px] font-semibold inline-flex items-center justify-center disabled:opacity-50 md:h-[66px] md:text-[17px]"
                   aria-label="Backspace (remove last character)"
                   title="Back"
                 >
@@ -3612,7 +4076,7 @@ const AuctionsPage = () => {
                 <button
                   type="button"
                   onClick={handleNumpadClear}
-                  className="h-10 col-span-2 rounded-lg bg-muted/60 hover:bg-muted text-[11px] font-bold text-foreground disabled:opacity-50 uppercase tracking-wide"
+                  className="h-[50px] col-span-2 rounded-none bg-muted/60 hover:bg-muted text-[15px] font-bold text-foreground disabled:opacity-50 uppercase tracking-wide md:h-[66px] md:text-[16px]"
                   aria-label="Clear current bid draft fields"
                   title="Clear"
                 >
@@ -3620,32 +4084,49 @@ const AuctionsPage = () => {
                 </button>
               </div>
 
-              {/* ( ... ) / Self row */}
-              <div className={cn('grid gap-1', isSelfSaleReauction || (editingBidId && editBidDraft) ? 'grid-cols-1' : 'grid-cols-2')}>
+              {/* ( ... ) / Self or Delete (mobile: delete moved out of grid while editing) */}
+              <div className={cn('grid gap-1', isSelfSaleReauction ? 'grid-cols-1' : 'grid-cols-2')}>
                 <button
                   type="button"
                   onMouseDown={(e) => e.preventDefault()}
                   onClick={appendMarkParenFromNumpad}
                   disabled={!!editingBidId}
-                  className="h-10 rounded-lg bg-violet-500/15 text-violet-800 dark:text-violet-200 border border-violet-500/35 text-[11px] font-bold"
+                  className="h-[50px] rounded-none bg-violet-500/15 text-violet-800 dark:text-violet-200 border border-violet-500/35 text-[15px] font-bold md:h-[66px] md:text-[16px]"
                   title="Add ( or ) to mark"
                   aria-label="Add opening or closing parenthesis to mark"
                 >
                   (...)
                 </button>
 
-                {!isSelfSaleReauction && !(editingBidId && editBidDraft) && (
-                  <button
-                    type="button"
-                    onClick={handleSelfSale}
-                    disabled={remaining <= 0}
-                    className="h-10 rounded-lg bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/30 text-[11px] font-bold disabled:opacity-50"
-                    aria-label="Self Sale"
-                    title="Self Sale"
-                  >
-                    Self
-                  </button>
-                )}
+                {!isSelfSaleReauction &&
+                  (editingBidId && editBidDraft && editingEntry ? (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setPendingDeleteBid({
+                          id: editingEntry.id,
+                          label: `${editingEntry.buyerName} (${editingEntry.buyerMark})`,
+                        })
+                      }
+                      disabled={completeLoading || !can('Auctions / Sales', 'Delete')}
+                      className="h-[50px] rounded-none border border-destructive/35 bg-destructive/10 text-[15px] font-bold text-destructive hover:bg-destructive/20 disabled:opacity-50 md:h-[66px] md:text-[16px]"
+                      aria-label="Delete bid"
+                      title="Delete bid"
+                    >
+                      Delete
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={handleSelfSale}
+                      disabled={remaining <= 0}
+                      className="h-[50px] rounded-none bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/30 text-[15px] font-bold disabled:opacity-50 md:h-[66px] md:text-[16px]"
+                      aria-label="Self Sale"
+                      title="Self Sale"
+                    >
+                      Self
+                    </button>
+                  ))}
               </div>
 
               {editingBidId && editBidDraft ? (
@@ -3655,14 +4136,14 @@ const AuctionsPage = () => {
                       type="button"
                       onClick={() => { if (editingEntry) void saveEditBid(editingEntry); }}
                       disabled={!editingEntry || !rate || !qty || parseInt(qty) <= 0 || parseInt(rate) <= 0}
-                      className="h-10 rounded-xl bg-gradient-to-r from-violet-500 to-fuchsia-500 text-white text-[11px] font-bold disabled:opacity-50"
+                      className="h-[50px] rounded-none bg-gradient-to-r from-violet-500 to-fuchsia-500 text-white text-[15px] font-bold disabled:opacity-50 md:h-[66px] md:text-[16px]"
                     >
                       Update Bid
                     </button>
                     <button
                       type="button"
                       onClick={cancelEditBid}
-                      className="h-10 rounded-xl bg-muted/60 text-foreground border border-border/50 text-[11px] font-bold"
+                      className="h-[50px] rounded-none bg-muted/60 text-foreground border border-border/50 text-[15px] font-bold md:h-[66px] md:text-[16px]"
                     >
                       Cancel
                     </button>
@@ -3672,7 +4153,7 @@ const AuctionsPage = () => {
                       type="button"
                       disabled={completeLoading || entries.length === 0}
                       onClick={handleSaveAndCompleteAuction}
-                      className="h-11 rounded-xl bg-gradient-to-r from-emerald-500 to-green-500 text-white text-[12px] font-bold disabled:opacity-50 px-1 leading-tight"
+                      className="h-[54px] rounded-none bg-gradient-to-r from-emerald-500 to-green-500 text-white text-[16px] font-bold disabled:opacity-50 px-1 leading-tight md:h-[72px] md:text-[17px]"
                     >
                       {completeLoading ? 'Completing…' : 'Save & Close'}
                     </button>
@@ -3684,7 +4165,7 @@ const AuctionsPage = () => {
                     type="button"
                     onClick={handleUnifiedAdd}
                     disabled={(!scribbleMark.trim() && !selectedBuyer) || !rate || !qty || parseInt(qty) <= 0 || parseInt(rate) <= 0}
-                    className="h-11 rounded-xl bg-gradient-to-r from-violet-500 to-fuchsia-500 text-white text-[12px] font-bold disabled:opacity-50 px-1 leading-tight"
+                    className="h-[54px] rounded-none bg-gradient-to-r from-violet-500 to-fuchsia-500 text-white text-[16px] font-bold disabled:opacity-50 px-1 leading-tight md:h-[72px] md:text-[17px]"
                   >
                     + Add Bid
                   </button>
@@ -3692,7 +4173,7 @@ const AuctionsPage = () => {
                   type="button"
                   disabled={completeLoading || entries.length === 0}
                   onClick={handleSaveAndCompleteAuction}
-                  className="h-11 rounded-xl bg-gradient-to-r from-emerald-500 to-green-500 text-white text-[12px] font-bold disabled:opacity-50 px-1 leading-tight"
+                  className="h-[54px] rounded-none bg-gradient-to-r from-emerald-500 to-green-500 text-white text-[16px] font-bold disabled:opacity-50 px-1 leading-tight md:h-[72px] md:text-[17px]"
                 >
                   {completeLoading ? 'Completing…' : 'Save & Close'}
                 </button>
@@ -3809,10 +4290,34 @@ const AuctionsPage = () => {
   );
 };
 
+/** Lot list column: pending (unsold) / sold — not sold/total. */
+function getLotListPendingSold(lot: LotInfo): { pending: number; sold: number } {
+  if (lot.selfSaleUnitId != null) {
+    const pending = Math.max(0, lot.remainingQty ?? lot.bag_count ?? 0);
+    const unitTotal = lot.selfSaleQty ?? lot.original_bag_count ?? 0;
+    const sold = lot.sold_bags ?? Math.max(0, unitTotal - pending);
+    return { pending, sold: Math.max(0, sold) };
+  }
+  const total = Math.max(0, lot.bag_count ?? 0);
+  const sold = Math.max(0, lot.sold_bags ?? 0);
+  return { pending: Math.max(0, total - sold), sold };
+}
+
+function sumLotsPendingSold(lots: LotInfo[]): { pending: number; sold: number } {
+  return lots.reduce(
+    (acc, lot) => {
+      const { pending, sold } = getLotListPendingSold(lot);
+      return { pending: acc.pending + pending, sold: acc.sold + sold };
+    },
+    { pending: 0, sold: 0 }
+  );
+}
+
 // ── Lot Row Component with Status Badge ──────────────────
 const LotRow = ({ lot, onSelect, statusFilter }: { lot: LotInfo; onSelect: (lot: LotInfo) => void; statusFilter: LotStatus | 'all' }) => {
   const status = getRowLotStatus(lot, statusFilter);
   const cfg = STATUS_CONFIG[status];
+  const { pending, sold } = getLotListPendingSold(lot);
 
   return (
     <button onClick={() => onSelect(lot)}
@@ -3835,9 +4340,9 @@ const LotRow = ({ lot, onSelect, statusFilter }: { lot: LotInfo; onSelect: (lot:
           {lot.commodity_name}
         </p>
       </div>
-      <div className="text-right flex-shrink-0">
-        <p className="text-sm font-bold text-foreground">{lot.bag_count}</p>
-        <p className="text-[10px] text-muted-foreground">bags</p>
+      <div className="text-right flex-shrink-0 tabular-nums">
+        <p className="text-sm font-bold text-foreground">{pending}/{sold}</p>
+        <p className="text-[10px] text-muted-foreground">pending / sold</p>
       </div>
     </button>
   );

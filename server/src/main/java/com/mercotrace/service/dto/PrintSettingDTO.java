@@ -1,11 +1,15 @@
 package com.mercotrace.service.dto;
 
-import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.databind.PropertyNamingStrategies;
+import com.fasterxml.jackson.databind.annotation.JsonNaming;
+import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 
+/** JSON uses snake_case for all properties (matches trader React API conventions). */
+@JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
 public class PrintSettingDTO {
 
     private Long id;
@@ -13,20 +17,21 @@ public class PrintSettingDTO {
     @NotBlank
     @Size(max = 50)
     @Pattern(regexp = "^[A-Z_]+$")
-    @JsonProperty("module_key")
     private String moduleKey;
 
     @Pattern(regexp = "^(A4|A5)$")
-    @JsonProperty("paper_size_with_header")
     private String paperSizeWithHeader;
 
     @Pattern(regexp = "^(A4|A5)$")
-    @JsonProperty("paper_size_without_header")
     private String paperSizeWithoutHeader;
 
     @NotNull
-    @JsonProperty("include_header")
     private Boolean includeHeader;
+
+    @Min(1)
+    private Integer billNumberStartFrom;
+
+    private String printCopiesJson;
 
     public Long getId() {
         return id;
@@ -66,5 +71,21 @@ public class PrintSettingDTO {
 
     public void setIncludeHeader(Boolean includeHeader) {
         this.includeHeader = includeHeader;
+    }
+
+    public Integer getBillNumberStartFrom() {
+        return billNumberStartFrom;
+    }
+
+    public void setBillNumberStartFrom(Integer billNumberStartFrom) {
+        this.billNumberStartFrom = billNumberStartFrom;
+    }
+
+    public String getPrintCopiesJson() {
+        return printCopiesJson;
+    }
+
+    public void setPrintCopiesJson(String printCopiesJson) {
+        this.printCopiesJson = printCopiesJson;
     }
 }

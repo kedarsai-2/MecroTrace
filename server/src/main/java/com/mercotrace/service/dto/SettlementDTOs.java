@@ -200,6 +200,12 @@ public final class SettlementDTOs {
         private String buyerName;
         /** Auction floor bid (base) per bag — same as completed-auction result rate. */
         private BigDecimal rate;
+        /**
+         * Vehicle-ops / Summary new seller rate per bag (final amount; includes pad preset). Modified settlement must not add {@link #presetMargin} again.
+         * When absent, clients may fall back to {@link #rate} or bid+preset.
+         */
+        @JsonProperty("summarySellerRate")
+        private BigDecimal summarySellerRate;
         /** Signed preset margin from auction; effective seller rate for settlement = rate + presetMargin. */
         @JsonProperty("presetMargin")
         private BigDecimal presetMargin;
@@ -214,6 +220,8 @@ public final class SettlementDTOs {
         public void setBuyerName(String buyerName) { this.buyerName = buyerName; }
         public BigDecimal getRate() { return rate; }
         public void setRate(BigDecimal rate) { this.rate = rate; }
+        public BigDecimal getSummarySellerRate() { return summarySellerRate; }
+        public void setSummarySellerRate(BigDecimal summarySellerRate) { this.summarySellerRate = summarySellerRate; }
         public BigDecimal getPresetMargin() { return presetMargin; }
         public void setPresetMargin(BigDecimal presetMargin) { this.presetMargin = presetMargin; }
         public Integer getQuantity() { return quantity; }

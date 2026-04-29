@@ -50,6 +50,22 @@ public class SalesBillLineItem implements Serializable {
     @Column(name = "seller_name", length = 255)
     private String sellerName;
 
+    /** Lot bag count at lot level (canonical identifier segment); not billed line quantity. */
+    @Column(name = "lot_total_qty")
+    private Integer lotTotalQty;
+
+    @Column(name = "vehicle_total_qty")
+    private Integer vehicleTotalQty;
+
+    @Column(name = "seller_vehicle_qty")
+    private Integer sellerVehicleQty;
+
+    @Column(name = "vehicle_mark", length = 32)
+    private String vehicleMark;
+
+    @Column(name = "seller_mark", length = 32)
+    private String sellerMark;
+
     @NotNull
     @Column(name = "quantity", nullable = false)
     private Integer quantity;
@@ -65,6 +81,11 @@ public class SalesBillLineItem implements Serializable {
     @NotNull
     @Column(name = "brokerage", precision = 15, scale = 2, nullable = false)
     private BigDecimal brokerage = BigDecimal.ZERO;
+
+    /** Signed auction preset margin (₹/rate add); independent of {@link #otherCharges}. */
+    @NotNull
+    @Column(name = "preset_applied", precision = 15, scale = 2, nullable = false)
+    private BigDecimal presetApplied = BigDecimal.ZERO;
 
     @NotNull
     @Column(name = "other_charges", precision = 15, scale = 2, nullable = false)
@@ -103,6 +124,16 @@ public class SalesBillLineItem implements Serializable {
     public void setSelfSaleUnitId(Long selfSaleUnitId) { this.selfSaleUnitId = selfSaleUnitId; }
     public String getSellerName() { return sellerName; }
     public void setSellerName(String sellerName) { this.sellerName = sellerName; }
+    public Integer getLotTotalQty() { return lotTotalQty; }
+    public void setLotTotalQty(Integer lotTotalQty) { this.lotTotalQty = lotTotalQty; }
+    public Integer getVehicleTotalQty() { return vehicleTotalQty; }
+    public void setVehicleTotalQty(Integer vehicleTotalQty) { this.vehicleTotalQty = vehicleTotalQty; }
+    public Integer getSellerVehicleQty() { return sellerVehicleQty; }
+    public void setSellerVehicleQty(Integer sellerVehicleQty) { this.sellerVehicleQty = sellerVehicleQty; }
+    public String getVehicleMark() { return vehicleMark; }
+    public void setVehicleMark(String vehicleMark) { this.vehicleMark = vehicleMark; }
+    public String getSellerMark() { return sellerMark; }
+    public void setSellerMark(String sellerMark) { this.sellerMark = sellerMark; }
     public Integer getQuantity() { return quantity; }
     public void setQuantity(Integer quantity) { this.quantity = quantity; }
     public BigDecimal getWeight() { return weight; }
@@ -111,6 +142,8 @@ public class SalesBillLineItem implements Serializable {
     public void setBaseRate(BigDecimal baseRate) { this.baseRate = baseRate; }
     public BigDecimal getBrokerage() { return brokerage; }
     public void setBrokerage(BigDecimal brokerage) { this.brokerage = brokerage; }
+    public BigDecimal getPresetApplied() { return presetApplied; }
+    public void setPresetApplied(BigDecimal presetApplied) { this.presetApplied = presetApplied; }
     public BigDecimal getOtherCharges() { return otherCharges; }
     public void setOtherCharges(BigDecimal otherCharges) { this.otherCharges = otherCharges; }
     public BigDecimal getNewRate() { return newRate; }

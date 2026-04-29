@@ -2,6 +2,7 @@ package com.mercotrace.service;
 
 import com.mercotrace.service.dto.PrintLogCreateRequest;
 import com.mercotrace.service.dto.PrintLogDTO;
+import java.util.List;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 
@@ -19,4 +20,9 @@ public interface PrintLogService {
      * List print logs for current trader (paginated).
      */
     Page<PrintLogDTO> list(Pageable pageable);
+
+    /**
+     * Distinct non-null {@code reference_id} values for the given print reference type (current trader).
+     */
+    List<String> listDistinctReferenceIdsByReferenceType(String referenceType);
 }
