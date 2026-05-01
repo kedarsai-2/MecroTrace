@@ -1110,16 +1110,42 @@ function buildSalesPattiStyle(): string {
     .ph-sold-right { text-align: right; font-size: 8.5px; line-height: 1.6; white-space: nowrap; }
     .ph-sold-right p { margin: 0; }
 
-    .patti-a4 { font-family: Arial, sans-serif; color: #000; font-size: 14px; }
+    .patti-a4 { font-family: Arial, sans-serif; color: #000; font-size: 10px; line-height: 1.25; }
     .patti-head { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:18px; }
     .patti-head-left p, .patti-head-right p { margin: 0; line-height: 1.2; }
     .patti-head-right { text-align:right; min-width: 200px; }
-    .patti-table { width:100%; border-collapse: collapse; table-layout: fixed; }
-    .patti-table th, .patti-table td { border: 1px solid #000; padding: 3px 6px; }
+    .patti-table {
+      width:100%;
+      border-collapse: collapse;
+      table-layout: fixed;
+      font-size: 8px;
+    }
+    .patti-table th, .patti-table td {
+      border: 1px solid #000;
+      padding: 2px 3px;
+      line-height: 1.2;
+      vertical-align: top;
+      word-break: break-word;
+      overflow-wrap: anywhere;
+    }
+    .patti-table thead th {
+      font-size: 7.5px;
+      font-weight: 700;
+      text-align: left;
+      padding: 2px 2px;
+    }
+    .patti-table tbody td.right,
+    .patti-table tbody td.centered,
+    .patti-table thead th.right,
+    .patti-table thead th.centered {
+      font-variant-numeric: tabular-nums;
+      letter-spacing: -0.03em;
+      font-size: 7.5px;
+    }
     .patti-table th { font-weight: 700; text-align: left; }
     .right { text-align:right; }
     .centered { text-align:center; }
-    .footer-net { margin-top: 8px; display:flex; justify-content:flex-end; font-size: 20px; font-weight: 700; gap: 16px; }
+    .footer-net { margin-top: 8px; display:flex; justify-content:flex-end; font-size: 13px; font-weight: 700; gap: 12px; }
   </style>
 `;
 }

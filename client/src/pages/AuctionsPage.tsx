@@ -5,7 +5,7 @@ import {
   ShoppingCart, User, Users, Package, Truck, Banknote, ChevronDown,
   Search, AlertTriangle, Merge, Hash,
   ChevronLeft, ChevronRight, ChevronUp, List, Filter, Printer,
-  Pencil, Check, X, RotateCcw,
+  Pencil, Check, X, RotateCcw, Settings2,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useDesktopMode } from '@/hooks/use-desktop';
@@ -13,6 +13,15 @@ import { isNative, hapticSelection, hapticImpact, hapticNotification, hideNative
 import { cn } from '@/lib/utils';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
+import { Label } from '@/components/ui/label';
+import { Slider } from '@/components/ui/slider';
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from '@/components/ui/sheet';
 import BottomNav from '@/components/BottomNav';
 import ScribblePad from '@/components/ScribblePad';
 import InlineScribblePad, { MAX_MARK_LEN, type MarkDetectionMeta } from '@/components/InlineScribblePad';
@@ -45,6 +54,15 @@ import { ConfirmDeleteDialog } from '@/components/ConfirmDeleteDialog';
 import { directPrint } from '@/utils/printTemplates';
 import { generateAuctionCompletionPrintHTML } from '@/utils/printDocumentTemplates';
 import { useAuth } from '@/context/AuthContext';
+import {
+  DEFAULT_AUCTION_TOUCH_LAYOUT,
+  parseAuctionTouchLayout,
+  persistLocalAuctionTouchLayout,
+  readLocalAuctionTouchLayout,
+  type AuctionTouchHeroLayout,
+  type AuctionTouchLayoutConfig,
+} from '@/lib/auctionTouchLayoutConfig';
+import { auctionTouchLayoutApi } from '@/services/api/auctionTouchLayout';
 
 // ── Types ─────────────────────────────────────────────────
 interface LotInfo {
@@ -130,6 +148,289 @@ function loadDraft(): AuctionDraft | null {
 
 function clearDraft() {
   inMemoryAuctionDraft = null;
+}
+
+function touchHeroShell(layout: AuctionTouchHeroLayout) {
+  switch (layout) {
+    case 'compact':
+      return {
+        expandedClass: 'pt-[max(1rem,env(safe-area-inset-top))] pb-4 px-3 rounded-b-[1.5rem]',
+        stripGrid: 'grid grid-cols-2 gap-1.5',
+        stripCard: 'bg-white/15 backdrop-blur-md rounded-lg p-2 text-center',
+        lotMeta: 'mt-2 flex flex-col items-center justify-center gap-0.5',
+        backBtn: 'w-10 h-10',
+        backIcon: 'w-4 h-4',
+        titleRow: 'gap-2 mb-3',
+        gavelBox: 'w-10 h-10',
+        gavelIcon: 'w-4 h-4',
+        subtitleClass: 'text-white/75',
+        stripIcon: 'w-3.5 h-3.5 text-white/80 mx-auto mb-0.5 md:w-4 md:h-4',
+        stripLabel: 'text-[9px] text-white/75 uppercase tracking-wide',
+        stripValue: 'text-[11px] font-semibold text-white truncate',
+        lotIndex: 'text-[10px] text-white/75',
+        hint: 'text-[9px] font-medium uppercase tracking-wide text-white/55',
+      };
+    case 'spacious':
+      return {
+        expandedClass: 'pt-[max(1.75rem,env(safe-area-inset-top))] pb-8 px-5 rounded-b-[2rem]',
+        stripGrid: 'grid grid-cols-4 gap-3',
+        stripCard: 'bg-white/15 backdrop-blur-md rounded-2xl p-3 md:p-4 text-center',
+        lotMeta: 'mt-3 flex flex-col items-center justify-center gap-1.5',
+        backBtn: 'w-14 h-14',
+        backIcon: 'w-6 h-6',
+        titleRow: 'gap-3 mb-5',
+        gavelBox: 'w-14 h-14 md:w-16 md:h-16',
+        gavelIcon: 'w-7 h-7 md:w-8 md:h-8',
+        subtitleClass: 'text-white/85',
+        stripIcon: 'w-5 h-5 text-white/80 mx-auto mb-1 md:w-[22px] md:h-[22px]',
+        stripLabel: 'text-[11px] text-white/75 uppercase tracking-wide md:text-xs',
+        stripValue: 'text-sm font-semibold text-white truncate md:text-base',
+        lotIndex: 'text-sm text-white/75 md:text-base',
+        hint: 'text-[11px] font-medium uppercase tracking-wide text-white/55',
+      };
+    default:
+      return {
+        expandedClass: 'pt-[max(1.5rem,env(safe-area-inset-top))] pb-6 px-4 rounded-b-[2rem]',
+        stripGrid: 'grid grid-cols-4 gap-2',
+        stripCard: 'bg-white/15 backdrop-blur-md rounded-xl p-2.5 text-center md:p-3',
+        lotMeta: 'mt-2 flex flex-col items-center justify-center gap-1',
+        backBtn: 'w-12 h-12',
+        backIcon: 'w-5 h-5',
+        titleRow: 'gap-3 mb-4',
+        gavelBox: 'w-12 h-12',
+        gavelIcon: 'w-5 h-5 md:w-7 md:h-7',
+        subtitleClass: 'text-white/80',
+        stripIcon: 'w-4 h-4 text-white/80 mx-auto mb-1 md:w-[18px] md:h-[18px]',
+        stripLabel: 'text-[10px] text-white/75 uppercase tracking-wide md:text-[11px]',
+        stripValue: 'text-xs font-semibold text-white truncate md:text-sm',
+        lotIndex: 'text-xs text-white/75 md:text-sm',
+        hint: 'text-[10px] font-medium uppercase tracking-wide text-white/55',
+      };
+  }
+}
+
+function AuctionTouchLayoutSheet(props: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  layout: AuctionTouchLayoutConfig;
+  onLayoutChange: (next: AuctionTouchLayoutConfig) => void;
+}) {
+  const { open, onOpenChange, layout, onLayoutChange } = props;
+  const patch = useCallback((p: Partial<AuctionTouchLayoutConfig>) => {
+    onLayoutChange({ ...layout, ...p });
+  }, [layout, onLayoutChange]);
+
+  return (
+    <Sheet open={open} onOpenChange={onOpenChange}>
+      <SheetContent side="bottom" className="max-h-[88dvh] overflow-y-auto rounded-t-2xl px-4 pb-8 pt-2 sm:px-6">
+        <SheetHeader className="text-left">
+          <SheetTitle>Sales Pad layout</SheetTitle>
+          <SheetDescription>
+            Mobile and tablet widths only (not desktop). Saved to your trader account on the server so every device and session reuse the same layout; this device also keeps a local copy when offline.
+          </SheetDescription>
+        </SheetHeader>
+        <div className="mt-6 space-y-8 pb-4">
+          <div className="space-y-3">
+            <div className="flex items-center justify-between gap-2">
+              <Label>Hero density</Label>
+              <span className="text-xs text-muted-foreground tabular-nums">{layout.heroLayout}</span>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {(['compact', 'balanced', 'spacious'] as const).map((mode) => (
+                <Button
+                  key={mode}
+                  type="button"
+                  variant={layout.heroLayout === mode ? 'default' : 'outline'}
+                  size="sm"
+                  className="rounded-lg capitalize"
+                  onClick={() => patch({ heroLayout: mode })}
+                >
+                  {mode}
+                </Button>
+              ))}
+            </div>
+          </div>
+
+          <div className="space-y-3">
+            <div className="flex items-center justify-between gap-2">
+              <Label>Text scale (grid + hero)</Label>
+              <span className="text-xs text-muted-foreground tabular-nums">{layout.textScale.toFixed(2)}×</span>
+            </div>
+            <Slider
+              value={[layout.textScale]}
+              min={0.82}
+              max={1.28}
+              step={0.02}
+              onValueChange={([v]) => patch({ textScale: v })}
+            />
+          </div>
+
+          <div className="space-y-3">
+            <div className="flex items-center justify-between gap-2">
+              <Label>Scribble column min height (phone)</Label>
+              <span className="text-xs text-muted-foreground tabular-nums">{layout.scribbleMinRemPhone} rem</span>
+            </div>
+            <Slider
+              value={[layout.scribbleMinRemPhone]}
+              min={14}
+              max={38}
+              step={1}
+              onValueChange={([v]) => patch({ scribbleMinRemPhone: v })}
+            />
+          </div>
+
+          <div className="space-y-3">
+            <div className="flex items-center justify-between gap-2">
+              <Label>Scribble column min height (tablet)</Label>
+              <span className="text-xs text-muted-foreground tabular-nums">{layout.scribbleMinRemTablet} rem</span>
+            </div>
+            <Slider
+              value={[layout.scribbleMinRemTablet]}
+              min={20}
+              max={46}
+              step={1}
+              onValueChange={([v]) => patch({ scribbleMinRemTablet: v })}
+            />
+          </div>
+
+          <div className="space-y-3">
+            <div className="flex items-center justify-between gap-2">
+              <Label>Scribble canvas height (recognition)</Label>
+              <span className="text-xs text-muted-foreground tabular-nums">{layout.scribbleCanvasHeight}px</span>
+            </div>
+            <Slider
+              value={[layout.scribbleCanvasHeight]}
+              min={220}
+              max={380}
+              step={10}
+              onValueChange={([v]) => patch({ scribbleCanvasHeight: v })}
+            />
+          </div>
+
+          <div className="space-y-3">
+            <div className="flex items-center justify-between gap-2">
+              <Label>Scribble vs numpad width</Label>
+              <span className="text-xs text-muted-foreground tabular-nums">{Math.round(layout.scribbleColRatio * 100)}% pad</span>
+            </div>
+            <Slider
+              value={[layout.scribbleColRatio]}
+              min={0.48}
+              max={0.74}
+              step={0.02}
+              onValueChange={([v]) => patch({ scribbleColRatio: v })}
+            />
+          </div>
+
+          <div className="space-y-3">
+            <div className="flex items-center justify-between gap-2">
+              <Label>Numpad key height</Label>
+              <span className="text-xs text-muted-foreground tabular-nums">{layout.numpadKeyHeight}px</span>
+            </div>
+            <Slider
+              value={[layout.numpadKeyHeight]}
+              min={40}
+              max={90}
+              step={2}
+              onValueChange={([v]) => patch({ numpadKeyHeight: v })}
+            />
+          </div>
+
+          <div className="space-y-3">
+            <div className="flex items-center justify-between gap-2">
+              <Label>Numpad key font</Label>
+              <span className="text-xs text-muted-foreground tabular-nums">{layout.numpadKeyFontPx}px</span>
+            </div>
+            <Slider
+              value={[layout.numpadKeyFontPx]}
+              min={14}
+              max={26}
+              step={1}
+              onValueChange={([v]) => patch({ numpadKeyFontPx: v })}
+            />
+          </div>
+
+          <div className="space-y-3">
+            <div className="flex items-center justify-between gap-2">
+              <Label>Numpad second row height</Label>
+              <span className="text-xs text-muted-foreground tabular-nums">{layout.numpadSecondaryRowHeight}px</span>
+            </div>
+            <Slider
+              value={[layout.numpadSecondaryRowHeight]}
+              min={38}
+              max={88}
+              step={2}
+              onValueChange={([v]) => patch({ numpadSecondaryRowHeight: v })}
+            />
+          </div>
+
+          <div className="space-y-3">
+            <div className="flex items-center justify-between gap-2">
+              <Label>Auction table min width</Label>
+              <span className="text-xs text-muted-foreground tabular-nums">{layout.gridMinWidthPx}px</span>
+            </div>
+            <Slider
+              value={[layout.gridMinWidthPx]}
+              min={320}
+              max={540}
+              step={10}
+              onValueChange={([v]) => patch({ gridMinWidthPx: v })}
+            />
+          </div>
+
+          <div className="space-y-3">
+            <div className="flex items-center justify-between gap-2">
+              <Label>Grid max height (expanded hero)</Label>
+              <span className="text-xs text-muted-foreground tabular-nums">{layout.gridMaxVhExpanded}vh</span>
+            </div>
+            <Slider
+              value={[layout.gridMaxVhExpanded]}
+              min={28}
+              max={56}
+              step={1}
+              onValueChange={([v]) => patch({ gridMaxVhExpanded: v })}
+            />
+          </div>
+
+          <div className="space-y-3">
+            <div className="flex items-center justify-between gap-2">
+              <Label>Grid max height (collapsed hero, phone)</Label>
+              <span className="text-xs text-muted-foreground tabular-nums">{layout.gridMaxVhCollapsed}vh</span>
+            </div>
+            <Slider
+              value={[layout.gridMaxVhCollapsed]}
+              min={48}
+              max={82}
+              step={1}
+              onValueChange={([v]) => patch({ gridMaxVhCollapsed: v })}
+            />
+          </div>
+
+          <div className="space-y-3">
+            <div className="flex items-center justify-between gap-2">
+              <Label>Grid max height (collapsed hero, tablet)</Label>
+              <span className="text-xs text-muted-foreground tabular-nums">{layout.gridMaxVhCollapsedMd}vh</span>
+            </div>
+            <Slider
+              value={[layout.gridMaxVhCollapsedMd]}
+              min={48}
+              max={82}
+              step={1}
+              onValueChange={([v]) => patch({ gridMaxVhCollapsedMd: v })}
+            />
+          </div>
+
+          <Button
+            type="button"
+            variant="outline"
+            className="w-full"
+            onClick={() => onLayoutChange({ ...DEFAULT_AUCTION_TOUCH_LAYOUT })}
+          >
+            Reset layout defaults
+          </Button>
+        </div>
+      </SheetContent>
+    </Sheet>
+  );
 }
 
 // ── Get lot status (uses API status when available, else draft for pending) ──────────────────
@@ -330,6 +631,7 @@ const AUCTION_SCROLL_EPS = 2;
 
 function AuctionsGridScrollPanel({
   className,
+  style: scrollPanelStyle,
   children,
   contentLayoutKey,
   autoScrollToBottomKey,
@@ -337,6 +639,7 @@ function AuctionsGridScrollPanel({
   scrollPageIntoViewOnAutoScroll = true,
 }: {
   className?: string;
+  style?: React.CSSProperties;
   children: React.ReactNode;
   contentLayoutKey: number;
   autoScrollToBottomKey: number;
@@ -576,7 +879,12 @@ function AuctionsGridScrollPanel({
           'auctions-grid-scroll-panel lot-fields-x-scroll isolate min-h-0 overflow-y-auto overflow-x-auto overscroll-contain touch-auto pb-5',
           className
         )}
-        style={{ WebkitOverflowScrolling: 'touch', scrollbarWidth: 'none', msOverflowStyle: 'none' }}
+        style={{
+          WebkitOverflowScrolling: 'touch',
+          scrollbarWidth: 'none',
+          msOverflowStyle: 'none',
+          ...scrollPanelStyle,
+        }}
       >
         {children}
       </div>
@@ -711,6 +1019,72 @@ const AuctionsPage = () => {
   const expandedHeroMeasureRef = useRef<HTMLDivElement>(null);
   const [expandedHeroHeightPx, setExpandedHeroHeightPx] = useState(0);
 
+  const [touchLayoutSheetOpen, setTouchLayoutSheetOpen] = useState(false);
+  const touchLayoutSaveTimerRef = useRef<number | null>(null);
+  const touchLayoutLatestForSaveRef = useRef<AuctionTouchLayoutConfig>(readLocalAuctionTouchLayout());
+  const [touchLayout, setTouchLayout] = useState<AuctionTouchLayoutConfig>(() => readLocalAuctionTouchLayout());
+
+  const commitTouchLayout = useCallback((next: AuctionTouchLayoutConfig) => {
+    setTouchLayout(next);
+    persistLocalAuctionTouchLayout(next);
+    touchLayoutLatestForSaveRef.current = next;
+    if (touchLayoutSaveTimerRef.current != null) {
+      window.clearTimeout(touchLayoutSaveTimerRef.current);
+    }
+    touchLayoutSaveTimerRef.current = window.setTimeout(() => {
+      touchLayoutSaveTimerRef.current = null;
+      void auctionTouchLayoutApi.save(JSON.stringify(touchLayoutLatestForSaveRef.current)).catch(() => {
+        toast.error('Could not sync Sales Pad layout to server; stored on this device only.');
+      });
+    }, 750);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const raw = await auctionTouchLayoutApi.get();
+        if (cancelled) return;
+        if (raw != null && raw.trim()) {
+          const parsed = parseAuctionTouchLayout(raw);
+          setTouchLayout(parsed);
+          persistLocalAuctionTouchLayout(parsed);
+          touchLayoutLatestForSaveRef.current = parsed;
+        }
+      } catch {
+        if (!cancelled) {
+          const loc = readLocalAuctionTouchLayout();
+          setTouchLayout(loc);
+          touchLayoutLatestForSaveRef.current = loc;
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(
+    () => () => {
+      if (touchLayoutSaveTimerRef.current != null) {
+        window.clearTimeout(touchLayoutSaveTimerRef.current);
+        touchLayoutSaveTimerRef.current = null;
+      }
+    },
+    []
+  );
+
+  const [isMdViewport, setIsMdViewport] = useState(
+    () => typeof window !== 'undefined' && window.matchMedia('(min-width: 768px)').matches
+  );
+  useEffect(() => {
+    const mql = window.matchMedia('(min-width: 768px)');
+    const on = () => setIsMdViewport(mql.matches);
+    mql.addEventListener('change', on);
+    on();
+    return () => mql.removeEventListener('change', on);
+  }, []);
+
   // Duplicate mark dialog
   const [duplicateMarkDialog, setDuplicateMarkDialog] = useState<{
     mark: string; buyerName: string; buyerContactId: string | null;
@@ -780,6 +1154,71 @@ const AuctionsPage = () => {
   const [qty, setQty] = useState('');
   const autoPrintedAuctionRef = useRef<string | null>(null);
   const isTouchLayout = !isDesktop;
+
+  const mobileTouchHero = useMemo(() => touchHeroShell(touchLayout.heroLayout), [touchLayout.heroLayout]);
+  const auctionGridMobileMaxHeight = useMemo(() => {
+    if (isDesktop) return undefined as string | undefined;
+    return mobileAuctionHeroCollapsed
+      ? (isMdViewport
+        ? `min(${touchLayout.gridMaxVhCollapsedMd}vh, 34rem)`
+        : `min(${touchLayout.gridMaxVhCollapsed}vh, 30rem)`)
+      : `min(${touchLayout.gridMaxVhExpanded}vh, 18rem)`;
+  }, [
+    isDesktop,
+    isMdViewport,
+    mobileAuctionHeroCollapsed,
+    touchLayout.gridMaxVhCollapsed,
+    touchLayout.gridMaxVhCollapsedMd,
+    touchLayout.gridMaxVhExpanded,
+  ]);
+
+  const heroTitleFontRem = useMemo(() => {
+    const ts = touchLayout.textScale;
+    switch (touchLayout.heroLayout) {
+      case 'compact':
+        return 1.25 * ts;
+      case 'spacious':
+        return 1.875 * ts;
+      default:
+        return (isMdViewport ? 1.875 : 1.5) * ts;
+    }
+  }, [touchLayout.heroLayout, touchLayout.textScale, isMdViewport]);
+
+  const heroSubtitleFontRem = useMemo(() => {
+    const ts = touchLayout.textScale;
+    switch (touchLayout.heroLayout) {
+      case 'compact':
+        return 0.8 * ts;
+      case 'spacious':
+        return 1.05 * ts;
+      default:
+        return (isMdViewport ? 1 : 0.875) * ts;
+    }
+  }, [touchLayout.heroLayout, touchLayout.textScale, isMdViewport]);
+
+  const scribbleDockMinRem = isMdViewport ? touchLayout.scribbleMinRemTablet : touchLayout.scribbleMinRemPhone;
+
+  const numpadMainRowStyle = useMemo(
+    () => ({
+      height: touchLayout.numpadKeyHeight,
+      fontSize: touchLayout.numpadKeyFontPx,
+    }),
+    [touchLayout.numpadKeyHeight, touchLayout.numpadKeyFontPx]
+  );
+  const numpadSecondaryRowStyle = useMemo(
+    () => ({
+      height: touchLayout.numpadSecondaryRowHeight,
+      fontSize: Math.max(12, touchLayout.numpadKeyFontPx - 2),
+    }),
+    [touchLayout.numpadSecondaryRowHeight, touchLayout.numpadKeyFontPx]
+  );
+  const numpadActionRowStyle = useMemo(
+    () => ({
+      height: Math.max(touchLayout.numpadKeyHeight, touchLayout.numpadSecondaryRowHeight + 4),
+      fontSize: Math.max(13, touchLayout.numpadKeyFontPx - 1),
+    }),
+    [touchLayout.numpadKeyHeight, touchLayout.numpadSecondaryRowHeight, touchLayout.numpadKeyFontPx]
+  );
 
   // Skip initial draft restore flag
   const draftRestored = useRef(false);
@@ -2740,7 +3179,10 @@ const AuctionsPage = () => {
                 aria-label="Lot summary"
               >
                 {selectedLot ? (
-                  <p className="whitespace-nowrap pr-1 text-left text-[12px] font-semibold leading-snug tracking-tight text-white md:text-[13px]">
+                  <p
+                    className="whitespace-nowrap pr-1 text-left font-semibold leading-snug tracking-tight text-white"
+                    style={{ fontSize: `${Math.round(12 * touchLayout.textScale)}px` }}
+                  >
                     {(isSelfSaleReauction ? (trader?.business_name || 'Trader') : selectedLot.seller_name) || '—'}
                     <span className="mx-1 text-white/45 md:mx-1.5">|</span>
                     {selectedLot.vehicle_number?.trim() || '—'}
@@ -2753,6 +3195,20 @@ const AuctionsPage = () => {
                   <span className="truncate text-sm font-bold text-white">Sales Pad</span>
                 )}
               </div>
+
+              <button
+                type="button"
+                data-auction-hero-interactive
+                onClick={(e) => {
+                  e.stopPropagation();
+                  hapticSelection();
+                  setTouchLayoutSheetOpen(true);
+                }}
+                aria-label="Sales Pad layout settings"
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white/20 backdrop-blur active:bg-white/30"
+              >
+                <Settings2 className="h-4 w-4 text-white" strokeWidth={2.5} />
+              </button>
 
               <button
                 type="button"
@@ -2778,7 +3234,10 @@ const AuctionsPage = () => {
         ) : (
           <div
             ref={expandedHeroMeasureRef}
-            className="sticky top-0 z-[38] cursor-pointer shrink-0 bg-gradient-to-br from-blue-400 via-blue-500 to-violet-500 pt-[max(1.5rem,env(safe-area-inset-top))] pb-6 px-4 rounded-b-[2rem] relative overflow-hidden shadow-[0_8px_24px_-12px_rgba(59,130,246,0.35)]"
+            className={cn(
+              'sticky top-0 z-[38] cursor-pointer shrink-0 bg-gradient-to-br from-blue-400 via-blue-500 to-violet-500 relative overflow-hidden shadow-[0_8px_24px_-12px_rgba(59,130,246,0.35)]',
+              mobileTouchHero.expandedClass
+            )}
             onClick={(e) => {
               if ((e.target as HTMLElement).closest('[data-auction-hero-interactive]')) return;
               hapticSelection();
@@ -2797,24 +3256,54 @@ const AuctionsPage = () => {
             </div>
 
             <div className="relative z-10">
-              <div className="flex items-center gap-3 mb-4">
+              <div className={cn('flex items-center', mobileTouchHero.titleRow)}>
                 <button
                   type="button"
                   data-auction-hero-interactive
                   onClick={(e) => { e.stopPropagation(); goBackToSelector(); }}
                   aria-label="Go back"
-                  className="w-12 h-12 rounded-full bg-white/20 backdrop-blur flex items-center justify-center"
+                  className={cn(
+                    mobileTouchHero.backBtn,
+                    'rounded-full bg-white/20 backdrop-blur flex items-center justify-center shrink-0'
+                  )}
                 >
-                  <ArrowLeft className="w-5 h-5 text-white" />
+                  <ArrowLeft className={cn(mobileTouchHero.backIcon, 'text-white')} />
                 </button>
                 <div className="flex-1 min-w-0 pointer-events-none">
-                  <h1 className="text-2xl font-bold text-white flex items-center gap-2 md:text-3xl">
-                    <Gavel className="w-6 h-6 shrink-0 md:w-7 md:h-7" /> Sales Pad
+                  <h1
+                    className="font-bold text-white flex items-center gap-2"
+                    style={{ fontSize: `${heroTitleFontRem}rem` }}
+                  >
+                    <span
+                      className={cn(
+                        mobileTouchHero.gavelBox,
+                        'rounded-xl bg-white/10 flex items-center justify-center shrink-0'
+                      )}
+                    >
+                      <Gavel className={cn(mobileTouchHero.gavelIcon, 'shrink-0 text-white')} />
+                    </span>
+                    Sales Pad
                   </h1>
-                  <p className="text-sm text-white/80 md:text-base">Live auction operations</p>
+                  <p
+                    className={cn(mobileTouchHero.subtitleClass)}
+                    style={{ fontSize: `${heroSubtitleFontRem}rem` }}
+                  >
+                    Live auction operations
+                  </p>
                 </div>
-                {/* Lot navigation & list toggle */}
-                <div className="flex items-center gap-1" data-auction-hero-interactive onClick={(e) => e.stopPropagation()}>
+                {/* Lot navigation, layout settings & list toggle */}
+                <div className="flex items-center gap-1 shrink-0" data-auction-hero-interactive onClick={(e) => e.stopPropagation()}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      hapticSelection();
+                      setTouchLayoutSheetOpen(true);
+                    }}
+                    aria-label="Sales Pad layout settings"
+                    className="w-9 h-9 rounded-full bg-white/20 backdrop-blur flex items-center justify-center"
+                  >
+                    <Settings2 className="w-4 h-4 text-white" strokeWidth={2.5} />
+                  </button>
                   <button type="button" onClick={() => navigateToLot('prev')} disabled={!canGoPrev}
                     aria-label="Previous lot" className={cn("w-9 h-9 rounded-full flex items-center justify-center transition-all",
                       canGoPrev ? 'bg-white/20 backdrop-blur' : 'bg-white/10 opacity-40')}>
@@ -2834,7 +3323,7 @@ const AuctionsPage = () => {
 
               {/* Lot Info Strip */}
               {selectedLot && (
-                <div className="grid grid-cols-4 gap-2">
+                <div className={mobileTouchHero.stripGrid}>
                   {(
                     isSelfSaleReauction
                       ? [
@@ -2850,10 +3339,10 @@ const AuctionsPage = () => {
                         { icon: ShoppingCart, label: 'Bags', value: `${remaining}/${selectedLot.bag_count}${selectedLot.was_modified ? '*' : ''}` },
                       ]
                   ).map((item) => (
-                    <div key={item.label} className="bg-white/15 backdrop-blur-md rounded-xl p-2.5 text-center md:p-3">
-                      <item.icon className="w-4 h-4 text-white/80 mx-auto mb-1 md:w-[18px] md:h-[18px]" />
-                      <p className="text-[10px] text-white/75 uppercase tracking-wide md:text-[11px]">{item.label}</p>
-                      <p className="text-xs font-semibold text-white truncate md:text-sm">{item.value}</p>
+                    <div key={item.label} className={mobileTouchHero.stripCard}>
+                      <item.icon className={mobileTouchHero.stripIcon} />
+                      <p className={mobileTouchHero.stripLabel}>{item.label}</p>
+                      <p className={mobileTouchHero.stripValue}>{item.value}</p>
                     </div>
                   ))}
                 </div>
@@ -2861,17 +3350,19 @@ const AuctionsPage = () => {
 
               {/* Lot position indicator */}
               {selectedLot && (
-                <div className="mt-2 flex flex-col items-center justify-center gap-1">
-                  <span className="text-xs text-white/75 md:text-sm">Lot {currentLotIndex + 1} of {navigationLots.length}</span>
-                  <span className="flex items-center gap-1 text-[10px] font-medium uppercase tracking-wide text-white/55">
+                <div className={mobileTouchHero.lotMeta}>
+                  <span className={mobileTouchHero.lotIndex}>
+                    Lot {currentLotIndex + 1} of {navigationLots.length}
+                  </span>
+                  <span className={cn('flex items-center gap-1', mobileTouchHero.hint)}>
                     <ChevronUp className="h-3.5 w-3.5" strokeWidth={2.5} />
                     Tap to enlarge grid
                   </span>
                 </div>
               )}
               {!selectedLot && (
-                <div className="mt-2 flex justify-center">
-                  <span className="flex items-center gap-1 text-[10px] font-medium uppercase tracking-wide text-white/55">
+                <div className={cn(mobileTouchHero.lotMeta, 'flex justify-center')}>
+                  <span className={cn('flex items-center gap-1', mobileTouchHero.hint)}>
                     <ChevronUp className="h-3.5 w-3.5" strokeWidth={2.5} />
                     Tap to enlarge grid
                   </span>
@@ -3430,14 +3921,9 @@ const AuctionsPage = () => {
                     ? entries.length > 5
                       ? 'max-h-[min(60vh,28rem)] lg:max-h-[min(55vh,26rem)]'
                       : 'max-h-[min(65vh,32rem)] lg:max-h-[min(60vh,30rem)]'
-                    : cn(
-                        'scroll-pt-[3.25rem]',
-                        '!pb-[max(14rem,36svh)]',
-                        mobileAuctionHeroCollapsed
-                          ? 'max-h-[min(64vh,30rem)] md:max-h-[min(60vh,34rem)]'
-                          : 'max-h-[min(42vh,18rem)]'
-                      )
+                    : cn('scroll-pt-[3.25rem]', '!pb-[max(14rem,36svh)]')
                 )}
+                style={!isDesktop && auctionGridMobileMaxHeight ? { maxHeight: auctionGridMobileMaxHeight } : undefined}
                 contentLayoutKey={entries.length}
                 autoScrollToBottomKey={autoScrollKey}
                 gridSectionRef={auctionGridSectionRef}
@@ -3446,8 +3932,21 @@ const AuctionsPage = () => {
                   className={cn(
                     'w-[42rem] md:w-full table-fixed border-collapse',
                     isDesktop ? 'text-sm sm:text-base' : 'text-base sm:text-lg',
-                    showPresetMargin ? (isDesktop ? 'min-w-[480px]' : 'min-w-[440px]') : isDesktop ? 'min-w-[420px]' : 'min-w-[400px]'
+                    showPresetMargin ? (isDesktop ? 'min-w-[480px]' : '') : isDesktop ? 'min-w-[420px]' : ''
                   )}
+                  style={
+                    !isDesktop
+                      ? {
+                          minWidth: Math.max(
+                            touchLayout.gridMinWidthPx,
+                            showPresetMargin ? 440 : 400
+                          ),
+                          fontSize: `${0.875 * touchLayout.textScale}rem`,
+                        }
+                      : showPresetMargin
+                        ? { minWidth: 480 }
+                        : { minWidth: 420 }
+                  }
                 >
                   <thead
                     className={cn(
@@ -3461,7 +3960,7 @@ const AuctionsPage = () => {
                           'border-r border-white/25 text-white uppercase tracking-wider last:border-r-0',
                           isDesktop
                             ? 'px-3 py-[14px] text-left text-xs font-semibold'
-                            : 'px-1 py-1.5 text-left text-[15px] font-bold'
+                            : 'px-1 py-1.5 text-left text-[1.07em] font-bold'
                         )}
                       >
                         Mark / Buyer
@@ -3471,7 +3970,7 @@ const AuctionsPage = () => {
                           'border-r border-white/25 text-white uppercase tracking-wider last:border-r-0',
                           isDesktop
                             ? 'px-3 py-[14px] text-center text-xs font-semibold'
-                            : 'px-1 py-1.5 text-center text-[15px] font-bold'
+                            : 'px-1 py-1.5 text-center text-[1.07em] font-bold'
                         )}
                       >
                         Rate
@@ -3482,7 +3981,7 @@ const AuctionsPage = () => {
                             'border-r border-white/25 text-white uppercase tracking-wider last:border-r-0',
                             isDesktop
                               ? 'px-3 py-[14px] text-center text-xs font-semibold'
-                              : 'px-1 py-1.5 text-center text-[15px] font-bold'
+                              : 'px-1 py-1.5 text-center text-[1.07em] font-bold'
                           )}
                         >
                           Preset
@@ -3493,7 +3992,7 @@ const AuctionsPage = () => {
                           'border-r border-white/25 text-white uppercase tracking-wider last:border-r-0',
                           isDesktop
                             ? 'px-3 py-[14px] text-center text-xs font-semibold'
-                            : 'px-1 py-1.5 text-center text-[15px] font-bold'
+                            : 'px-1 py-1.5 text-center text-[1.07em] font-bold'
                         )}
                       >
                         Qty
@@ -3503,7 +4002,7 @@ const AuctionsPage = () => {
                           'text-white uppercase tracking-wider last:border-r-0',
                           isDesktop
                             ? 'px-3 py-[14px] text-right text-xs font-semibold'
-                            : 'px-1 py-1.5 text-center text-[15px] font-bold'
+                            : 'px-1 py-1.5 text-center text-[1.07em] font-bold'
                         )}
                       >
                         Action
@@ -3538,7 +4037,7 @@ const AuctionsPage = () => {
                               <span
                                 className={cn(
                                   'font-medium text-foreground truncate max-w-[120px]',
-                                  isDesktop ? 'text-base' : 'text-[18px]'
+                                  isDesktop ? 'text-base' : 'text-[1.15em]'
                                 )}
                                 title={entry.buyerName}
                               >
@@ -3566,7 +4065,7 @@ const AuctionsPage = () => {
                           <td
                             className={cn(
                               'align-middle text-center font-semibold text-foreground',
-                              isDesktop ? 'px-3 py-[12px] text-base' : 'px-1 py-1.5 text-[18px]'
+                              isDesktop ? 'px-3 py-[12px] text-base' : 'px-1 py-1.5 text-[1.15em] font-bold'
                             )}
                           >
                             <div>₹{entry.rate}</div>
@@ -3575,7 +4074,7 @@ const AuctionsPage = () => {
                             <td
                               className={cn(
                                 'align-middle text-center font-medium tabular-nums',
-                                isDesktop ? 'px-3 py-[12px] text-base' : 'px-1 py-1.5 text-[18px]',
+                                isDesktop ? 'px-3 py-[12px] text-base' : 'px-1 py-1.5 text-[1.15em] font-bold',
                                 entry.presetApplied > 0 && 'text-success',
                                 entry.presetApplied < 0 && 'text-destructive'
                               )}
@@ -3586,7 +4085,7 @@ const AuctionsPage = () => {
                           <td
                             className={cn(
                               'align-middle text-center text-muted-foreground',
-                              isDesktop ? 'px-3 py-[12px] text-base' : 'px-1 py-1.5 text-[18px]'
+                              isDesktop ? 'px-3 py-[12px] text-base' : 'px-1 py-1.5 text-[1.15em] font-bold'
                             )}
                           >
                             {entry.quantity}
@@ -3771,7 +4270,10 @@ const AuctionsPage = () => {
 
       {/* Mobile/Tablet Dock: compact layout, preset below rate/qty. */}
       {!isDesktop && (
-        <div className="fixed inset-x-0 bottom-0 z-40 border-t border-border/50 bg-background/95 backdrop-blur-xl px-1 pt-1.5 pb-[max(0.5rem,env(safe-area-inset-bottom))] sm:px-2">
+        <div
+          className="fixed inset-x-0 bottom-0 z-40 border-t border-border/50 bg-background/95 backdrop-blur-xl px-1 pt-1.5 pb-[max(0.5rem,env(safe-area-inset-bottom))] sm:px-2"
+          style={{ fontSize: `${14 * touchLayout.textScale}px` }}
+        >
           <div className="space-y-1 mb-1">
             <div>
               <div
@@ -3806,12 +4308,12 @@ const AuctionsPage = () => {
                           : 'bg-muted/40 border-border/50 hover:bg-muted/60'
                       )}
                     >
-                      <span className="text-[15px] font-semibold truncate max-w-[78px] sm:max-w-[90px]">{b.name}</span>
-                      {b.mark && <span className="text-[13px] opacity-90 flex-shrink-0">({b.mark})</span>}
+                      <span className="text-[1.07em] font-semibold truncate max-w-[78px] sm:max-w-[90px]">{b.name}</span>
+                      {b.mark && <span className="text-[0.93em] opacity-90 flex-shrink-0">({b.mark})</span>}
                     </button>
                   ))
                 ) : (
-                  <div className="flex-shrink-0 px-3 py-2 rounded-md border border-l-4 border-l-emerald-500 border-dashed bg-emerald-500/5 text-emerald-700 dark:text-emerald-400 text-[15px] font-medium">
+                  <div className="flex-shrink-0 px-3 py-2 rounded-md border border-l-4 border-l-emerald-500 border-dashed bg-emerald-500/5 text-emerald-700 dark:text-emerald-400 text-[1.07em] font-medium">
                     No matching contact
                   </div>
                 )}
@@ -3850,12 +4352,12 @@ const AuctionsPage = () => {
                           isSelected ? 'bg-primary text-primary-foreground border-primary shadow-md border-l-primary' : 'bg-muted/40 border-border/50 hover:bg-muted/60'
                         )}
                       >
-                        <span className="text-[15px] font-semibold truncate max-w-[72px]">{mark}</span>
+                        <span className="text-[1.07em] font-semibold truncate max-w-[72px]">{mark}</span>
                       </button>
                     );
                   })
                 ) : (
-                  <div className="flex-shrink-0 px-3 py-2 rounded-md border border-l-4 border-l-violet-400 border-dashed bg-violet-500/5 text-violet-700 dark:text-violet-300 text-[15px] font-medium">
+                  <div className="flex-shrink-0 px-3 py-2 rounded-md border border-l-4 border-l-violet-400 border-dashed bg-violet-500/5 text-violet-700 dark:text-violet-300 text-[1.07em] font-medium">
                     No temporary marks yet today
                   </div>
                 )}
@@ -3864,7 +4366,7 @@ const AuctionsPage = () => {
           </div>
           <div className="flex gap-1.5 mb-0.5 min-w-0">
             <div className="min-w-0 flex-1">
-              <label htmlFor="sales-pad-rate-mobile" className="text-[13px] font-semibold text-muted-foreground uppercase tracking-wide mb-0 block truncate text-center leading-tight">
+              <label htmlFor="sales-pad-rate-mobile" className="text-[0.93em] font-semibold text-muted-foreground uppercase tracking-wide mb-0 block truncate text-center leading-tight">
                 Rate ₹
               </label>
               <Input
@@ -3894,13 +4396,13 @@ const AuctionsPage = () => {
                 placeholder="0"
                 aria-label="Bid rate in rupees"
                 className={cn(
-                  'h-11 min-h-[44px] rounded-md border-2 border-primary/45 bg-muted/25 text-center text-[15px] font-bold min-w-0 py-1 leading-none sm:text-[18px]',
+                  'h-11 min-h-[44px] rounded-md border-2 border-primary/45 bg-muted/25 text-center text-[1.07em] font-bold min-w-0 py-1 leading-none',
                   activeNumpadField === 'rate' && 'border-primary ring-2 ring-primary shadow-[0_0_0_2px_hsl(var(--primary))]'
                 )}
               />
             </div>
             <div className="min-w-0 flex-[1.15]">
-              <label htmlFor="sales-pad-mark-mobile" className="text-[13px] font-semibold text-muted-foreground uppercase tracking-wide mb-0 block truncate text-center leading-tight">
+              <label htmlFor="sales-pad-mark-mobile" className="text-[0.93em] font-semibold text-muted-foreground uppercase tracking-wide mb-0 block truncate text-center leading-tight">
                 Mark
               </label>
               <Input
@@ -3937,7 +4439,7 @@ const AuctionsPage = () => {
                 placeholder="Search…"
                 aria-label="Search mark or name"
                 className={cn(
-                  'h-11 min-h-[44px] rounded-md border-2 border-violet-500/45 bg-muted/25 px-2 py-1 text-center text-[15px] font-medium min-w-0 leading-none sm:text-[16px]',
+                  'h-11 min-h-[44px] rounded-md border-2 border-violet-500/45 bg-muted/25 px-2 py-1 text-center text-[1.07em] font-medium min-w-0 leading-none',
                   activeNumpadField === 'mark' && 'border-violet-600 ring-2 ring-violet-500/60'
                 )}
               />
@@ -3945,38 +4447,58 @@ const AuctionsPage = () => {
             <div className="min-w-0 flex-1">
               <label
                 htmlFor="sales-pad-qty-mobile"
-                className="mb-0 block truncate text-center text-[13px] font-semibold uppercase tracking-wide text-muted-foreground leading-tight"
+                className="mb-0 block truncate text-center text-[0.93em] font-semibold uppercase tracking-wide text-muted-foreground leading-tight"
                 title={`Quantity · ${remaining} bags remaining in lot`}
               >
                 QTY / <span className="font-black tabular-nums text-foreground">{remaining}</span>
               </label>
-              <Input
-                id="sales-pad-qty-mobile"
-                ref={qtyInputRef}
-                type="number"
-                value={qty}
-                onChange={(e) => {
-                  const v = e.target.value;
-                  setQty(v);
-                  if (editingBidId) setEditBidDraft((d) => (d ? { ...d, qty: v } : d));
-                }}
-                onFocus={(e) => {
-                  setActiveNumpadField('qty');
-                  if (!mobileKeyboardEnabled) {
-                    e.currentTarget.blur();
-                    hideNativeKeyboard();
-                  }
-                }}
-                onBlur={() => setMobileKeyboardEnabled(false)}
-                readOnly={!mobileKeyboardEnabled}
-                inputMode={!mobileKeyboardEnabled ? 'none' : 'numeric'}
-                placeholder="0"
-                aria-label={`Quantity in bags, ${remaining} bags remaining in lot`}
-                className={cn(
-                  'h-11 min-h-[44px] rounded-md border-2 border-primary/45 bg-muted/25 text-center text-[15px] font-bold min-w-0 py-1 leading-none sm:text-[18px]',
-                  activeNumpadField === 'qty' && 'border-primary ring-2 ring-primary shadow-[0_0_0_2px_hsl(var(--primary))]'
+              <div className="flex min-w-0 gap-1">
+                <Input
+                  id="sales-pad-qty-mobile"
+                  ref={qtyInputRef}
+                  type="number"
+                  value={qty}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setQty(v);
+                    if (editingBidId) setEditBidDraft((d) => (d ? { ...d, qty: v } : d));
+                  }}
+                  onFocus={(e) => {
+                    setActiveNumpadField('qty');
+                    if (!mobileKeyboardEnabled) {
+                      e.currentTarget.blur();
+                      hideNativeKeyboard();
+                    }
+                  }}
+                  onBlur={() => setMobileKeyboardEnabled(false)}
+                  readOnly={!mobileKeyboardEnabled}
+                  inputMode={!mobileKeyboardEnabled ? 'none' : 'numeric'}
+                  placeholder="0"
+                  aria-label={`Quantity in bags, ${remaining} bags remaining in lot`}
+                  className={cn(
+                    'h-11 min-h-[44px] min-w-0 flex-1 rounded-md border-2 border-primary/45 bg-muted/25 text-center text-[1.07em] font-bold py-1 leading-none',
+                    activeNumpadField === 'qty' && 'border-primary ring-2 ring-primary shadow-[0_0_0_2px_hsl(var(--primary))]'
+                  )}
+                />
+                {editingBidId && editBidDraft && editingEntry && (
+                  <button
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() =>
+                      setPendingDeleteBid({
+                        id: editingEntry.id,
+                        label: `${editingEntry.buyerName} (${editingEntry.buyerMark})`,
+                      })
+                    }
+                    disabled={completeLoading || !can('Auctions / Sales', 'Delete')}
+                    className="flex h-11 min-h-[44px] w-11 shrink-0 items-center justify-center rounded-md border-2 border-destructive/40 bg-destructive/10 text-destructive hover:bg-destructive/20 disabled:pointer-events-none disabled:opacity-40"
+                    aria-label="Delete bid"
+                    title="Delete bid"
+                  >
+                    <Trash2 className="h-5 w-5" strokeWidth={2.25} />
+                  </button>
                 )}
-              />
+              </div>
             </div>
           </div>
           {canUsePreset && (
@@ -4034,18 +4556,26 @@ const AuctionsPage = () => {
               </div>
             </div>
           )}
-          <div className="grid grid-cols-[1.4fr_1fr] gap-1.5 items-stretch">
-            <div className="rounded-xl border border-violet-400/20 bg-card/80 p-1.5 h-full min-h-[21rem] md:min-h-[32rem] flex flex-col gap-1">
+          <div
+            className="grid gap-1.5 items-stretch"
+            style={{
+              gridTemplateColumns: `${touchLayout.scribbleColRatio}fr ${1 - touchLayout.scribbleColRatio}fr`,
+            }}
+          >
+            <div
+              className="rounded-xl border border-violet-400/20 bg-card/80 p-1.5 h-full flex flex-col gap-1"
+              style={{ minHeight: `${scribbleDockMinRem}rem` }}
+            >
               <span className="sr-only">Scribble pad</span>
               <div className="flex-1 min-h-0">
                 <InlineScribblePad
                   appendMode
                   onMarkDetected={handleScribbleSegmentDetected}
-                  canvasHeight={300}
+                  canvasHeight={touchLayout.scribbleCanvasHeight}
                   resetTrigger={scribblePadResetTrigger}
                   showStatus={false}
                   fillAvailableHeight
-                  className="h-full md:min-h-[28rem]"
+                  className="h-full min-h-0"
                 />
               </div>
             </div>
@@ -4056,7 +4586,8 @@ const AuctionsPage = () => {
                     key={k}
                     type="button"
                     onClick={() => handleNumpadKey(k)}
-                    className="h-[54px] rounded-none bg-muted/60 hover:bg-muted text-[18px] font-bold text-foreground transition-colors md:h-[76px] md:text-[20px]"
+                    className="rounded-none bg-muted/60 hover:bg-muted font-bold text-foreground transition-colors"
+                    style={numpadMainRowStyle}
                   >
                     {k}
                   </button>
@@ -4067,7 +4598,8 @@ const AuctionsPage = () => {
                 <button
                   type="button"
                   onClick={handleNumpadBackspace}
-                  className="h-[50px] rounded-none bg-muted/60 hover:bg-muted text-foreground text-[16px] font-semibold inline-flex items-center justify-center disabled:opacity-50 md:h-[66px] md:text-[17px]"
+                  className="rounded-none bg-muted/60 hover:bg-muted text-foreground font-semibold inline-flex items-center justify-center disabled:opacity-50"
+                  style={numpadSecondaryRowStyle}
                   aria-label="Backspace (remove last character)"
                   title="Back"
                 >
@@ -4076,7 +4608,8 @@ const AuctionsPage = () => {
                 <button
                   type="button"
                   onClick={handleNumpadClear}
-                  className="h-[50px] col-span-2 rounded-none bg-muted/60 hover:bg-muted text-[15px] font-bold text-foreground disabled:opacity-50 uppercase tracking-wide md:h-[66px] md:text-[16px]"
+                  className="col-span-2 rounded-none bg-muted/60 hover:bg-muted text-foreground font-bold disabled:opacity-50 uppercase tracking-wide"
+                  style={numpadSecondaryRowStyle}
                   aria-label="Clear current bid draft fields"
                   title="Clear"
                 >
@@ -4084,49 +4617,41 @@ const AuctionsPage = () => {
                 </button>
               </div>
 
-              {/* ( ... ) / Self or Delete (mobile: delete moved out of grid while editing) */}
-              <div className={cn('grid gap-1', isSelfSaleReauction ? 'grid-cols-1' : 'grid-cols-2')}>
+              {/* ( ... ) / Self — delete while editing: trash next to QTY above */}
+              <div
+                className={cn(
+                  'grid gap-1',
+                  isSelfSaleReauction || (editingBidId && editBidDraft && editingEntry)
+                    ? 'grid-cols-1'
+                    : 'grid-cols-2'
+                )}
+              >
                 <button
                   type="button"
                   onMouseDown={(e) => e.preventDefault()}
                   onClick={appendMarkParenFromNumpad}
                   disabled={!!editingBidId}
-                  className="h-[50px] rounded-none bg-violet-500/15 text-violet-800 dark:text-violet-200 border border-violet-500/35 text-[15px] font-bold md:h-[66px] md:text-[16px]"
+                  className="rounded-none bg-violet-500/15 text-violet-800 dark:text-violet-200 border border-violet-500/35 font-bold"
+                  style={numpadSecondaryRowStyle}
                   title="Add ( or ) to mark"
                   aria-label="Add opening or closing parenthesis to mark"
                 >
                   (...)
                 </button>
 
-                {!isSelfSaleReauction &&
-                  (editingBidId && editBidDraft && editingEntry ? (
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setPendingDeleteBid({
-                          id: editingEntry.id,
-                          label: `${editingEntry.buyerName} (${editingEntry.buyerMark})`,
-                        })
-                      }
-                      disabled={completeLoading || !can('Auctions / Sales', 'Delete')}
-                      className="h-[50px] rounded-none border border-destructive/35 bg-destructive/10 text-[15px] font-bold text-destructive hover:bg-destructive/20 disabled:opacity-50 md:h-[66px] md:text-[16px]"
-                      aria-label="Delete bid"
-                      title="Delete bid"
-                    >
-                      Delete
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={handleSelfSale}
-                      disabled={remaining <= 0}
-                      className="h-[50px] rounded-none bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/30 text-[15px] font-bold disabled:opacity-50 md:h-[66px] md:text-[16px]"
-                      aria-label="Self Sale"
-                      title="Self Sale"
-                    >
-                      Self
-                    </button>
-                  ))}
+                {!isSelfSaleReauction && !(editingBidId && editBidDraft && editingEntry) && (
+                  <button
+                    type="button"
+                    onClick={handleSelfSale}
+                    disabled={remaining <= 0}
+                    className="rounded-none bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/30 font-bold disabled:opacity-50"
+                    style={numpadSecondaryRowStyle}
+                    aria-label="Self Sale"
+                    title="Self Sale"
+                  >
+                    Self
+                  </button>
+                )}
               </div>
 
               {editingBidId && editBidDraft ? (
@@ -4136,14 +4661,16 @@ const AuctionsPage = () => {
                       type="button"
                       onClick={() => { if (editingEntry) void saveEditBid(editingEntry); }}
                       disabled={!editingEntry || !rate || !qty || parseInt(qty) <= 0 || parseInt(rate) <= 0}
-                      className="h-[50px] rounded-none bg-gradient-to-r from-violet-500 to-fuchsia-500 text-white text-[15px] font-bold disabled:opacity-50 md:h-[66px] md:text-[16px]"
+                      className="rounded-none bg-gradient-to-r from-violet-500 to-fuchsia-500 text-white font-bold disabled:opacity-50"
+                      style={numpadSecondaryRowStyle}
                     >
                       Update Bid
                     </button>
                     <button
                       type="button"
                       onClick={cancelEditBid}
-                      className="h-[50px] rounded-none bg-muted/60 text-foreground border border-border/50 text-[15px] font-bold md:h-[66px] md:text-[16px]"
+                      className="rounded-none bg-muted/60 text-foreground border border-border/50 font-bold"
+                      style={numpadSecondaryRowStyle}
                     >
                       Cancel
                     </button>
@@ -4153,7 +4680,8 @@ const AuctionsPage = () => {
                       type="button"
                       disabled={completeLoading || entries.length === 0}
                       onClick={handleSaveAndCompleteAuction}
-                      className="h-[54px] rounded-none bg-gradient-to-r from-emerald-500 to-green-500 text-white text-[16px] font-bold disabled:opacity-50 px-1 leading-tight md:h-[72px] md:text-[17px]"
+                      className="rounded-none bg-gradient-to-r from-emerald-500 to-green-500 text-white font-bold disabled:opacity-50 px-1 leading-tight"
+                      style={numpadActionRowStyle}
                     >
                       {completeLoading ? 'Completing…' : 'Save & Close'}
                     </button>
@@ -4165,7 +4693,8 @@ const AuctionsPage = () => {
                     type="button"
                     onClick={handleUnifiedAdd}
                     disabled={(!scribbleMark.trim() && !selectedBuyer) || !rate || !qty || parseInt(qty) <= 0 || parseInt(rate) <= 0}
-                    className="h-[54px] rounded-none bg-gradient-to-r from-violet-500 to-fuchsia-500 text-white text-[16px] font-bold disabled:opacity-50 px-1 leading-tight md:h-[72px] md:text-[17px]"
+                    className="rounded-none bg-gradient-to-r from-violet-500 to-fuchsia-500 text-white font-bold disabled:opacity-50 px-1 leading-tight"
+                    style={numpadActionRowStyle}
                   >
                     + Add Bid
                   </button>
@@ -4173,7 +4702,8 @@ const AuctionsPage = () => {
                   type="button"
                   disabled={completeLoading || entries.length === 0}
                   onClick={handleSaveAndCompleteAuction}
-                  className="h-[54px] rounded-none bg-gradient-to-r from-emerald-500 to-green-500 text-white text-[16px] font-bold disabled:opacity-50 px-1 leading-tight md:h-[72px] md:text-[17px]"
+                  className="rounded-none bg-gradient-to-r from-emerald-500 to-green-500 text-white font-bold disabled:opacity-50 px-1 leading-tight"
+                  style={numpadActionRowStyle}
                 >
                   {completeLoading ? 'Completing…' : 'Save & Close'}
                 </button>
@@ -4182,6 +4712,15 @@ const AuctionsPage = () => {
             </div>
           </div>
         </div>
+      )}
+
+      {!isDesktop && (
+        <AuctionTouchLayoutSheet
+          open={touchLayoutSheetOpen}
+          onOpenChange={setTouchLayoutSheetOpen}
+          layout={touchLayout}
+          onLayoutChange={commitTouchLayout}
+        />
       )}
 
       {/* Scribble Pad */}

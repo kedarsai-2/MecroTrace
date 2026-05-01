@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { useState, useEffect, useLayoutEffect, useMemo, useCallback, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   ArrowLeft, Receipt, Search, User, Package, IndianRupee, Truck, Hash,
@@ -97,6 +97,9 @@ const billingSummaryCellOuterClass =
 const billingSummaryCellInputsClass = 'flex flex-wrap items-center gap-x-1 gap-y-1 min-w-0 flex-1';
 const billingLoginImage = '/login-bg.webp';
 
+/** Search & Migrate modal: horizontal inset matches legacy row padding. */
+const searchMigrateBidTableInset = 'px-2 sm:px-2.5';
+
 /** Commodity line: computed fields (not inputs). Muted + dashed border + not-allowed cursor so they read as read-only. */
 const billingCommodityReadOnlyCellClass =
   'h-10 lg:h-6 px-2 lg:px-1 border border-dashed border-border/70 rounded-md bg-muted/50 text-muted-foreground inline-flex items-center justify-center w-full text-[11px] lg:text-[10px] cursor-not-allowed shadow-inner select-text';
@@ -157,8 +160,155 @@ interface BillEntry {
   tokenAdvance?: number;
 }
 
-function getBidSelectionKey(entry: Pick<BillEntry, 'bidNumber' | 'lotId'>): string {
-  return `${entry.bidNumber}::${entry.lotId}`;
+function getBidSelectionKey(
+  entry: Pick<
+    BillEntry,
+    | 'bidNumber'
+    | 'lotId'
+    | 'auctionEntryId'
+    | 'selfSaleUnitId'
+    | 'commodityName'
+    | 'sellerName'
+    | 'rate'
+    | 'quantity'
+    | 'weight'
+    | 'isSelfSale'
+  >,
+): string {
+  const ae = Number(entry.auctionEntryId);
+  if (Number.isFinite(ae) && ae > 0) return `ae::${ae}`;
+  const ss = Number(entry.selfSaleUnitId);
+  if (Number.isFinite(ss) && ss > 0) return `ss::${ss}`;
+  const bid = entry.bidNumber;
+  const lotId = String(entry.lotId ?? '').trim();
+  const comm = String(entry.commodityName ?? '').trim();
+  const seller = String(entry.sellerName ?? '').trim();
+  const rate = Number(entry.rate) || 0;
+  const qty = Math.floor(Number(entry.quantity) || 0);
+  const w = roundMoney2(Number(entry.weight) || 0);
+  const self = entry.isSelfSale ? '1' : '0';
+  return `${bid}::${lotId}::${comm}::${seller}::${rate}::${qty}::${w}::${self}`;
+}
+
+type SearchBidMigrateResult =
+  | { ok: true; nextBuyers: BuyerPurchase[]; mergedBuyer: BuyerPurchase; migratedCount: number }
+  | { ok: false; code: 'NO_BILL_BUYER' | 'NO_SOURCE' | 'NO_SELECTED' | 'NO_EFFECTIVE' };
+
+/**
+ * Applies Search & Migrate: merges lines onto bill buyer (merge same bid+lot), decrements source buyer
+ * entries by migrated qty/weight/token so remaining bags stay visible for further migrate.
+ */
+function tryMigrateBuyersForSearchBid(
+  prev: BuyerPurchase[],
+  selectedBuyer: BuyerPurchase,
+  searchBidSourceBuyer: BuyerPurchase,
+  searchBidSelectedKeys: string[],
+  searchBidMigrateQtyByKey: Record<string, number>,
+): SearchBidMigrateResult {
+  const selIdx = prev.findIndex(
+    b =>
+      (b.buyerMark || '').toLowerCase() === (selectedBuyer.buyerMark || '').toLowerCase()
+      && (b.buyerName || '').toLowerCase() === (selectedBuyer.buyerName || '').toLowerCase(),
+  );
+  if (selIdx < 0) return { ok: false, code: 'NO_BILL_BUYER' };
+  const srcIdx = prev.findIndex(
+    b =>
+      (b.buyerMark || '').toLowerCase() === (searchBidSourceBuyer.buyerMark || '').toLowerCase()
+      && (b.buyerName || '').toLowerCase() === (searchBidSourceBuyer.buyerName || '').toLowerCase(),
+  );
+  if (srcIdx < 0) return { ok: false, code: 'NO_SOURCE' };
+
+  const billBuyer = prev[selIdx];
+  const sourceBuyer = prev[srcIdx];
+
+  const selectedEntries = sourceBuyer.entries.filter(e =>
+    searchBidSelectedKeys.includes(getBidSelectionKey(e)),
+  );
+  if (selectedEntries.length === 0) return { ok: false, code: 'NO_SELECTED' };
+
+  type Mig = { key: string; maxQty: number; qty: number; billEntry: BillEntry };
+  const migrations: Mig[] = [];
+  for (const e of selectedEntries) {
+    const key = getBidSelectionKey(e);
+    const maxQty = Math.max(0, Math.floor(Number(e.quantity) || 0));
+    let qty = searchBidMigrateQtyByKey[key];
+    if (qty === undefined) qty = maxQty;
+    else qty = Math.floor(Number(qty) || 0);
+    if (maxQty <= 0 || qty <= 0) continue;
+    qty = Math.min(maxQty, Math.max(1, qty));
+    const ratio = maxQty > 0 ? qty / maxQty : 1;
+    const origW = Number(e.weight) || 0;
+    const origTa = Number(e.tokenAdvance) || 0;
+    migrations.push({
+      key,
+      maxQty,
+      qty,
+      billEntry: {
+        ...e,
+        quantity: qty,
+        weight: roundMoney2(origW * ratio),
+        tokenAdvance: roundMoney2(origTa * ratio),
+      },
+    });
+  }
+  if (migrations.length === 0) return { ok: false, code: 'NO_EFFECTIVE' };
+
+  let mergedEntries = [...billBuyer.entries];
+  let tokenDelta = 0;
+  for (const m of migrations) {
+    const addTok = Number(m.billEntry.tokenAdvance) || 0;
+    tokenDelta += addTok;
+    const idx = mergedEntries.findIndex(e => getBidSelectionKey(e) === m.key);
+    if (idx >= 0) {
+      const cur = mergedEntries[idx];
+      mergedEntries[idx] = {
+        ...cur,
+        quantity: Math.floor(Number(cur.quantity) || 0) + m.qty,
+        weight: roundMoney2((Number(cur.weight) || 0) + m.billEntry.weight),
+        tokenAdvance: roundMoney2((Number(cur.tokenAdvance) || 0) + addTok),
+      };
+    } else {
+      mergedEntries.push(m.billEntry);
+    }
+  }
+
+  const mergedBuyer: BuyerPurchase = {
+    ...billBuyer,
+    entries: mergedEntries,
+    tokenAdvanceTotal: (billBuyer.tokenAdvanceTotal || 0) + tokenDelta,
+  };
+
+  const sourceEntries = [...sourceBuyer.entries];
+  for (const m of migrations) {
+    const eidx = sourceEntries.findIndex(e => getBidSelectionKey(e) === m.key);
+    if (eidx < 0) continue;
+    const cur = sourceEntries[eidx];
+    const maxQty = Math.max(0, Math.floor(Number(cur.quantity) || 0));
+    const remainQty = Math.max(0, maxQty - m.qty);
+    const origW = Number(cur.weight) || 0;
+    const origTa = Number(cur.tokenAdvance) || 0;
+    if (remainQty <= 0) {
+      sourceEntries.splice(eidx, 1);
+    } else {
+      const ratioRem = maxQty > 0 ? remainQty / maxQty : 0;
+      sourceEntries[eidx] = {
+        ...cur,
+        quantity: remainQty,
+        weight: roundMoney2(origW * ratioRem),
+        tokenAdvance: roundMoney2(origTa * ratioRem),
+      };
+    }
+  }
+  const patchedSource: BuyerPurchase = {
+    ...sourceBuyer,
+    entries: sourceEntries,
+    tokenAdvanceTotal: sourceEntries.reduce((s, e) => s + (Number(e.tokenAdvance) || 0), 0),
+  };
+
+  const nextBuyers = [...prev];
+  nextBuyers[selIdx] = mergedBuyer;
+  nextBuyers[srcIdx] = patchedSource;
+  return { ok: true, nextBuyers, mergedBuyer, migratedCount: migrations.length };
 }
 
 function normalizeLotNameKey(name: string): string {
@@ -1057,6 +1207,8 @@ const BillingPage = () => {
   const [searchBidSourceBuyer, setSearchBidSourceBuyer] = useState<BuyerPurchase | null>(null);
   const [searchBidDialogOpen, setSearchBidDialogOpen] = useState(false);
   const [searchBidSelectedKeys, setSearchBidSelectedKeys] = useState<string[]>([]);
+  /** Migrate qty (bags) per bid key for Search & Migrate; defaults initialized when dialog opens. */
+  const [searchBidMigrateQtyByKey, setSearchBidMigrateQtyByKey] = useState<Record<string, number>>({});
   const [showSearchBidBuyerSuggestions, setShowSearchBidBuyerSuggestions] = useState(false);
   const searchBidBuyerSelectRef = useRef<HTMLDivElement | null>(null);
   const searchBidInputRef = useRef<HTMLInputElement | null>(null);
@@ -1327,9 +1479,9 @@ const BillingPage = () => {
     const errs: Record<string, string> = {};
     if (!contactForm.name.trim()) errs.name = 'Name is required';
     if (contactForm.phone.trim() && !/^[6-9]\d{9}$/.test(contactForm.phone.trim())) {
-      errs.phone = 'Enter a valid 10-digit mobile number';
+      errs.phone = 'Invalid 10-digit mobile';
     } else if (contactForm.phone.trim() && contactsRegistry.some(c => c.phone === contactForm.phone.trim())) {
-      errs.phone = 'This phone number is already registered';
+      errs.phone = 'Phone already registered';
     }
     if (contactForm.mark.trim()) {
       const markLower = contactForm.mark.trim().toLowerCase();
@@ -1460,7 +1612,14 @@ const BillingPage = () => {
     else if (replaceTarget === 'TEMP_BUYER' && trimmedMark.length > MAX_MARK_LEN) {
       errs.mark = `Maximum ${MAX_MARK_LEN} characters`;
     }
-    if (trimmedPhone && !/^[6-9]\d{9}$/.test(trimmedPhone)) errs.phone = 'Enter a valid 10-digit mobile number';
+    if (replaceTarget === 'TEMP_BUYER') {
+      if (trimmedPhone && !/^[6-9]\d{9}$/.test(trimmedPhone)) {
+        errs.phone = 'Invalid 10-digit mobile';
+      }
+    } else {
+      if (!trimmedPhone) errs.phone = 'Mobile required';
+      else if (!/^[6-9]\d{9}$/.test(trimmedPhone)) errs.phone = 'Invalid 10-digit mobile';
+    }
     setReplaceErrors(errs);
     return Object.keys(errs).length === 0;
   };
@@ -1590,8 +1749,18 @@ const BillingPage = () => {
           setReplaceErrors(prev => ({ ...prev, mark: err.message }));
           return;
         }
+        if (
+          err instanceof ContactApiError
+          && (err.errorKey === 'phoneexists' || err.errorKey === 'mobileinuse')
+        ) {
+          setReplaceErrors(prev => ({ ...prev, phone: err.message }));
+          return;
+        }
         if (err instanceof ContactApiError && err.errorKey === 'phoneexistsinactive') {
-          setReplaceErrors(prev => ({ ...prev, phone: 'Phone exists on inactive contact. Restore from Contacts module first.' }));
+          setReplaceErrors(prev => ({
+            ...prev,
+            phone: 'Number on inactive contact — restore in Contacts',
+          }));
           return;
         }
         toast.error(err instanceof Error ? err.message : 'Failed to create contact');
@@ -2282,7 +2451,7 @@ const BillingPage = () => {
     toast.success(`Loaded ${buyer.entries.length} bids. Select required bids to create bill.`);
   }, [currentBillBidKeys, findBuyerByInput]);
 
-  const toggleBidSelection = (entry: Pick<BillEntry, 'bidNumber' | 'lotId'>) => {
+  const toggleBidSelection = (entry: BillEntry) => {
     const key = getBidSelectionKey(entry);
     setSelectedBidKeys(prev =>
       prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key],
@@ -2650,11 +2819,17 @@ const BillingPage = () => {
     setSearchBidSourceBuyer(picked);
     setSearchBidInput(picked.buyerMark || picked.buyerName);
     setSearchBidSelectedKeys([]);
+    const initQty: Record<string, number> = {};
+    for (const ent of picked.entries) {
+      const k = getBidSelectionKey(ent);
+      initQty[k] = Math.max(0, Math.floor(Number(ent.quantity) || 0));
+    }
+    setSearchBidMigrateQtyByKey(initQty);
     setShowSearchBidBuyerSuggestions(false);
     setSearchBidDialogOpen(true);
   }, []);
 
-  const toggleSearchBidSelection = useCallback((entry: Pick<BillEntry, 'bidNumber' | 'lotId'>) => {
+  const toggleSearchBidSelection = useCallback((entry: BillEntry) => {
     const key = getBidSelectionKey(entry);
     setSearchBidSelectedKeys(prev => (prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]));
   }, []);
@@ -2665,41 +2840,44 @@ const BillingPage = () => {
       toast.error('Select at least one lot');
       return;
     }
-    const selectedEntries = searchBidSourceBuyer.entries
-      .filter(e => !currentBillBidKeys.has(getBidSelectionKey(e)))
-      .filter(e => searchBidSelectedKeys.includes(getBidSelectionKey(e)));
-    if (selectedEntries.length === 0) {
-      toast.error('No selected lots available');
-      return;
-    }
-    const existingKeys = new Set(selectedBuyer.entries.map(e => getBidSelectionKey(e)));
-    const toAdd = selectedEntries.filter(e => !existingKeys.has(getBidSelectionKey(e)));
-    if (toAdd.length === 0) {
-      toast.error('Selected lots already exist in current bill');
-      return;
-    }
-    const mergedBuyer: BuyerPurchase = {
-      ...selectedBuyer,
-      entries: [...selectedBuyer.entries, ...toAdd],
-      tokenAdvanceTotal:
-        (selectedBuyer.tokenAdvanceTotal || 0) + toAdd.reduce((s, e) => s + (Number(e.tokenAdvance) || 0), 0),
-    };
-    setBuyers(prev =>
-      prev.map(b =>
-        (b.buyerMark || '').toLowerCase() === (selectedBuyer.buyerMark || '').toLowerCase()
-          && (b.buyerName || '').toLowerCase() === (selectedBuyer.buyerName || '').toLowerCase()
-          ? mergedBuyer
-          : b,
-      ),
+    const res = tryMigrateBuyersForSearchBid(
+      buyers,
+      selectedBuyer,
+      searchBidSourceBuyer,
+      searchBidSelectedKeys,
+      searchBidMigrateQtyByKey,
     );
-    generateBill(mergedBuyer);
-    setSearchBidDialogOpen(false);
-    setSearchBidSelectedKeys([]);
-    toast.success(`${toAdd.length} lot(s) added into current bill. Save bill to finalize migration.`);
+    switch (res.ok) {
+      case true:
+        setBuyers(res.nextBuyers);
+        generateBill(res.mergedBuyer);
+        setSearchBidDialogOpen(false);
+        setSearchBidSelectedKeys([]);
+        setSearchBidMigrateQtyByKey({});
+        toast.success(
+          `${res.migratedCount} lot(s) added into current bill. Save bill to finalize migration.`,
+        );
+        break;
+      case false: {
+        const msg =
+          res.code === 'NO_BILL_BUYER'
+            ? 'Current bill buyer not found in session'
+            : res.code === 'NO_SOURCE'
+              ? 'Source buyer no longer available'
+              : res.code === 'NO_SELECTED'
+                ? 'No selected lots available'
+                : 'Enter a valid migrate quantity (bags)';
+        toast.error(msg);
+        break;
+      }
+      default:
+        break;
+    }
   }, [
     bill,
-    currentBillBidKeys,
+    buyers,
     generateBill,
+    searchBidMigrateQtyByKey,
     searchBidSelectedKeys,
     searchBidSourceBuyer,
     selectedBuyer,
@@ -2720,10 +2898,46 @@ const BillingPage = () => {
     );
   }, [bill, buyersForBilling, searchBidInput]);
 
+  const searchBidLiveBuyer = useMemo(() => {
+    if (!searchBidSourceBuyer) return null;
+    const m = (searchBidSourceBuyer.buyerMark || '').toLowerCase();
+    const n = (searchBidSourceBuyer.buyerName || '').toLowerCase();
+    return (
+      buyers.find(
+        b => (b.buyerMark || '').toLowerCase() === m && (b.buyerName || '').toLowerCase() === n,
+      ) ?? null
+    );
+  }, [buyers, searchBidSourceBuyer]);
+
   const searchBidVisibleEntries = useMemo(() => {
-    if (!searchBidSourceBuyer) return [];
-    return searchBidSourceBuyer.entries.filter(e => !currentBillBidKeys.has(getBidSelectionKey(e)));
-  }, [currentBillBidKeys, searchBidSourceBuyer]);
+    if (!searchBidLiveBuyer) return [];
+    return searchBidLiveBuyer.entries.filter(e => Math.floor(Number(e.quantity) || 0) > 0);
+  }, [searchBidLiveBuyer]);
+
+  const searchBidVisibleRowKeys = useMemo(
+    () => searchBidVisibleEntries.map(e => getBidSelectionKey(e)),
+    [searchBidVisibleEntries],
+  );
+
+  const toggleSearchBidSelectAllVisible = useCallback(() => {
+    if (searchBidVisibleRowKeys.length === 0) return;
+    setSearchBidSelectedKeys(prev => {
+      const allOn = searchBidVisibleRowKeys.every(k => prev.includes(k));
+      if (allOn) return [];
+      return [...searchBidVisibleRowKeys];
+    });
+  }, [searchBidVisibleRowKeys]);
+
+  const searchBidSelectAllCheckboxRef = useRef<HTMLInputElement>(null);
+  const allSearchBidRowsSelected =
+    searchBidVisibleRowKeys.length > 0 && searchBidVisibleRowKeys.every(k => searchBidSelectedKeys.includes(k));
+  const someSearchBidRowsSelected = searchBidVisibleRowKeys.some(k => searchBidSelectedKeys.includes(k));
+
+  useLayoutEffect(() => {
+    const el = searchBidSelectAllCheckboxRef.current;
+    if (!el) return;
+    el.indeterminate = !allSearchBidRowsSelected && someSearchBidRowsSelected;
+  }, [allSearchBidRowsSelected, someSearchBidRowsSelected]);
 
   useEffect(() => {
     const onPointerDown = (e: MouseEvent) => {
@@ -3451,61 +3665,172 @@ const BillingPage = () => {
           setSearchBidDialogOpen(open);
           if (!open) {
             setSearchBidSelectedKeys([]);
+            setSearchBidMigrateQtyByKey({});
             setShowSearchBidBuyerSuggestions(false);
             setShowBuyerSuggestions(false);
           }
         }}
       >
-        <DialogContent className="max-w-lg dialog-content">
-          <DialogHeader>
-            <DialogTitle>
-              Search & Migrate Bid - {searchBidSourceBuyer ? `${searchBidSourceBuyer.buyerName} (${searchBidSourceBuyer.buyerMark})` : 'Buyer'}
+        <DialogContent className="dialog-content max-h-[min(92dvh,720px)] w-[calc(100vw-1rem)] max-w-xl min-w-0 gap-3 overflow-hidden p-4 sm:w-full sm:p-6">
+          <DialogHeader className="min-w-0 shrink-0 space-y-1.5 text-left">
+            <DialogTitle className="break-words pr-7 text-base leading-snug sm:pr-8 sm:text-lg">
+              Search & Migrate Bid -{' '}
+              {searchBidSourceBuyer ? `${searchBidSourceBuyer.buyerName} (${searchBidSourceBuyer.buyerMark})` : 'Buyer'}
             </DialogTitle>
           </DialogHeader>
           {!searchBidSourceBuyer || searchBidVisibleEntries.length === 0 ? (
             <p className="text-sm text-muted-foreground">No buyer lots found.</p>
           ) : (
-            <div className="max-h-72 overflow-y-auto space-y-2">
-              <div className="grid grid-cols-[1.6rem_1.8fr_0.9fr_1fr_1fr] gap-2 px-1 text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">
-                <span />
-                <span>Item</span>
-                <span>Quantity</span>
-                <span>Base Rate</span>
-                <span>Preset</span>
+            <div className="min-h-0 min-w-0 overflow-hidden">
+              <div className="max-h-[min(18rem,42vh)] overflow-auto overscroll-x-contain [-webkit-overflow-scrolling:touch]">
+                <div className={cn('min-w-[28rem]', searchMigrateBidTableInset)}>
+                  <table className="w-full table-fixed border-separate border-spacing-y-2 border-spacing-x-0 text-xs">
+                    <caption className="sr-only">
+                      Lots to search and migrate — select rows and set quantities to move.
+                    </caption>
+                    <colgroup>
+                      <col className="w-8" />
+                      <col />
+                      <col className="w-[7.5rem]" />
+                      <col className="w-[5.5rem]" />
+                      <col className="w-[9rem]" />
+                    </colgroup>
+                    <thead className="sticky top-0 z-10 bg-background shadow-[0_1px_0_0_hsl(var(--border)/0.5)]">
+                      <tr className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground sm:text-[11px]">
+                        <th scope="col" className="w-8 pb-2 pr-1 text-center align-bottom font-semibold">
+                          <div className="flex h-8 items-center justify-center">
+                            <input
+                              ref={searchBidSelectAllCheckboxRef}
+                              type="checkbox"
+                              checked={allSearchBidRowsSelected}
+                              disabled={searchBidVisibleRowKeys.length === 0}
+                              onChange={toggleSearchBidSelectAllVisible}
+                              className="h-4 w-4 rounded border-border disabled:opacity-50"
+                              aria-label={allSearchBidRowsSelected ? 'Unselect all lots' : 'Select all lots'}
+                              title={allSearchBidRowsSelected ? 'Unselect all' : 'Select all'}
+                            />
+                          </div>
+                        </th>
+                        <th scope="col" className="min-w-0 pb-2 pr-2 text-left align-bottom font-semibold">
+                          Item
+                        </th>
+                        <th scope="col" className="pb-2 pl-1 text-right align-bottom font-semibold tabular-nums">
+                          Qty
+                        </th>
+                        <th scope="col" className="pb-2 text-right align-bottom font-semibold tabular-nums">
+                          Rate
+                        </th>
+                        <th scope="col" className="pb-2 pl-1 text-right align-bottom font-semibold tabular-nums">
+                          Preset
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {searchBidVisibleEntries.map(entry => {
+                        const bidKey = getBidSelectionKey(entry);
+                        const checked = searchBidSelectedKeys.includes(bidKey);
+                        const maxQty = Math.max(0, Math.floor(Number(entry.quantity) || 0));
+                        const qtyVal = searchBidMigrateQtyByKey[bidKey] ?? maxQty;
+                        const effectiveMigrateQty =
+                          maxQty <= 0 ? 0 : Math.min(maxQty, Math.max(1, Math.round(Number(qtyVal)) || 0));
+                        const remainingAfterMigrate = Math.max(0, maxQty - effectiveMigrateQty);
+                        const lotLabel = formatLotIdentifierForBillEntry(entry);
+                        const rowCellBg = checked
+                          ? 'bg-primary/10'
+                          : 'bg-background group-hover:bg-muted/40';
+                        return (
+                          <tr
+                            key={bidKey}
+                            tabIndex={0}
+                            role="button"
+                            aria-pressed={checked}
+                            onClick={() => toggleSearchBidSelection(entry)}
+                            onKeyDown={e => {
+                              if (e.key === 'Enter' || e.key === ' ') {
+                                e.preventDefault();
+                                toggleSearchBidSelection(entry);
+                              }
+                            }}
+                            className={cn(
+                              'group cursor-pointer border-b border-border/40 text-left outline-none transition-colors last:border-b-0',
+                              'focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
+                              checked && 'border-primary/25',
+                            )}
+                          >
+                            <td
+                              className={cn('py-2 pl-0.5 pr-0 align-middle', rowCellBg)}
+                              onClick={e => e.stopPropagation()}
+                              onPointerDown={e => e.stopPropagation()}
+                            >
+                              <div className="flex h-8 items-center justify-center">
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  onClick={e => e.stopPropagation()}
+                                  onChange={() => toggleSearchBidSelection(entry)}
+                                  className="h-4 w-4 rounded border-border"
+                                  aria-label={`Select ${lotLabel}`}
+                                />
+                              </div>
+                            </td>
+                            <td className={cn('max-w-0 py-2 pr-2 align-middle', rowCellBg)}>
+                              <p
+                                className="truncate font-semibold leading-tight text-foreground"
+                                title={lotLabel}
+                              >
+                                {lotLabel}
+                              </p>
+                            </td>
+                            <td
+                              className={cn('py-2 pl-1 align-middle', rowCellBg)}
+                              onClick={e => e.stopPropagation()}
+                              onPointerDown={e => e.stopPropagation()}
+                            >
+                              <div className="flex h-8 items-center justify-end gap-0.5 whitespace-nowrap tabular-nums">
+                                <BillingMoneyInput
+                                  integerOnly
+                                  min={1}
+                                  commitMode="live"
+                                  liveDebounceMs={0}
+                                  disabled={maxQty <= 0}
+                                  value={maxQty <= 0 ? 0 : qtyVal}
+                                  onCommit={n => {
+                                    if (maxQty <= 0) return;
+                                    const capped = Math.min(maxQty, Math.max(1, Math.round(n)));
+                                    setSearchBidMigrateQtyByKey(prev => ({ ...prev, [bidKey]: capped }));
+                                  }}
+                                  title={`Migrate quantity for ${lotLabel}`}
+                                  className="h-8 w-[3.25rem] min-w-[3rem] shrink-0 px-1.5 py-0 text-xs text-right tabular-nums"
+                                />
+                                <span className="shrink-0 select-none text-muted-foreground" aria-hidden>
+                                  /
+                                </span>
+                                <span className="min-w-[1.25rem] shrink-0 text-right text-muted-foreground tabular-nums">
+                                  {remainingAfterMigrate}
+                                </span>
+                              </div>
+                            </td>
+                            <td className={cn('py-2 text-right align-middle tabular-nums leading-none', rowCellBg)}>
+                              {Number(entry.rate || 0)}
+                            </td>
+                            <td
+                              className={cn('py-2 pl-1 text-right align-middle tabular-nums leading-none', rowCellBg)}
+                              title={formatBillingInr(Number(entry.presetApplied ?? 0))}
+                            >
+                              <span className="inline-block max-w-full truncate align-bottom">
+                                {formatBillingInr(Number(entry.presetApplied ?? 0))}
+                              </span>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
               </div>
-              {searchBidVisibleEntries.map(entry => {
-                const checked = searchBidSelectedKeys.includes(getBidSelectionKey(entry));
-                return (
-                  <button
-                    key={`${entry.bidNumber}-${entry.lotId}`}
-                    type="button"
-                    onClick={() => toggleSearchBidSelection(entry)}
-                    className={cn(
-                      'w-full text-left rounded-lg border p-2.5 transition-all',
-                      checked ? 'border-primary/50 bg-primary/10' : 'border-border/50 bg-background hover:bg-muted/40',
-                    )}
-                  >
-                    <div className="grid grid-cols-[1.6rem_1.8fr_0.9fr_1fr_1fr] gap-2 items-start">
-                      <input
-                        type="checkbox"
-                        checked={checked}
-                        onClick={e => e.stopPropagation()}
-                        onChange={() => toggleSearchBidSelection(entry)}
-                        className="mt-0.5 h-4 w-4 rounded border-border"
-                      />
-                      <div className="min-w-0">
-                        <p className="text-xs font-semibold truncate">{formatLotIdentifierForBillEntry(entry)}</p>
-                      </div>
-                      <p className="text-xs">{entry.quantity}</p>
-                      <p className="text-xs">{Number(entry.rate || 0)}</p>
-                      <p className="text-xs">{formatBillingInr(Number(entry.presetApplied ?? 0))}</p>
-                    </div>
-                  </button>
-                );
-              })}
             </div>
           )}
-          <DialogFooter>
+          <DialogFooter className="min-w-0 shrink-0 gap-2 sm:gap-2">
             <Button variant="outline" onClick={() => setSearchBidDialogOpen(false)} className={arrSolidMd}>Cancel</Button>
             <Button
               variant="outline"
@@ -3813,11 +4138,20 @@ const BillingPage = () => {
               </div>
               <div>
                 <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1 block">Phone Number * <span className="text-emerald-500 font-normal">(Primary ID)</span></label>
-                <Input placeholder="e.g., 9876543210" value={contactForm.phone}
+                <Input
+                  placeholder="e.g., 9876543210"
+                  value={contactForm.phone}
                   onChange={e => setContactForm(p => ({ ...p, phone: e.target.value.replace(/\D/g, '').slice(0, 10) }))}
                   className={cn('h-12 rounded-xl', contactErrors.phone && 'border-destructive')}
-                  type="tel" maxLength={10} />
-                {contactErrors.phone && <p className="text-xs text-destructive mt-1 flex items-center gap-1"><AlertCircle className="w-3 h-3" />{contactErrors.phone}</p>}
+                  type="tel"
+                  maxLength={10}
+                  aria-invalid={!!contactErrors.phone}
+                />
+                {contactErrors.phone ? (
+                  <p className="mt-1 text-left text-[11px] leading-snug text-destructive" role="alert">
+                    {contactErrors.phone}
+                  </p>
+                ) : null}
               </div>
               <div>
                 <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1 block">Mark <span className="text-muted-foreground/60 font-normal">(Short Code)</span></label>
@@ -4059,7 +4393,7 @@ const BillingPage = () => {
                     return (
                       <button
                         type="button"
-                        key={`${entry.bidNumber}-${entry.lotId}`}
+                        key={getBidSelectionKey(entry)}
                         onClick={() => toggleBidSelection(entry)}
                         className={cn(
                           "w-full text-left rounded-lg border p-2.5 transition-all",
@@ -4273,7 +4607,7 @@ const BillingPage = () => {
                     </Label>
                   </div>
                 </RadioGroup>
-                <div className="relative min-w-[7rem] flex-1 basis-[10rem]">
+                <div className="relative flex min-w-[7rem] flex-1 basis-[10rem] flex-col items-stretch">
                   <Input
                     value={replaceMarkInput}
                     onChange={e => {
@@ -4283,17 +4617,29 @@ const BillingPage = () => {
                       setReplaceMarkInput(value);
                       setReplaceSelectedContact(null);
                       setReplaceForm(prev => ({ ...prev, mark: value }));
+                      setReplaceErrors(prev => {
+                        if (!prev.mark) return prev;
+                        const next = { ...prev };
+                        delete next.mark;
+                        return next;
+                      });
                     }}
                     placeholder={replaceTarget === 'TEMP_BUYER' ? 'Mark (required)' : 'Mark'}
+                    aria-invalid={!!replaceErrors.mark}
                     className={cn('h-9 rounded-lg bg-muted/10 border-border/30 text-sm font-medium', replaceErrors.mark && 'border-destructive')}
                     disabled={!bill}
                   />
+                  {replaceErrors.mark ? (
+                    <p className="mt-1 max-w-full text-left text-[10px] leading-snug text-destructive break-words" role="alert">
+                      {replaceErrors.mark}
+                    </p>
+                  ) : null}
                   {!replaceSearchLoading
                     && replaceTarget !== 'TEMP_BUYER'
                     && replaceMarkInput.trim()
                     && replaceSearchResults.length > 0
                     && !searchBidDialogOpen && (
-                    <div className={cn("absolute mt-1 max-h-44 w-full min-w-[12rem] overflow-y-auto rounded-xl border border-border/50 bg-background shadow-lg", searchBidDialogOpen ? "z-[20]" : "z-[90]")}>
+                    <div className={cn('absolute left-0 right-0 top-full mt-1 max-h-44 w-full min-w-[12rem] overflow-y-auto rounded-xl border border-border/50 bg-background shadow-lg', searchBidDialogOpen ? 'z-[20]' : 'z-[90]')}>
                       {replaceSearchResults.map(c => (
                         <button
                           key={c.contact_id}
@@ -4311,18 +4657,35 @@ const BillingPage = () => {
                     </div>
                   )}
                 </div>
-                <Input
-                  value={replaceForm.phone}
-                  onChange={e => {
-                    setReplaceSelectedContact(null);
-                    setReplaceForm(prev => ({ ...prev, phone: e.target.value.replace(/\D/g, '').slice(0, 10) }));
-                  }}
-                  placeholder={replaceTarget === 'TEMP_BUYER' ? 'Mobile (optional)' : 'Mobile'}
-                  inputMode="numeric"
-                  autoComplete="tel"
-                  className={cn('h-9 w-[9.25rem] shrink-0 rounded-lg bg-muted/10 border-border/30 text-sm font-medium sm:w-40', replaceErrors.phone && 'border-destructive')}
-                  disabled={!bill}
-                />
+                <div className="flex w-[9.25rem] shrink-0 flex-col items-stretch sm:w-40">
+                  <Input
+                    value={replaceForm.phone}
+                    onChange={e => {
+                      setReplaceSelectedContact(null);
+                      setReplaceForm(prev => ({ ...prev, phone: e.target.value.replace(/\D/g, '').slice(0, 10) }));
+                      setReplaceErrors(prev => {
+                        if (!prev.phone) return prev;
+                        const next = { ...prev };
+                        delete next.phone;
+                        return next;
+                      });
+                    }}
+                    placeholder={replaceTarget === 'TEMP_BUYER' ? 'Mobile (optional)' : 'Mobile'}
+                    inputMode="numeric"
+                    autoComplete="tel"
+                    aria-invalid={!!replaceErrors.phone}
+                    className={cn(
+                      'h-9 w-full rounded-lg bg-muted/10 border-border/30 text-sm font-medium',
+                      replaceErrors.phone && 'border-destructive',
+                    )}
+                    disabled={!bill}
+                  />
+                  {replaceErrors.phone ? (
+                    <p className="mt-1 max-w-full text-left text-[10px] leading-snug text-destructive break-words" role="alert">
+                      {replaceErrors.phone}
+                    </p>
+                  ) : null}
+                </div>
                 <Input
                   value={replaceForm.name}
                   onChange={e => {
@@ -4476,10 +4839,8 @@ const BillingPage = () => {
               <p className="text-[9px] text-muted-foreground">
                 Global charges: brokerage and other amounts apply to all items in this bill.
               </p>
-              {(replaceErrors.mark || replaceErrors.name || replaceErrors.phone) && (
-                <p className="text-[11px] text-destructive">
-                  {[replaceErrors.mark, replaceErrors.name, replaceErrors.phone].filter(Boolean).join(' · ')}
-                </p>
+              {replaceErrors.name && (
+                <p className="text-[11px] text-destructive">{replaceErrors.name}</p>
               )}
             </div>
 
@@ -4926,12 +5287,12 @@ const BillingPage = () => {
                   </ul>
                 </div>
               )}
-              <div className="flex flex-col gap-2 xl:flex-row xl:items-stretch xl:gap-2 min-w-0">
+              <div className="flex flex-col gap-1.5 xl:flex-row xl:items-stretch xl:gap-3 min-w-0">
                 <div
-                  className="w-full min-w-0 flex-1 overflow-x-auto overflow-y-clip rounded-xl border border-border/50 bg-background/40 shadow-sm overscroll-x-contain xl:flex-none xl:min-w-0 xl:max-w-[min(100%,calc(100%-14rem))]"
+                  className="w-full min-w-0 flex-1 overflow-x-auto overflow-y-clip rounded-xl border border-border/50 bg-background/40 shadow-sm overscroll-x-contain xl:w-max xl:max-w-full xl:flex-none xl:shrink-0"
                 >
                   <table
-                    className="w-max max-w-none text-[11px] leading-tight border-separate border-spacing-0"
+                    className="w-full max-w-none xl:w-max text-[11px] leading-tight border-separate border-spacing-0"
                     style={{ minWidth: `${110 + bill.commodityGroups.length * SUMMARY_COMMODITY_COL_WIDTH}px` }}
                   >
                   <thead>
@@ -5543,21 +5904,23 @@ const BillingPage = () => {
                             gi === bill.commodityGroups.length - 1 && 'border-r border-border/50 dark:border-border/70',
                           )}
                         >
-                          <div className="flex w-full justify-end">
-                            <BillingMoneyInput
-                              value={g.manualRoundOff || 0}
-                              commitMode="live"
-                              onCommit={val => {
-                                const updated = { ...bill };
-                                const cg = { ...updated.commodityGroups[gi] };
-                                cg.manualRoundOff = val;
-                                updated.commodityGroups = [...updated.commodityGroups];
-                                updated.commodityGroups[gi] = cg;
-                                setBill(recalcGrandTotal(updated));
-                              }}
-                              className={billingSummaryInputClass}
-                              placeholder="0"
-                            />
+                          <div className={billingSummaryCellOuterClass}>
+                            <div className={billingSummaryCellInputsClass}>
+                              <BillingMoneyInput
+                                value={g.manualRoundOff || 0}
+                                commitMode="live"
+                                onCommit={val => {
+                                  const updated = { ...bill };
+                                  const cg = { ...updated.commodityGroups[gi] };
+                                  cg.manualRoundOff = val;
+                                  updated.commodityGroups = [...updated.commodityGroups];
+                                  updated.commodityGroups[gi] = cg;
+                                  setBill(recalcGrandTotal(updated));
+                                }}
+                                className={billingSummaryInputClass}
+                                placeholder="0"
+                              />
+                            </div>
                           </div>
                         </td>
                       ))}
@@ -5652,11 +6015,11 @@ const BillingPage = () => {
                   </tbody>
                   </table>
                 </div>
-                <div className="hidden xl:flex xl:flex-1 rounded-xl border border-border/40 bg-background/30 overflow-hidden items-center justify-center">
+                <div className="hidden xl:flex xl:min-w-0 xl:flex-1 xl:self-stretch min-h-[18rem] rounded-xl border border-border/40 bg-background/30 overflow-hidden">
                   <img
                     src={billingLoginImage}
                     alt="Billing visual"
-                    className="h-full w-full object-cover opacity-85"
+                    className="h-full w-full min-h-[18rem] object-cover object-left opacity-85"
                     loading="lazy"
                   />
                 </div>

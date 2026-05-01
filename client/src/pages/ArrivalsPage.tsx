@@ -831,6 +831,36 @@ function AddLotHorizontalScrollPanel({ children }: { children: ReactNode }) {
   );
 }
 
+/**
+ * Mobile new-arrival sheet: after saving lots, only scroll the outer panel if the seller
+ * card header is clipped under the sticky title. Never pin the lots carousel to the top
+ * (that hid the whole seller card when editing existing arrivals).
+ */
+function alignArrivalPanelToKeepSellerCardVisible(lotsScrollEl: HTMLElement, panel: HTMLDivElement | null): void {
+  if (!panel?.contains(lotsScrollEl)) return;
+  const card = lotsScrollEl.closest('[data-arrival-seller-card]') as HTMLElement | null;
+  const anchor = card ?? lotsScrollEl;
+  const panelRect = panel.getBoundingClientRect();
+  const heading = panel.querySelector<HTMLElement>('[data-arrival-panel-sticky-heading]');
+  const minTop = (heading?.getBoundingClientRect().bottom ?? panelRect.top + 72) + 6;
+  const ar = anchor.getBoundingClientRect();
+  if (ar.top < minTop) {
+    panel.scrollTop = Math.max(0, panel.scrollTop - (minTop - ar.top));
+  }
+}
+
+/** Tuck arrival details / hero: place "Sellers & Lots" just under the sticky sheet header. */
+function scrollArrivalPanelToSellersSection(panel: HTMLDivElement, marker: HTMLElement): void {
+  const heading = panel.querySelector<HTMLElement>('[data-arrival-panel-sticky-heading]');
+  const panelRect = panel.getBoundingClientRect();
+  const markerRect = marker.getBoundingClientRect();
+  const targetLine = (heading?.getBoundingClientRect().bottom ?? panelRect.top + 72) + 8;
+  const delta = markerRect.top - targetLine;
+  const next = Math.max(0, Math.min(panel.scrollTop + delta, panel.scrollHeight - panel.clientHeight));
+  if (Math.abs(next - panel.scrollTop) < 4) return;
+  panel.scrollTo({ top: next, behavior: 'auto' });
+}
+
 const ArrivalsPage = () => {
   const navigate = useNavigate();
   const isDesktop = useDesktopMode();
@@ -906,7 +936,14 @@ const ArrivalsPage = () => {
   const [sellerExpanded, setSellerExpanded] = useState<Record<string, boolean>>({});
   const lotsScrollRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const pendingLotsScrollToEndSellerIdRef = useRef<string | null>(null);
+  /** Lot-field focus: tear down visualViewport listeners / timers from prior focus. */
+  const lotFieldVVDetachRef = useRef<(() => void) | null>(null);
+  /** Merge rapid ensureLastThreeLotsVisible calls (legacy multi-timeout pattern). */
+  const ensureLotsCoalesceTimerRef = useRef<ReturnType<typeof window.setTimeout> | null>(null);
   const newArrivalPanelScrollRef = useRef<HTMLDivElement | null>(null);
+  /** Mobile sheet: "Sellers & Lots" row — scroll target to tuck arrival hero under sticky header. */
+  const arrivalSellersWorkSectionRef = useRef<HTMLDivElement | null>(null);
+  const arrivalAutoScrolledToSellersRef = useRef(false);
   const sellerNameInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
   const pendingSellerFocusIdRef = useRef<string | null>(null);
   const [sellerFocusNonce, setSellerFocusNonce] = useState(0);
@@ -1006,65 +1043,74 @@ const ArrivalsPage = () => {
   }, [addLotForm?.editingLotId, addLotForm?.sellerId, sellers]);
 
   const scrollSellerLotsToLatest = useCallback((sellerId: string) => {
-    const tryScroll = (attempt: number) => {
+    /** Horizontal carousel end + inner vertical end; outer sheet only if seller card header is clipped (never pin carousel to top). */
+    const apply = (): boolean => {
       const el = lotsScrollRefs.current[sellerId];
-      if (!el) {
-        if (attempt < 5) {
-          requestAnimationFrame(() => tryScroll(attempt + 1));
-        }
-        return;
-      }
+      if (!el) return false;
+
+      const panel = newArrivalPanelScrollRef.current;
 
       const mobileCarousel = el.querySelector('[data-arrival-mobile-lots-carousel="1"]') as HTMLDivElement | null;
       if (mobileCarousel) {
-        requestAnimationFrame(() => {
-          const cw = mobileCarousel.clientWidth;
-          const maxLeft = Math.max(0, mobileCarousel.scrollWidth - cw);
-          mobileCarousel.scrollTo({ left: maxLeft, behavior: 'smooth' });
-        });
+        const cw = mobileCarousel.clientWidth;
+        const maxLeft = Math.max(0, mobileCarousel.scrollWidth - cw);
+        mobileCarousel.scrollLeft = maxLeft;
         el.scrollTop = el.scrollHeight;
-        el.scrollIntoView({ block: 'nearest', behavior: 'auto' });
-        const panel = newArrivalPanelScrollRef.current;
-        if (panel && panel.contains(el)) {
-          const panelRect = panel.getBoundingClientRect();
-          const elRect = el.getBoundingClientRect();
-          const nextTop = panel.scrollTop + (elRect.top - panelRect.top) - 12;
-          panel.scrollTo({ top: Math.max(0, nextTop), behavior: 'auto' });
-        }
-        return;
+        alignArrivalPanelToKeepSellerCardVisible(el, panel);
+        return true;
       }
 
       el.scrollTop = el.scrollHeight;
       const lastRow = el.querySelector('tbody tr:last-child') as HTMLElement | null;
-      lastRow?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-      // Keep the lots panel itself in viewport so users can immediately see
-      // the newly added row instead of only scrolling internally.
-      el.scrollIntoView({ block: 'nearest', behavior: 'auto' });
-
-      const panel = newArrivalPanelScrollRef.current;
-      if (panel && panel.contains(el)) {
-        const panelRect = panel.getBoundingClientRect();
-        const elRect = el.getBoundingClientRect();
-        const nextTop = panel.scrollTop + (elRect.top - panelRect.top) - 12;
-        panel.scrollTo({ top: Math.max(0, nextTop), behavior: 'auto' });
-      }
+      lastRow?.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'auto' });
+      alignArrivalPanelToKeepSellerCardVisible(el, panel);
+      return true;
     };
 
-    tryScroll(0);
+    const tryScroll = (attempt: number) => {
+      if (apply()) return;
+      if (attempt < 5) requestAnimationFrame(() => tryScroll(attempt + 1));
+    };
+
+    // Defer to next frame so new lot nodes + carousel `scrollWidth` exist before measuring.
+    requestAnimationFrame(() => tryScroll(0));
   }, []);
+
+  useEffect(() => {
+    if (!showAdd) arrivalAutoScrolledToSellersRef.current = false;
+  }, [showAdd]);
+
+  /** Mobile: first time a seller card is expanded, tuck arrival details under sticky header so Sellers & Lots gets vertical room. */
+  useLayoutEffect(() => {
+    if (!showAdd || isDesktop) return;
+    if (sellers.length === 0) {
+      arrivalAutoScrolledToSellersRef.current = false;
+      return;
+    }
+    if (arrivalAutoScrolledToSellersRef.current) return;
+    const anyExpanded = sellers.some(s => (sellerExpanded[s.seller_vehicle_id] ?? true) === true);
+    if (!anyExpanded) return;
+    requestAnimationFrame(() => {
+      const panel = newArrivalPanelScrollRef.current;
+      const marker = arrivalSellersWorkSectionRef.current;
+      if (!panel || !marker) return;
+      scrollArrivalPanelToSellersSection(panel, marker);
+      arrivalAutoScrolledToSellersRef.current = true;
+    });
+  }, [showAdd, isDesktop, sellers, sellerExpanded]);
 
   const ensureLastThreeLotsVisible = useCallback((sellerId: string) => {
     const tryEnsure = (attempt: number) => {
       const el = lotsScrollRefs.current[sellerId];
       if (!el) {
-        if (attempt < 6) requestAnimationFrame(() => tryEnsure(attempt + 1));
+        if (attempt < 4) requestAnimationFrame(() => tryEnsure(attempt + 1));
         return;
       }
 
       const vp = window.visualViewport;
       const isKeyboardLikelyOpen = !!vp && (window.innerHeight - vp.height) > 50;
       if (!isKeyboardLikelyOpen) {
-        if (attempt < 6) window.setTimeout(() => tryEnsure(attempt + 1), 100);
+        if (attempt < 4) window.setTimeout(() => tryEnsure(attempt + 1), 120);
         return;
       }
 
@@ -1089,15 +1135,14 @@ const ArrivalsPage = () => {
 
       requestAnimationFrame(() => {
         if (addLotFormDiv instanceof HTMLElement) {
-          addLotFormDiv.scrollIntoView({ block: 'start', behavior: 'smooth' });
-          
-          window.setTimeout(() => {
+          addLotFormDiv.scrollIntoView({ block: 'start', behavior: 'auto' });
+          requestAnimationFrame(() => {
             const formRect = addLotFormDiv.getBoundingClientRect();
             const adjustment = Math.min(0, availableHeight - (formRect.bottom + threeRowsHeight + 20));
             if (adjustment < 0) {
-              panel.scrollBy({ top: -adjustment, behavior: 'smooth' });
+              panel.scrollBy({ top: -adjustment, behavior: 'auto' });
             }
-          }, 150);
+          });
         }
       });
     };
@@ -1105,15 +1150,62 @@ const ArrivalsPage = () => {
     tryEnsure(0);
   }, []);
 
-  const handleLotEntryFieldFocus = useCallback((sellerId: string) => {
-    ensureLastThreeLotsVisible(sellerId);
-    requestAnimationFrame(() => ensureLastThreeLotsVisible(sellerId));
-    window.setTimeout(() => ensureLastThreeLotsVisible(sellerId), 120);
-    window.setTimeout(() => ensureLastThreeLotsVisible(sellerId), 280);
-    window.setTimeout(() => ensureLastThreeLotsVisible(sellerId), 520);
-    window.setTimeout(() => ensureLastThreeLotsVisible(sellerId), 900);
-    window.setTimeout(() => ensureLastThreeLotsVisible(sellerId), 1300);
+  const coalescedEnsureLastThreeLotsVisible = useCallback((sellerId: string) => {
+    if (ensureLotsCoalesceTimerRef.current != null) {
+      window.clearTimeout(ensureLotsCoalesceTimerRef.current);
+    }
+    ensureLotsCoalesceTimerRef.current = window.setTimeout(() => {
+      ensureLotsCoalesceTimerRef.current = null;
+      ensureLastThreeLotsVisible(sellerId);
+    }, 60);
   }, [ensureLastThreeLotsVisible]);
+
+  /** Fewer competing scroll animations: coalesce + react to visualViewport (keyboard) instead of many fixed delays. */
+  const handleLotEntryFieldFocus = useCallback(
+    (sellerId: string) => {
+      lotFieldVVDetachRef.current?.();
+      lotFieldVVDetachRef.current = null;
+
+      const schedule = () => coalescedEnsureLastThreeLotsVisible(sellerId);
+      schedule();
+      requestAnimationFrame(() => schedule());
+
+      const vv = window.visualViewport;
+      if (!vv) {
+        const fallbackOnly = window.setTimeout(schedule, 450);
+        lotFieldVVDetachRef.current = () => window.clearTimeout(fallbackOnly);
+        return;
+      }
+
+      let resizeTimer: ReturnType<typeof window.setTimeout> | null = null;
+      const onVVChange = () => {
+        if (resizeTimer != null) window.clearTimeout(resizeTimer);
+        resizeTimer = window.setTimeout(() => {
+          resizeTimer = null;
+          schedule();
+        }, 120);
+      };
+
+      vv.addEventListener('resize', onVVChange, { passive: true });
+      vv.addEventListener('scroll', onVVChange, { passive: true });
+
+      const fallbackTimer = window.setTimeout(schedule, 480);
+      const detachTimer = window.setTimeout(() => {
+        vv.removeEventListener('resize', onVVChange);
+        vv.removeEventListener('scroll', onVVChange);
+        if (resizeTimer != null) window.clearTimeout(resizeTimer);
+      }, 2200);
+
+      lotFieldVVDetachRef.current = () => {
+        window.clearTimeout(fallbackTimer);
+        window.clearTimeout(detachTimer);
+        vv.removeEventListener('resize', onVVChange);
+        vv.removeEventListener('scroll', onVVChange);
+        if (resizeTimer != null) window.clearTimeout(resizeTimer);
+      };
+    },
+    [coalescedEnsureLastThreeLotsVisible],
+  );
 
   const expandOnlySeller = useCallback((sellerId: string) => {
     setSellerExpanded(
@@ -1484,12 +1576,23 @@ const ArrivalsPage = () => {
   }, [advancePaid]);
 
   // Per-seller / per-lot real-time validation (same rules as submit; used for inline UI only)
-  const isSellerNameInvalid = (s: SellerEntry) => {
-    if (s.contact_id !== '' && !Number.isNaN(Number(s.contact_id))) return false;
+  const getSellerNameError = (s: SellerEntry, sellerIdx?: number): string | null => {
     const n = (s.seller_name ?? '').trim();
-    if (!n) return false; // required is enforced on submit
-    return n.length < 2 || n.length > 100;
+    if (!n) return null;
+    const nameLower = n.toLowerCase();
+    const idx =
+      sellerIdx !== undefined
+        ? sellerIdx
+        : sellers.findIndex(o => o.seller_vehicle_id === s.seller_vehicle_id);
+    const dupIdx = sellers.findIndex(
+      (o, i) => i !== idx && (o.seller_name ?? '').trim().toLowerCase() === nameLower,
+    );
+    if (dupIdx >= 0) return 'name must be unique';
+    const isDynamic = s.contact_id === '' || Number.isNaN(Number(s.contact_id));
+    if (isDynamic && (n.length < 2 || n.length > 100)) return '2–100 characters';
+    return null;
   };
+  const isSellerNameInvalid = (s: SellerEntry, sellerIdx?: number) => !!getSellerNameError(s, sellerIdx);
   const isSellerMarkInvalid = (s: SellerEntry, sellerIdx?: number) => !!getSellerMarkError(s, sellerIdx);
   const getSellerMarkError = (s: SellerEntry, sellerIdx?: number): string | null => {
     const m = (s.seller_mark ?? '').trim();
@@ -1506,7 +1609,7 @@ const ArrivalsPage = () => {
     return sellers.some((s, sellerIdx) => {
       const sellerName = (s.seller_name ?? '').trim();
       if (!sellerName) return true;
-      if (isSellerNameInvalid(s)) return true;
+      if (isSellerNameInvalid(s, sellerIdx)) return true;
       if (isSellerMarkInvalid(s, sellerIdx)) return true;
       return false;
     });
@@ -1566,7 +1669,7 @@ const ArrivalsPage = () => {
         isGodownInvalid || isGatepassNumberInvalid || isBrokerNameInvalid || isFreightRateInvalid || isFreightKgsInvalid || isAdvancePaidInvalid) return true;
     for (let i = 0; i < sellers.length; i++) {
       const s = sellers[i];
-      if (isSellerNameInvalid(s) || isSellerMarkInvalid(s, i)) return true;
+      if (isSellerNameInvalid(s, i) || isSellerMarkInvalid(s, i)) return true;
       for (let li = 0; li < s.lots.length; li++) {
         const l = s.lots[li];
         if (isLotNameInvalid(l) || isLotQuantityInvalid(l) || isLotNameDuplicateInvalid(i, li)) return true;
@@ -2032,34 +2135,7 @@ const ArrivalsPage = () => {
     if (!sellerId) return;
     scrollSellerLotsToLatest(sellerId);
     pendingLotsScrollToEndSellerIdRef.current = null;
-
-    // Mobile fix: when "+ Add Lot" auto-focuses the new input, focus is applied
-    // with preventScroll and the full-screen sheet's scroller may not move,
-    // leaving the new field under the keyboard. After we scroll the inner lots
-    // panel to the end, also nudge the outer "New Arrival" panel scroller to
-    // reveal the currently focused input.
-    const panel = newArrivalPanelScrollRef.current;
-    if (!panel) return;
-
-    const tryBringActiveIntoView = () => {
-      const active = document.activeElement;
-      if (!(active instanceof HTMLElement)) return;
-      if (!panel.contains(active)) return;
-      active.scrollIntoView({ block: 'center' });
-    };
-
-    // Retry at multiple intervals. The keyboard may not be open immediately,
-    // but will open shortly after focus. Longer delays ensure we catch both
-    // the initial scroll and the keyboard appearance timing.
-    requestAnimationFrame(tryBringActiveIntoView);
-    window.setTimeout(tryBringActiveIntoView, 120);
-    window.setTimeout(tryBringActiveIntoView, 280);
-    window.setTimeout(tryBringActiveIntoView, 520);
-    window.setTimeout(tryBringActiveIntoView, 900);
-    window.setTimeout(tryBringActiveIntoView, 1300);
-    window.setTimeout(tryBringActiveIntoView, 2000);
-    window.setTimeout(tryBringActiveIntoView, 2500);
-    window.setTimeout(tryBringActiveIntoView, 3500);
+    // Do not stack extra scrollIntoView passes here; focus effect + KeyboardAvoidance (native) handle the focused field.
   }, [sellers, sellerExpanded, scrollSellerLotsToLatest]);
 
   // After Save Lot / Update, move focus back to Lot Name for the next entry (autoFocus only runs on mount).
@@ -2067,11 +2143,7 @@ const ArrivalsPage = () => {
     if (addLotLotNameFocusNonce === 0) return;
     const input = addLotLotNameInputRef.current;
     if (!input) return;
-    input.focus({ preventScroll: false });
-    const panel = newArrivalPanelScrollRef.current;
-    if (panel?.contains(input)) {
-      requestAnimationFrame(() => input.scrollIntoView({ block: 'center', behavior: 'auto' }));
-    }
+    input.focus({ preventScroll: true });
   }, [addLotLotNameFocusNonce]);
 
   // Scroll + focus the seller card input created by the “Add Seller” button.
@@ -3201,8 +3273,13 @@ const ArrivalsPage = () => {
                       const sellerTotal = sellerTotalBagsById[seller.seller_vehicle_id] ?? 0;
                       const sellerSerialLabel = formatSellerSerialNumber(seller.seller_serial_number);
                       return (
-                      <motion.div key={seller.seller_vehicle_id} initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }}
-                        className="glass-card rounded-2xl overflow-x-hidden overflow-y-visible max-w-full">
+                      <motion.div
+                        key={seller.seller_vehicle_id}
+                        data-arrival-seller-card={seller.seller_vehicle_id}
+                        initial={{ opacity: 0, y: 15 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        className="glass-card rounded-2xl overflow-x-hidden overflow-y-visible max-w-full"
+                      >
                         <div className="p-3 sm:p-4 flex items-center justify-between gap-2 sm:gap-3 bg-gradient-to-r from-emerald-50 to-teal-50 dark:from-emerald-950/20 dark:to-teal-950/20 border-b border-border/30 min-w-0">
                           <div className="flex items-center gap-3 min-w-0 flex-1 sm:min-w-[12rem]">
                             <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-500 flex items-center justify-center shrink-0">
@@ -3256,11 +3333,13 @@ const ArrivalsPage = () => {
                                       inputMode="text"
                                       className={cn(
                                         "h-11 sm:h-11 w-full min-w-0 rounded-lg text-sm sm:text-base",
-                                        isSellerNameInvalid(seller) && "border-red-500 ring-2 ring-red-500/30 bg-red-50 dark:bg-red-950/20"
+                                        isSellerNameInvalid(seller, si) && "border-red-500 ring-2 ring-red-500/30 bg-red-50 dark:bg-red-950/20"
                                       )}
                                       maxLength={100}
                                     />
-                                    {isSellerNameInvalid(seller) && <p className="text-[9px] text-red-500 mt-0.5">2–100 characters</p>}
+                                    {isSellerNameInvalid(seller, si) && (
+                                      <p className="text-[9px] text-red-500 mt-0.5">{getSellerNameError(seller, si) ?? '2–100 characters'}</p>
+                                    )}
                                   </div>
                                   <div className="min-w-0">
                                     <Input
@@ -3961,7 +4040,10 @@ const ArrivalsPage = () => {
                   style={{ WebkitBackdropFilter: 'blur(24px)' }}
                 >
                 <div ref={newArrivalPanelScrollRef} className="w-full max-w-[480px] md:max-w-full overflow-y-auto">
-                  <div className="bg-gradient-to-br from-blue-400 via-blue-500 to-violet-500 pt-[max(1.5rem,env(safe-area-inset-top))] pb-4 px-4 sticky top-0 z-20">
+                  <div
+                    data-arrival-panel-sticky-heading
+                    className="bg-gradient-to-br from-blue-400 via-blue-500 to-violet-500 pt-[max(1.5rem,env(safe-area-inset-top))] pb-4 px-4 sticky top-0 z-20"
+                  >
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-3">
                         <button
@@ -4252,7 +4334,7 @@ const ArrivalsPage = () => {
 
                     {/* ── Section 2: Sellers & Lots ── */}
                     {sellers.length > 0 && (
-                      <div className="flex items-center gap-2 pt-2">
+                      <div ref={arrivalSellersWorkSectionRef} className="flex items-center gap-2 pt-2">
                         <div className="w-6 h-6 rounded-lg bg-gradient-to-br from-emerald-500 to-teal-500 flex items-center justify-center">
                           <Users className="w-3 h-3 text-white" />
                         </div>
@@ -4266,8 +4348,13 @@ const ArrivalsPage = () => {
                       const sellerTotal = sellerTotalBagsById[seller.seller_vehicle_id] ?? 0;
                       const sellerSerialLabel = formatSellerSerialNumber(seller.seller_serial_number);
                       return (
-                      <motion.div key={seller.seller_vehicle_id} initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }}
-                        className="glass-card rounded-2xl overflow-x-hidden overflow-y-visible max-w-full">
+                      <motion.div
+                        key={seller.seller_vehicle_id}
+                        data-arrival-seller-card={seller.seller_vehicle_id}
+                        initial={{ opacity: 0, y: 15 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        className="glass-card rounded-2xl overflow-x-hidden overflow-y-visible max-w-full"
+                      >
                         <div className="min-w-0 border-b border-border/30 bg-gradient-to-r from-emerald-50 to-teal-50 p-3 dark:from-emerald-950/20 dark:to-teal-950/20 sm:p-4">
                           <div className="flex flex-col gap-3">
                             <div className="w-full min-w-0">
@@ -4318,11 +4405,13 @@ const ArrivalsPage = () => {
                                       inputMode="text"
                                       className={cn(
                                         "h-11 w-full min-w-0 rounded-lg text-xs sm:h-10 md:h-9",
-                                        isSellerNameInvalid(seller) && "border-red-500 ring-2 ring-red-500/30 bg-red-50 dark:bg-red-950/20"
+                                        isSellerNameInvalid(seller, si) && "border-red-500 ring-2 ring-red-500/30 bg-red-50 dark:bg-red-950/20"
                                       )}
                                       maxLength={100}
                                     />
-                                    {isSellerNameInvalid(seller) && <p className="mt-0.5 text-[9px] text-red-500">2–100 characters</p>}
+                                    {isSellerNameInvalid(seller, si) && (
+                                      <p className="mt-0.5 text-[9px] text-red-500">{getSellerNameError(seller, si) ?? '2–100 characters'}</p>
+                                    )}
                                   </div>
                                   <div className="min-w-0">
                                     <Input

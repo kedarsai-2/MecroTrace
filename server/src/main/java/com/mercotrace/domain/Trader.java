@@ -106,6 +106,12 @@ public class Trader implements Serializable {
     @Column(name = "preset_enabled", nullable = false)
     private Boolean presetEnabled = true;
 
+    /**
+     * Optional JSON blob: mobile/tablet Sales Pad layout (client-owned schema). Persisted per trader for cross-device UX.
+     */
+    @Column(name = "auction_touch_layout_json", columnDefinition = "text")
+    private String auctionTouchLayoutJson;
+
     // jhipster-needle-entity-add-field - JHipster will add fields here
 
     public Long getId() {
@@ -339,6 +345,19 @@ public class Trader implements Serializable {
 
     public void setPresetEnabled(Boolean presetEnabled) {
         this.presetEnabled = presetEnabled;
+    }
+
+    public String getAuctionTouchLayoutJson() {
+        return auctionTouchLayoutJson;
+    }
+
+    public Trader auctionTouchLayoutJson(String auctionTouchLayoutJson) {
+        this.setAuctionTouchLayoutJson(auctionTouchLayoutJson);
+        return this;
+    }
+
+    public void setAuctionTouchLayoutJson(String auctionTouchLayoutJson) {
+        this.auctionTouchLayoutJson = auctionTouchLayoutJson;
     }
 
     // jhipster-needle-entity-add-getters-setters - JHipster will add getters and setters here

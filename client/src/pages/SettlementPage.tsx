@@ -186,8 +186,31 @@ interface SettlementEntry {
 }
 
 /** Sales Patti print footers: auction-based vs summary-based settlement. */
-const SETTLEMENT_PATTI_FOOTER_ALT_O = 'Original (ALT O) — Bid + preset';
-const SETTLEMENT_PATTI_FOOTER_ALT_M = 'Modified (ALT M) — Summary new seller rate (incl. preset)';
+/**
+ * Print Settings → Settlement named copies (Original, Duplicate, …). Each name generates two physical sheets
+ * (original-rate vs modified-rate layout); footer shows only the configured label (optional seller suffix).
+ */
+function buildSettlementPattiPagesForConfiguredCopies(
+  copyLabels: string[],
+  printPayloadOrig: PattiPrintData,
+  printPayloadMod: PattiPrintData,
+  sellerDisplaySuffix?: string,
+): { patti: PattiPrintData; copyLabel: string }[] {
+  const labels =
+    copyLabels.length > 0
+      ? copyLabels.map((l) => (l && String(l).trim()) || 'COPY').filter((s) => s.length > 0)
+      : ['ORIGINAL COPY'];
+  const tail =
+    sellerDisplaySuffix != null && String(sellerDisplaySuffix).trim() !== ''
+      ? ` — ${String(sellerDisplaySuffix).trim()}`
+      : '';
+  const out: { patti: PattiPrintData; copyLabel: string }[] = [];
+  for (const raw of labels) {
+    const caption = `${raw}${tail}`;
+    out.push({ patti: printPayloadOrig, copyLabel: caption }, { patti: printPayloadMod, copyLabel: caption });
+  }
+  return out;
+}
 
 interface RateCluster {
   rate: number;
@@ -4874,10 +4897,11 @@ const SettlementPage = () => {
     }
     const ok = await directPrint(
       generateSalesPattiPrintHTMLPages(
-        [
-          { patti: printPayloadOrig, copyLabel: SETTLEMENT_PATTI_FOOTER_ALT_O },
-          { patti: printPayloadMod, copyLabel: SETTLEMENT_PATTI_FOOTER_ALT_M },
-        ],
+        buildSettlementPattiPagesForConfiguredCopies(
+          settlementCopyLabelsResolved,
+          printPayloadOrig,
+          printPayloadMod,
+        ),
         {
           pageSize: settlementEffectivePrintSize,
           includeHeader: settlementIncludeHeader,
@@ -4908,6 +4932,7 @@ const SettlementPage = () => {
     firmInfo,
     displayMainSalesPattiNo,
     mainPattiPrintHeaderIdentity,
+    settlementCopyLabelsResolved,
   ]);
 
   const runPrintSellerSubPatti = useCallback(
@@ -4950,22 +4975,18 @@ const SettlementPage = () => {
       ] as const;
       const ok = await directPrint(
         generateSalesPattiPrintHTMLPages(
-          [
+          buildSettlementPattiPagesForConfiguredCopies(
+            settlementCopyLabelsResolved,
             {
-              patti: {
-                ...buildSellerSubPattiPrintData(...baseArgs, 'original'),
-                firm: firmInfo,
-              },
-              copyLabel: `${SETTLEMENT_PATTI_FOOTER_ALT_O} — ${displayName}`,
+              ...buildSellerSubPattiPrintData(...baseArgs, 'original'),
+              firm: firmInfo,
             },
             {
-              patti: {
-                ...buildSellerSubPattiPrintData(...baseArgs, 'modified'),
-                firm: firmInfo,
-              },
-              copyLabel: `${SETTLEMENT_PATTI_FOOTER_ALT_M} — ${displayName}`,
+              ...buildSellerSubPattiPrintData(...baseArgs, 'modified'),
+              firm: firmInfo,
             },
-          ],
+            displayName,
+          ),
           {
             pageSize: settlementEffectivePrintSize,
             includeHeader: settlementIncludeHeader,
@@ -4992,6 +5013,7 @@ const SettlementPage = () => {
       settlementIncludeHeader,
       firmInfo,
       sellerSalesPattiNumberBySellerId,
+      settlementCopyLabelsResolved,
     ]
   );
 
@@ -5037,14 +5059,12 @@ const SettlementPage = () => {
         extras,
       ] as const;
       pages.push(
-        {
-          patti: { ...buildSellerSubPattiPrintData(...common, 'original'), firm: firmInfo },
-          copyLabel: `${SETTLEMENT_PATTI_FOOTER_ALT_O} — ${displayName}`,
-        },
-        {
-          patti: { ...buildSellerSubPattiPrintData(...common, 'modified'), firm: firmInfo },
-          copyLabel: `${SETTLEMENT_PATTI_FOOTER_ALT_M} — ${displayName}`,
-        }
+        ...buildSettlementPattiPagesForConfiguredCopies(
+          settlementCopyLabelsResolved,
+          { ...buildSellerSubPattiPrintData(...common, 'original'), firm: firmInfo },
+          { ...buildSellerSubPattiPrintData(...common, 'modified'), firm: firmInfo },
+          displayName,
+        ),
       );
     }
     if (pages.length === 0) {
@@ -5081,6 +5101,7 @@ const SettlementPage = () => {
     settlementIncludeHeader,
     firmInfo,
     sellerSalesPattiNumberBySellerId,
+    settlementCopyLabelsResolved,
   ]);
 
   const vehicleExpenseTotals = useMemo(() => {
@@ -5656,9 +5677,7 @@ const SettlementPage = () => {
               <p className="text-muted-foreground">Sales Patti (Settlement)</p>
               <p className="text-muted-foreground">{new Date(pattiData.createdAt).toLocaleDateString()} {new Date(pattiData.createdAt).toLocaleTimeString()}</p>
               <p className="text-[11px] text-muted-foreground mt-1">
-                {arrivalSellersForPatti.length > 0
-                  ? `Print: ${SETTLEMENT_PATTI_FOOTER_ALT_O} + ${SETTLEMENT_PATTI_FOOTER_ALT_M}`
-                  : `Print copies: ${settlementCopyLabelsResolved.join(', ')}`}
+                Copies: {settlementCopyLabelsResolved.join(', ')}
               </p>
             </div>
 
@@ -5771,10 +5790,11 @@ const SettlementPage = () => {
                           isWeighingEnabledForSeller,
                           isWeighingMergedIntoFreight
                         );
-                        return [
-                          { patti: printPayloadOrig, copyLabel: SETTLEMENT_PATTI_FOOTER_ALT_O },
-                          { patti: printPayloadMod, copyLabel: SETTLEMENT_PATTI_FOOTER_ALT_M },
-                        ];
+                        return buildSettlementPattiPagesForConfiguredCopies(
+                          settlementCopyLabelsResolved,
+                          printPayloadOrig,
+                          printPayloadMod,
+                        );
                       })(),
                       { pageSize: settlementEffectivePrintSize, includeHeader: settlementIncludeHeader }
                     )
