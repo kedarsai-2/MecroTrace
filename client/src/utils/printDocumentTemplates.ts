@@ -1481,15 +1481,23 @@ export function generateAuctionCompletionPrintHTML(auction: AuctionCompletionPri
   const timeStr = completedAt.toLocaleTimeString();
   const totalQty = auction.entries.reduce((s, e) => s + (Number(e.quantity) || 0), 0);
   const totalAmount = auction.entries.reduce((s, e) => s + (Number(e.amount) || 0), 0);
-  const highestRate = auction.entries.reduce((max, e) => Math.max(max, Number(e.rate) || 0), 0);
+  const highestRate = auction.entries.reduce((max, e) => {
+    const r = Number(e.rate) || 0;
+    const p = Number(e.presetApplied ?? 0);
+    const display = Math.trunc(r - (Number.isFinite(p) ? p : 0));
+    return Math.max(max, display);
+  }, 0);
   const rows = auction.entries.map((entry) => {
     const preset = Number(entry.presetApplied ?? 0);
     const presetTxt = preset === 0 ? '—' : `${preset > 0 ? '+' : ''}${preset} (${entry.presetType ?? (preset < 0 ? 'LOSS' : 'PROFIT')})`;
+    const r = Number(entry.rate) || 0;
+    const pAdj = Number.isFinite(preset) ? preset : 0;
+    const displayRate = Math.trunc(r - pAdj);
     return `
       <div class="section" style="margin-bottom:6px;padding-bottom:6px">
         <div class="row"><span class="muted">Bid #</span><span class="bold">${entry.bidNumber}</span></div>
         <div class="row"><span class="muted">Buyer</span><span class="bold">${escapeHtml(entry.buyerName)} (${escapeHtml(entry.buyerMark)})</span></div>
-        <div class="row"><span class="muted">Rate</span><span class="bold">₹${entry.rate}</span></div>
+        <div class="row"><span class="muted">Rate</span><span class="bold">₹${displayRate}</span></div>
         <div class="row"><span class="muted">Preset</span><span>${presetTxt}</span></div>
         <div class="row"><span class="muted">Qty</span><span class="bold">${entry.quantity} bags</span></div>
         <div class="row"><span class="muted">Amount</span><span class="bold">₹${entry.amount.toLocaleString()}</span></div>

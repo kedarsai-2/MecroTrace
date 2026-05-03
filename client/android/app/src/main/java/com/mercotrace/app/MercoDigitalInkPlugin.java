@@ -154,6 +154,7 @@ public class MercoDigitalInkPlugin extends Plugin {
                     final long startNs = System.nanoTime();
                     DigitalInkRecognizer recognizer = recognizerFor(bundle);
                     RecognitionContext context = RecognitionContext.builder()
+                        .setPreContext("")
                         .setWritingArea(new WritingArea((float) canvasWidth, (float) canvasHeight))
                         .build();
 

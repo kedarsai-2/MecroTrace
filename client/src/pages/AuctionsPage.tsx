@@ -1056,6 +1056,15 @@ function formatPresetMarginCell(margin: number): string {
   return m > 0 ? `+${m}` : String(m);
 }
 
+/** Grid “Rate” display: stored bid (`rate`) minus signed preset (500, +10 → 490; 500, −10 → 510). */
+function displayAuctionTableRate(row: { rate: unknown; presetApplied?: unknown }): number {
+  const r = Number(row.rate);
+  const p = Number(row.presetApplied ?? 0);
+  if (!Number.isFinite(r)) return 0;
+  const adj = Number.isFinite(p) ? p : 0;
+  return Math.trunc(r - adj);
+}
+
 /** Pill switch matching Commodity Settings (Deduction / Round-off). */
 function PresetMarginSwitch({
   checked,
@@ -1693,7 +1702,7 @@ const AuctionEntriesGrid = memo(function AuctionEntriesGrid({
                         </div>
                       </td>
                       <td className={cn('align-middle text-center font-semibold text-foreground', isDesktop ? 'px-3 py-[12px] text-base' : 'px-1 py-1.5 text-[1.15em] font-bold')}>
-                        <div>₹{entry.rate}</div>
+                        <div>₹{displayAuctionTableRate(entry)}</div>
                       </td>
                       {showPresetMargin && (
                         <td
@@ -4632,7 +4641,7 @@ const AuctionsPage = () => {
               <p className="font-bold text-foreground mb-1">BIDS ({completedAuction.entries.length})</p>
               {completedAuction.entries.map((entry, idx) => (
                 <div key={`${entry.bidNumber}-${idx}`} className="flex justify-between text-[10px]">
-                  <span className="text-foreground">#{entry.bidNumber} {entry.buyerMark} · {entry.quantity} @ ₹{entry.rate}</span>
+                  <span className="text-foreground">#{entry.bidNumber} {entry.buyerMark} · {entry.quantity} @ ₹{displayAuctionTableRate(entry)}</span>
                   <span className="font-bold text-foreground">₹{entry.amount.toLocaleString()}</span>
                 </div>
               ))}
@@ -5363,7 +5372,7 @@ const AuctionsPage = () => {
                   <div key={`${entry.bidNumber}-${entry.buyerMark}`} className="grid grid-cols-[1.2fr_1fr_0.8fr_0.8fr] gap-2 px-3 py-2 border-t border-border/30 text-sm">
                     <span className="truncate text-foreground">{entry.buyerName || 'Buyer'}</span>
                     <span className="truncate text-muted-foreground">{entry.buyerMark}</span>
-                    <span className="font-medium text-foreground">₹{entry.rate}</span>
+                    <span className="font-medium text-foreground">₹{displayAuctionTableRate(entry)}</span>
                     <span className="font-medium text-foreground">{entry.quantity}</span>
                   </div>
                 ))
