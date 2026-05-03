@@ -11,7 +11,7 @@ import useUnsavedChangesGuard from '@/hooks/useUnsavedChangesGuard';
 import { ConfirmDeleteDialog } from '@/components/ConfirmDeleteDialog';
 import {
   recognizeHandwriting,
-  HANDWRITING_RECOGNITION_DEBOUNCE_MS,
+  getHandwritingRecognitionDebounceMs,
   type HandwritingStroke,
 } from '@/lib/handwritingRecognition';
 
@@ -183,7 +183,7 @@ const ScribblePadPage = () => {
     }
     currentStroke.current = { xs: [], ys: [], ts: [] };
     if (drawTimeout.current) clearTimeout(drawTimeout.current);
-    drawTimeout.current = setTimeout(() => { doRecognition(); }, HANDWRITING_RECOGNITION_DEBOUNCE_MS);
+    drawTimeout.current = setTimeout(() => { doRecognition(); }, getHandwritingRecognitionDebounceMs());
   };
 
   const clearCanvas = () => {

@@ -1,4 +1,5 @@
-docs/
+**/docs/*
+!docs/mlkit-digital-ink-plan.md
 .cursor
 client_bck
 client_bck20260227

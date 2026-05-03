@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { RotateCcw, Loader2, Sparkles, PenLine } from 'lucide-react';
 import {
   recognizeHandwriting,
-  HANDWRITING_RECOGNITION_DEBOUNCE_MS,
+  getHandwritingRecognitionDebounceMs,
   type HandwritingStroke,
 } from '@/lib/handwritingRecognition';
 
@@ -223,7 +223,7 @@ const InlineScribblePad = ({
     }
     currentStroke.current = { xs: [], ys: [], ts: [] };
     if (drawTimeout.current) clearTimeout(drawTimeout.current);
-    drawTimeout.current = setTimeout(() => doRecognition(), HANDWRITING_RECOGNITION_DEBOUNCE_MS);
+    drawTimeout.current = setTimeout(() => doRecognition(), getHandwritingRecognitionDebounceMs());
   };
 
   const selectCandidate = (c: string) => {

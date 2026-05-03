@@ -12,6 +12,7 @@ public class MainActivity extends BridgeActivity {
         // Explicitly registering the plugin ensures the native implementation
         // is always available.
         registerPlugin(MercoPrinterPlugin.class);
+        registerPlugin(MercoDigitalInkPlugin.class);
         super.onCreate(savedInstanceState);
     }
 }

@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
   recognizeHandwriting,
-  HANDWRITING_RECOGNITION_DEBOUNCE_MS,
+  getHandwritingRecognitionDebounceMs,
   type HandwritingStroke,
 } from '@/lib/handwritingRecognition';
 
@@ -187,11 +187,11 @@ const ScribblePad = ({ open, onClose, onConfirm }: ScribblePadProps) => {
     }
     currentStroke.current = { xs: [], ys: [], ts: [] };
 
-    // Auto-recognize shortly after user lifts pen (see HANDWRITING_RECOGNITION_DEBOUNCE_MS).
+    // Auto-recognize shortly after user lifts pen.
     if (drawTimeout.current) clearTimeout(drawTimeout.current);
     drawTimeout.current = setTimeout(() => {
       doRecognition();
-    }, HANDWRITING_RECOGNITION_DEBOUNCE_MS);
+    }, getHandwritingRecognitionDebounceMs());
   };
 
   const clearCanvas = () => {
