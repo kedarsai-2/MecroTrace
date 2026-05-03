@@ -5037,7 +5037,7 @@ const ArrivalsPage = () => {
           {showAdd &&
             createPortal(
               <div
-                className="fixed bottom-[calc(3.5rem+env(safe-area-inset-bottom,0px)+1px)] left-0 right-0 z-[55] bg-background/90 backdrop-blur-xl px-3 pt-2.5 pb-[max(0.5rem,env(safe-area-inset-bottom,0px))] sm:bottom-[calc(3.5rem+env(safe-area-inset-bottom,0px)+1px)] sm:px-4 sm:pt-3 sm:pb-[max(0.5rem,env(safe-area-inset-bottom,0px))] md:bottom-[calc(3.5rem+env(safe-area-inset-bottom,0px)-0.75rem+1px)] md:px-6 lg:bottom-0 lg:pb-3 pointer-events-auto"
+                className="fixed bottom-[calc(3.5rem+env(safe-area-inset-bottom,0px)-2px)] left-0 right-0 z-[55] bg-background/90 backdrop-blur-xl px-3 pt-2.5 pb-2 sm:px-4 sm:pt-3 md:bottom-[calc(3.5rem+env(safe-area-inset-bottom,0px)-0.75rem+1px)] md:px-6 md:pb-[max(0.5rem,env(safe-area-inset-bottom,0px))] lg:bottom-0 lg:pb-3 pointer-events-auto"
                 aria-label="Arrival actions"
               >
                 <div className="max-w-[480px] md:max-w-full mx-auto">
