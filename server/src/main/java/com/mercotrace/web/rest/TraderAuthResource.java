@@ -8,7 +8,9 @@ import com.mercotrace.repository.TraderRepository;
 import com.mercotrace.repository.UserRepository;
 import com.mercotrace.repository.UserTraderRepository;
 import com.mercotrace.security.AuthoritiesConstants;
+import com.mercotrace.security.SecurityUtils;
 import com.mercotrace.security.DomainUserDetailsService.UserWithId;
+import com.mercotrace.service.AuthRefreshSessionService;
 import com.mercotrace.service.EmailAlreadyUsedException;
 import com.mercotrace.service.MailService;
 import com.mercotrace.service.OtpService;
@@ -263,6 +265,7 @@ public class TraderAuthResource {
                 TraderAuthDTO authDto = buildAuthDto(authenticatedAccount, resolvedTrader);
                 // Persistable token for the same reason as /auth/login above.
                 authDto.setToken(jwtResponse.getBody().getIdToken());
+                authDto.setRefreshToken(jwtResponse.getHeaders().getFirst(AuthRefreshSessionService.REFRESH_TOKEN_HEADER));
                 return ResponseEntity.status(HttpStatus.CREATED).headers(jwtResponse.getHeaders()).body(authDto);
             }
         } catch (Exception ex) {
@@ -339,6 +342,7 @@ public class TraderAuthResource {
         // Persistable token: frontend stores it on Android and reuses it for /auth/me
         // to survive app restarts (cookies are httpOnly and may be cleared).
         dto.setToken(jwtResponse.getBody().getIdToken());
+        dto.setRefreshToken(jwtResponse.getHeaders().getFirst(AuthRefreshSessionService.REFRESH_TOKEN_HEADER));
 
         return ResponseEntity.status(jwtResponse.getStatusCode()).headers(jwtResponse.getHeaders()).body(dto);
     }
@@ -477,12 +481,18 @@ public class TraderAuthResource {
 
         String jwt = authenticateController.createToken(authentication, true);
         HttpHeaders httpHeaders = authenticateController.buildAuthHeaders(jwt, true);
+        AuthRefreshSessionService.IssuedRefreshSession refreshSession = authenticateController.issueRefreshSession(
+            authentication,
+            SecurityUtils.TOKEN_TYPE_TRADER
+        );
+        authenticateController.addRefreshHeaders(httpHeaders, refreshSession.rawToken());
 
         AdminUserDTO account = accountResource.getAccount();
 
         TraderAuthDTO dto = buildAuthDto(account, trader);
         // Persistable token for the same reason as /auth/login above.
         dto.setToken(jwt);
+        dto.setRefreshToken(refreshSession.rawToken());
 
         return ResponseEntity.ok().headers(httpHeaders).body(dto);
     }
@@ -766,4 +776,3 @@ public class TraderAuthResource {
         return user;
     }
 }
-

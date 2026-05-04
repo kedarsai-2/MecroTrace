@@ -1,6 +1,6 @@
 import type { Trader, User } from '@/types/models';
-import { apiFetch, captureAuthTokenFromResponse } from './http';
-import { setTraderToken } from './tokenStore';
+import { apiFetch, captureAuthTokenFromResponse, captureRefreshTokenFromResponse, REFRESH_TOKEN_HEADER } from './http';
+import { getTraderRefreshToken, setTraderRefreshToken, setTraderToken } from './tokenStore';
 
 /** Default message when we cannot show a specific validation message. */
 const REGISTRATION_FAILED = 'Registration failed. Please try again.';
@@ -152,11 +152,12 @@ export const authApi = {
     // If backend returns token in body, persist it (Android only).
     const tokenFromBody = (dataRes as any)?.token;
     if (typeof tokenFromBody === 'string' && tokenFromBody.trim()) {
-      setTraderToken(tokenFromBody.trim());
+      await setTraderToken(tokenFromBody.trim());
     }
+    await captureRefreshTokenFromResponse(res, 'trader', (dataRes as any)?.refresh_token);
 
     // Best-effort: capture JWT from headers for native shells where cookies are unreliable.
-    captureAuthTokenFromResponse(res, 'trader');
+    await captureAuthTokenFromResponse(res, 'trader');
 
     const user: User = {
       user_id: dataRes.user.user_id,
@@ -237,11 +238,12 @@ export const authApi = {
     // New: persist token from response body (backend also sets httpOnly cookie).
     const tokenFromBody = (data as any)?.token;
     if (typeof tokenFromBody === 'string' && tokenFromBody.trim()) {
-      setTraderToken(tokenFromBody.trim());
+      await setTraderToken(tokenFromBody.trim());
     } else {
       // Backward compatible: try extracting token from exposed Authorization header.
-      captureAuthTokenFromResponse(res, 'trader');
+      await captureAuthTokenFromResponse(res, 'trader');
     }
+    await captureRefreshTokenFromResponse(res, 'trader', (data as any)?.refresh_token);
 
     // Capture trader JWT for use in Authorization header (web + Capacitor).
     // Kept for compatibility with builds where token is not included in body.
@@ -429,11 +431,12 @@ export const authApi = {
     // New: backend also returns the JWT in `data.token` (frontend stores it on Android).
     const tokenFromBody = (data as any)?.token;
     if (typeof tokenFromBody === 'string' && tokenFromBody.trim()) {
-      setTraderToken(tokenFromBody.trim());
+      await setTraderToken(tokenFromBody.trim());
     } else {
       // Backward compatible fallback.
-      captureAuthTokenFromResponse(res, 'trader');
+      await captureAuthTokenFromResponse(res, 'trader');
     }
+    await captureRefreshTokenFromResponse(res, 'trader', (data as any)?.refresh_token);
 
     const user: User = {
       user_id: data.user.user_id,
@@ -474,9 +477,40 @@ export const authApi = {
     // Best-effort: ask backend to clear ACCESS_TOKEN cookie for trader/admin flows.
     // Ignore network errors so UI logout still succeeds locally.
     try {
-      await apiFetch('/auth/logout', { method: 'POST' });
+      const refreshToken = await getTraderRefreshToken();
+      await apiFetch('/auth/logout', {
+        method: 'POST',
+        headers: refreshToken ? { [REFRESH_TOKEN_HEADER]: refreshToken } : undefined,
+      });
     } catch {
       // no-op
+    } finally {
+      await setTraderRefreshToken(null);
     }
+  },
+
+  async refreshSession(): Promise<boolean> {
+    const refreshToken = await getTraderRefreshToken();
+    const res = await apiFetch('/auth/refresh', {
+      method: 'POST',
+      headers: refreshToken ? { [REFRESH_TOKEN_HEADER]: refreshToken } : undefined,
+      body: JSON.stringify(refreshToken ? { refresh_token: refreshToken } : {}),
+    });
+
+    if (!res.ok) {
+      await setTraderToken(null);
+      await setTraderRefreshToken(null);
+      return false;
+    }
+
+    const data = await res.json().catch(() => ({}));
+    const tokenFromBody = (data as any)?.id_token ?? (data as any)?.token;
+    if (typeof tokenFromBody === 'string' && tokenFromBody.trim()) {
+      await setTraderToken(tokenFromBody.trim());
+    } else {
+      await captureAuthTokenFromResponse(res, 'trader');
+    }
+    await captureRefreshTokenFromResponse(res, 'trader', (data as any)?.refresh_token);
+    return true;
   },
 };

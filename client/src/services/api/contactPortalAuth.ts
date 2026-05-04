@@ -1,4 +1,5 @@
-import { apiFetch, captureAuthTokenFromResponse } from './http';
+import { apiFetch, captureAuthTokenFromResponse, captureRefreshTokenFromResponse, REFRESH_TOKEN_HEADER } from './http';
+import { getContactRefreshToken, setContactRefreshToken, setContactToken } from './tokenStore';
 
 type ProblemDetails = {
   title?: string;
@@ -137,7 +138,8 @@ export const contactPortalAuthApi = {
     const dto: ContactDto = await res.json();
 
     // Best-effort: capture contact JWT when backend issues one.
-    captureAuthTokenFromResponse(res, 'contact');
+    await captureAuthTokenFromResponse(res, 'contact');
+    await captureRefreshTokenFromResponse(res, 'contact');
     return mapDtoToProfile(dto);
   },
 
@@ -182,7 +184,8 @@ export const contactPortalAuthApi = {
     const dto: ContactDto = await res.json();
 
     // Capture contact portal JWT for native shells and web.
-    captureAuthTokenFromResponse(res, 'contact');
+    await captureAuthTokenFromResponse(res, 'contact');
+    await captureRefreshTokenFromResponse(res, 'contact');
     return mapDtoToProfile(dto);
   },
 
@@ -270,10 +273,11 @@ export const contactPortalAuthApi = {
       throw new Error(message);
     }
 
-    const data: { guest: boolean; phone: string; contact?: ContactDto | null } = await res.json();
+    const data: { guest: boolean; phone: string; contact?: ContactDto | null; refresh_token?: string } = await res.json();
 
     // OTP login can also carry JWT headers; capture when present.
-    captureAuthTokenFromResponse(res, 'contact');
+    await captureAuthTokenFromResponse(res, 'contact');
+    await captureRefreshTokenFromResponse(res, 'contact', data.refresh_token);
     const profile = data.contact ? mapDtoToProfile(data.contact) : ({
       contact_id: '',
       name: data.phone,
@@ -341,12 +345,41 @@ export const contactPortalAuthApi = {
     // Best-effort: ask backend to clear ACCESS_TOKEN cookie for contact portal flows.
     // Ignore network errors so that client-side logout still completes.
     try {
+      const refreshToken = await getContactRefreshToken();
       await apiFetch('/portal/auth/logout', {
         method: 'POST',
+        headers: refreshToken ? { [REFRESH_TOKEN_HEADER]: refreshToken } : undefined,
       });
     } catch {
       // no-op
+    } finally {
+      await setContactToken(null);
+      await setContactRefreshToken(null);
     }
   },
-};
 
+  async refreshSession(): Promise<boolean> {
+    const refreshToken = await getContactRefreshToken();
+    const res = await apiFetch('/portal/auth/refresh', {
+      method: 'POST',
+      headers: refreshToken ? { [REFRESH_TOKEN_HEADER]: refreshToken } : undefined,
+      body: JSON.stringify(refreshToken ? { refresh_token: refreshToken } : {}),
+    });
+
+    if (!res.ok) {
+      await setContactToken(null);
+      await setContactRefreshToken(null);
+      return false;
+    }
+
+    const data = await res.json().catch(() => ({}));
+    const tokenFromBody = (data as any)?.token ?? (data as any)?.id_token;
+    if (typeof tokenFromBody === 'string' && tokenFromBody.trim()) {
+      await setContactToken(tokenFromBody.trim());
+    } else {
+      await captureAuthTokenFromResponse(res, 'contact');
+    }
+    await captureRefreshTokenFromResponse(res, 'contact', (data as any)?.refresh_token);
+    return true;
+  },
+};

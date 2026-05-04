@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <changeSet id="20260504120000-1" author="codex">
+        <createTable tableName="refresh_session">
+            <column name="id" type="bigint">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="token_hash" type="varchar(64)">
+                <constraints nullable="false" unique="true" uniqueConstraintName="ux_refresh_session_token_hash"/>
+            </column>
+            <column name="token_type" type="varchar(32)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="subject" type="varchar(255)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="user_id" type="bigint"/>
+            <column name="contact_id" type="bigint"/>
+            <column name="authorities" type="varchar(1000)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="created_at" type="${datetimeType}">
+                <constraints nullable="false"/>
+            </column>
+            <column name="expires_at" type="${datetimeType}">
+                <constraints nullable="false"/>
+            </column>
+            <column name="last_used_at" type="${datetimeType}"/>
+            <column name="revoked_at" type="${datetimeType}"/>
+            <column name="created_by" type="varchar(50)" defaultValue="system">
+                <constraints nullable="false"/>
+            </column>
+            <column name="created_date" type="${datetimeType}" defaultValueDate="${now}">
+                <constraints nullable="false"/>
+            </column>
+            <column name="last_modified_by" type="varchar(50)"/>
+            <column name="last_modified_date" type="${datetimeType}"/>
+        </createTable>
+
+        <createIndex tableName="refresh_session" indexName="idx_refresh_session_lookup">
+            <column name="token_hash"/>
+            <column name="revoked_at"/>
+            <column name="expires_at"/>
+        </createIndex>
+
+        <createIndex tableName="refresh_session" indexName="idx_refresh_session_principal">
+            <column name="token_type"/>
+            <column name="user_id"/>
+            <column name="contact_id"/>
+        </createIndex>
+    </changeSet>
+</databaseChangeLog>

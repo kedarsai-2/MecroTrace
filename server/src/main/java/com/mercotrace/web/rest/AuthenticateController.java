@@ -1,14 +1,20 @@
 package com.mercotrace.web.rest;
 
 import static com.mercotrace.security.SecurityUtils.AUTHORITIES_CLAIM;
+import static com.mercotrace.security.SecurityUtils.CONTACT_ID_CLAIM;
 import static com.mercotrace.security.SecurityUtils.JWT_ALGORITHM;
 import static com.mercotrace.security.SecurityUtils.TOKEN_TYPE_CLAIM;
 import static com.mercotrace.security.SecurityUtils.TOKEN_TYPE_TRADER;
 import static com.mercotrace.security.SecurityUtils.USER_ID_CLAIM;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.mercotrace.domain.RefreshSession;
 import com.mercotrace.security.DomainUserDetailsService.UserWithId;
+import com.mercotrace.service.AuthRefreshSessionService;
+import com.mercotrace.service.AuthRefreshSessionService.InvalidRefreshTokenException;
 import com.mercotrace.web.rest.vm.LoginVM;
+import com.mercotrace.web.rest.vm.RefreshTokenVM;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import java.security.Principal;
 import java.time.Duration;
@@ -44,12 +50,16 @@ public class AuthenticateController {
     private static final Logger LOG = LoggerFactory.getLogger(AuthenticateController.class);
 
     private final JwtEncoder jwtEncoder;
+    private final AuthRefreshSessionService refreshSessionService;
 
     @Value("${jhipster.security.authentication.jwt.token-validity-in-seconds:0}")
     private long tokenValidityInSeconds;
 
     @Value("${jhipster.security.authentication.jwt.token-validity-in-seconds-for-remember-me:0}")
     private long tokenValidityInSecondsForRememberMe;
+
+    @Value("${application.security.access-token-validity-in-seconds:1800}")
+    private long accessTokenValidityInSeconds;
 
     /**
      * Controls whether the ACCESS_TOKEN cookie is marked as Secure.
@@ -64,10 +74,12 @@ public class AuthenticateController {
 
     public AuthenticateController(
         JwtEncoder jwtEncoder,
-        @Qualifier("traderAuthenticationManager") AuthenticationManager authenticationManager
+        @Qualifier("traderAuthenticationManager") AuthenticationManager authenticationManager,
+        AuthRefreshSessionService refreshSessionService
     ) {
         this.jwtEncoder = jwtEncoder;
         this.authenticationManager = authenticationManager;
+        this.refreshSessionService = refreshSessionService;
     }
 
     @PostMapping("/authenticate")
@@ -97,13 +109,15 @@ public class AuthenticateController {
             .maxAge(Duration.ofSeconds(cookieMaxAgeSec))
             .build();
         httpHeaders.add(HttpHeaders.SET_COOKIE, cookie.toString());
+        AuthRefreshSessionService.IssuedRefreshSession refreshSession = issueRefreshSession(authentication, TOKEN_TYPE_TRADER);
+        refreshSessionService.addRefreshHeaders(httpHeaders, refreshSession.rawToken());
 
-        return new ResponseEntity<>(new JWTToken(jwt), httpHeaders, HttpStatus.OK);
+        return new ResponseEntity<>(new JWTToken(jwt, refreshSession.rawToken()), httpHeaders, HttpStatus.OK);
     }
 
     /** JWT lifetime in seconds (same rule as {@link #createToken}). */
     public long tokenValiditySeconds(boolean rememberMe) {
-        return rememberMe ? tokenValidityInSecondsForRememberMe : tokenValidityInSeconds;
+        return rememberMe ? accessTokenValidityInSeconds : tokenValidityInSeconds;
     }
 
     /**
@@ -126,6 +140,18 @@ public class AuthenticateController {
         return httpHeaders;
     }
 
+    public AuthRefreshSessionService.IssuedRefreshSession issueRefreshSession(Authentication authentication, String tokenType) {
+        Long userId = null;
+        if (authentication.getPrincipal() instanceof UserWithId user) {
+            userId = user.getId();
+        }
+        return refreshSessionService.issue(tokenType, authentication.getName(), userId, null, authentication.getAuthorities());
+    }
+
+    public void addRefreshHeaders(HttpHeaders headers, String rawRefreshToken) {
+        refreshSessionService.addRefreshHeaders(headers, rawRefreshToken);
+    }
+
     /**
      * POST /auth/logout — clear ACCESS_TOKEN cookie for trader/admin flows.
      *
@@ -134,7 +160,12 @@ public class AuthenticateController {
      * requests from this device are treated as logged out until a new login.
      */
     @PostMapping("/auth/logout")
-    public ResponseEntity<Void> logout() {
+    public ResponseEntity<Void> logout(
+        HttpServletRequest request,
+        @RequestHeader(value = AuthRefreshSessionService.REFRESH_TOKEN_HEADER, required = false) String refreshHeader
+    ) {
+        String refreshToken = refreshSessionService.resolveRefreshToken(request, null, refreshHeader);
+        refreshSessionService.revoke(refreshToken);
         ResponseCookie deleteCookie = ResponseCookie
             .from("ACCESS_TOKEN", "")
             .httpOnly(true)
@@ -145,7 +176,32 @@ public class AuthenticateController {
             .build();
         HttpHeaders headers = new HttpHeaders();
         headers.add(HttpHeaders.SET_COOKIE, deleteCookie.toString());
+        refreshSessionService.addDeleteRefreshCookie(headers);
         return ResponseEntity.noContent().headers(headers).build();
+    }
+
+    @PostMapping("/auth/refresh")
+    public ResponseEntity<JWTToken> refresh(
+        HttpServletRequest request,
+        @RequestHeader(value = AuthRefreshSessionService.REFRESH_TOKEN_HEADER, required = false) String refreshHeader,
+        @RequestBody(required = false) RefreshTokenVM vm
+    ) {
+        String rawRefreshToken = refreshSessionService.resolveRefreshToken(
+            request,
+            vm != null ? vm.getRefreshToken() : null,
+            refreshHeader
+        );
+        try {
+            AuthRefreshSessionService.IssuedRefreshSession rotated = refreshSessionService.rotate(rawRefreshToken, TOKEN_TYPE_TRADER);
+            String jwt = createToken(rotated.session(), true);
+            HttpHeaders headers = buildAuthHeaders(jwt, true);
+            refreshSessionService.addRefreshHeaders(headers, rotated.rawToken());
+            return ResponseEntity.ok().headers(headers).body(new JWTToken(jwt, rotated.rawToken()));
+        } catch (InvalidRefreshTokenException ex) {
+            HttpHeaders headers = new HttpHeaders();
+            refreshSessionService.addDeleteRefreshCookie(headers);
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).headers(headers).build();
+        }
     }
 
     /**
@@ -185,15 +241,43 @@ public class AuthenticateController {
         return this.jwtEncoder.encode(JwtEncoderParameters.from(jwsHeader, builder.build())).getTokenValue();
     }
 
+    public String createToken(RefreshSession session, boolean rememberMe) {
+        Instant now = Instant.now();
+        Instant validity = now.plus(tokenValiditySeconds(rememberMe), ChronoUnit.SECONDS);
+
+        JwtClaimsSet.Builder builder = JwtClaimsSet
+            .builder()
+            .issuedAt(now)
+            .expiresAt(validity)
+            .subject(session.getSubject())
+            .claim(AUTHORITIES_CLAIM, session.getAuthorities())
+            .claim(TOKEN_TYPE_CLAIM, session.getTokenType());
+        if (session.getUserId() != null) {
+            builder.claim(USER_ID_CLAIM, session.getUserId());
+        }
+        if (session.getContactId() != null) {
+            builder.claim(CONTACT_ID_CLAIM, session.getContactId());
+        }
+
+        JwsHeader jwsHeader = JwsHeader.with(JWT_ALGORITHM).build();
+        return this.jwtEncoder.encode(JwtEncoderParameters.from(jwsHeader, builder.build())).getTokenValue();
+    }
+
     /**
      * Object to return as body in JWT Authentication.
      */
     static class JWTToken {
 
         private String idToken;
+        private String refreshToken;
 
         JWTToken(String idToken) {
             this.idToken = idToken;
+        }
+
+        JWTToken(String idToken, String refreshToken) {
+            this.idToken = idToken;
+            this.refreshToken = refreshToken;
         }
 
         @JsonProperty("id_token")
@@ -203,6 +287,15 @@ public class AuthenticateController {
 
         void setIdToken(String idToken) {
             this.idToken = idToken;
+        }
+
+        @JsonProperty("refresh_token")
+        String getRefreshToken() {
+            return refreshToken;
+        }
+
+        void setRefreshToken(String refreshToken) {
+            this.refreshToken = refreshToken;
         }
     }
 }

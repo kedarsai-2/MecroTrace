@@ -11,7 +11,7 @@ interface AdminAuthState {
 interface AdminAuthContextType extends AdminAuthState {
   hasBootstrapped: boolean;
   login: (email: string, password: string) => Promise<void>;
-  logout: () => void;
+  logout: () => Promise<void>;
   isLoading: boolean;
   error: string | null;
   clearError: () => void;
@@ -22,7 +22,7 @@ const AdminAuthContext = createContext<AdminAuthContextType>({
   user: null,
   hasBootstrapped: false,
   login: async () => {},
-  logout: () => {},
+  logout: async () => {},
   isLoading: false,
   error: null,
   clearError: () => {},
@@ -81,9 +81,13 @@ export const AdminAuthProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     }
   }, []);
 
-  const logout = useCallback(() => {
-    setState({ isAuthenticated: false, user: null });
-    setAdminToken(null);
+  const logout = useCallback(async () => {
+    try {
+      await adminAuthApi.logout();
+    } finally {
+      setState({ isAuthenticated: false, user: null });
+      await setAdminToken(null);
+    }
   }, []);
 
   const clearError = useCallback(() => setError(null), []);
@@ -104,4 +108,3 @@ export const AdminAuthProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     </AdminAuthContext.Provider>
   );
 };
-

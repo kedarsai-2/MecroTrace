@@ -111,7 +111,7 @@ jhipster:
     allowed-origin-patterns: "https://*.githubpreview.dev"
     allowed-methods: "*"
     allowed-headers: "*"
-    exposed-headers: "Authorization,Link,X-Total-Count,X-${jhipster.clientApp.name}-alert,X-${jhipster.clientApp.name}-error,X-${jhipster.clientApp.name}-params"
+    exposed-headers: "Authorization,Link,X-Total-Count,X-Merco-Refresh-Token,X-${jhipster.clientApp.name}-alert,X-${jhipster.clientApp.name}-error,X-${jhipster.clientApp.name}-params"
     allow-credentials: true
     max-age: 1800
   security:
@@ -148,6 +148,8 @@ application:
   liquibase:
     # Run Liquibase synchronously so all tables exist before the app accepts requests
     async-start: false
+  security:
+    access-token-validity-in-seconds: 1800
 
 # OTP SMS configuration (Fast2SMS)
 otp:

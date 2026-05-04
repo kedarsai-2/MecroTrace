@@ -87,12 +87,14 @@ public class SecurityConfiguration {
                 mvc.pattern(HttpMethod.POST, "/api/auth/login"),
                 mvc.pattern(HttpMethod.POST, "/api/auth/otp/request"),
                 mvc.pattern(HttpMethod.POST, "/api/auth/otp/verify"),
+                mvc.pattern(HttpMethod.POST, "/api/auth/refresh"),
                 mvc.pattern(HttpMethod.POST, "/api/auth/logout"),
                 // Contact Portal public auth endpoints
                 mvc.pattern(HttpMethod.POST, "/api/auth/register-contact"),
                 mvc.pattern(HttpMethod.POST, "/api/portal/auth/login"),
                 mvc.pattern(HttpMethod.POST, "/api/portal/auth/otp/request"),
                 mvc.pattern(HttpMethod.POST, "/api/portal/auth/otp/verify"),
+                mvc.pattern(HttpMethod.POST, "/api/portal/auth/refresh"),
                 mvc.pattern(HttpMethod.POST, "/api/portal/auth/logout"),
                 // Admin public auth endpoints
                 mvc.pattern(HttpMethod.POST, "/api/admin/auth/login"),
@@ -150,6 +152,7 @@ public class SecurityConfiguration {
                     .requestMatchers(mvc.pattern(HttpMethod.POST, "/api/portal/auth/login")).permitAll()
                     .requestMatchers(mvc.pattern(HttpMethod.POST, "/api/portal/auth/otp/request")).permitAll()
                     .requestMatchers(mvc.pattern(HttpMethod.POST, "/api/portal/auth/otp/verify")).permitAll()
+                    .requestMatchers(mvc.pattern(HttpMethod.POST, "/api/portal/auth/refresh")).permitAll()
                     .requestMatchers(mvc.pattern("/api/portal/**")).authenticated()
             )
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
@@ -183,6 +186,7 @@ public class SecurityConfiguration {
                     .requestMatchers(mvc.pattern("/api/register")).permitAll()
                     .requestMatchers(mvc.pattern(HttpMethod.POST, "/api/auth/register")).permitAll()
                     .requestMatchers(mvc.pattern(HttpMethod.POST, "/api/auth/login")).permitAll()
+                    .requestMatchers(mvc.pattern(HttpMethod.POST, "/api/auth/refresh")).permitAll()
                     .requestMatchers(mvc.pattern("/api/activate")).permitAll()
                     .requestMatchers(mvc.pattern("/api/account/reset-password/init")).permitAll()
                     .requestMatchers(mvc.pattern("/api/account/reset-password/finish")).permitAll()

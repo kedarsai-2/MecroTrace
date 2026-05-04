@@ -11,7 +11,7 @@ interface AuthContextType extends AuthState {
   /** Returns { user, trader } so callers can e.g. upload photos post-register. */
   register: (data: any) => Promise<{ user: User; trader: Trader }>;
   refreshProfile: () => Promise<void>;
-  logout: () => void;
+  logout: () => Promise<void>;
   isLoading: boolean;
   error: string | null;
   clearError: () => void;
@@ -26,7 +26,7 @@ const AuthContext = createContext<AuthContextType>({
   loginWithOtp: async () => {},
   register: async () => ({ user: null as any, trader: null as any }),
   refreshProfile: async () => {},
-  logout: () => {},
+  logout: async () => {},
   isLoading: false,
   error: null,
   clearError: () => {},
@@ -61,6 +61,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const bootstrap = async () => {
       try {
         let profile = await authApi.getProfile();
+        if (!cancelled && !profile) {
+          const refreshed = await authApi.refreshSession();
+          if (refreshed && !cancelled) {
+            profile = await authApi.getProfile();
+          }
+        }
         // Retry once on 401 to avoid redirecting when session cookie is valid but first request was transient (e.g. race)
         if (!cancelled && !profile) {
           await new Promise((r) => setTimeout(r, 400));
@@ -171,9 +177,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   }, []);
 
-  const logout = useCallback(() => {
-    setState({ isAuthenticated: false, user: null, trader: null });
-    setTraderToken(null);
+  const logout = useCallback(async () => {
+    try {
+      await authApi.logout();
+    } finally {
+      setState({ isAuthenticated: false, user: null, trader: null });
+      await setTraderToken(null);
+    }
   }, []);
 
   const clearError = useCallback(() => setError(null), []);

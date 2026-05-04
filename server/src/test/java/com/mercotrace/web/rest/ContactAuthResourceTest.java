@@ -1,6 +1,7 @@
 package com.mercotrace.web.rest;
 
 import static org.hamcrest.Matchers.emptyString;
+import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.not;
 import static org.hamcrest.Matchers.nullValue;
 import static org.springframework.http.HttpHeaders.AUTHORIZATION;
@@ -49,7 +50,14 @@ import org.springframework.transaction.annotation.Transactional;
  */
 @AutoConfigureMockMvc
 @IntegrationTest
-@TestPropertySource(properties = "otp.fast2sms.api-key=test-otp-api-key")
+@TestPropertySource(
+    properties = {
+        "otp.fast2sms.api-key=test-otp-api-key",
+        "application.security.cookie.secure=false",
+        "jhipster.security.authentication.jwt.token-validity-in-seconds=86400",
+        "jhipster.security.authentication.jwt.token-validity-in-seconds-for-remember-me=7776000",
+    }
+)
 class ContactAuthResourceTest {
 
     @Autowired
@@ -98,7 +106,8 @@ class ContactAuthResourceTest {
             .andExpect(jsonPath("$.canLogin").value(true))
             .andExpect(header().string(AUTHORIZATION, not(nullValue())))
             .andExpect(header().string(AUTHORIZATION, not(emptyString())))
-            .andExpect(header().string("Set-Cookie", not(emptyString())));
+            .andExpect(header().string("Set-Cookie", not(emptyString())))
+            .andExpect(header().string("Set-Cookie", containsString("Max-Age=7776000")));
 
         Long contactId = contactRepository.findOneByPhone("9876543210").map(Contact::getId).orElseThrow();
 
@@ -295,7 +304,8 @@ class ContactAuthResourceTest {
             .andExpect(jsonPath("$.email").value("login-phone@example.com"))
             .andExpect(header().string(AUTHORIZATION, not(nullValue())))
             .andExpect(header().string(AUTHORIZATION, not(emptyString())))
-            .andExpect(header().string("Set-Cookie", not(emptyString())));
+            .andExpect(header().string("Set-Cookie", not(emptyString())))
+            .andExpect(header().string("Set-Cookie", containsString("Max-Age=7776000")));
     }
 
     @Test
@@ -490,7 +500,8 @@ class ContactAuthResourceTest {
             .andExpect(jsonPath("$.contact.id").value(contact.getId()))
             .andExpect(header().string(AUTHORIZATION, not(nullValue())))
             .andExpect(header().string(AUTHORIZATION, not(emptyString())))
-            .andExpect(header().string("Set-Cookie", not(emptyString())));
+            .andExpect(header().string("Set-Cookie", not(emptyString())))
+            .andExpect(header().string("Set-Cookie", containsString("Max-Age=7776000")));
 
         ContactOtpToken refreshed = contactOtpTokenRepository.findById(token.getId()).orElseThrow();
         org.assertj.core.api.Assertions.assertThat(refreshed.getConsumedAt()).isNotNull();
@@ -605,7 +616,8 @@ class ContactAuthResourceTest {
             .andExpect(jsonPath("$.contact").doesNotExist())
             .andExpect(header().string(AUTHORIZATION, not(nullValue())))
             .andExpect(header().string(AUTHORIZATION, not(emptyString())))
-            .andExpect(header().string("Set-Cookie", not(emptyString())));
+            .andExpect(header().string("Set-Cookie", not(emptyString())))
+            .andExpect(header().string("Set-Cookie", containsString("Max-Age=7776000")));
 
         ContactOtpToken refreshed = contactOtpTokenRepository.findById(token.getId()).orElseThrow();
         org.assertj.core.api.Assertions.assertThat(refreshed.getConsumedAt()).isNotNull();
@@ -771,4 +783,3 @@ class ContactAuthResourceTest {
         return contactRepository.saveAndFlush(contact);
     }
 }
-
