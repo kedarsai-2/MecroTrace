@@ -237,10 +237,10 @@ function tryMigrateBuyersForSearchBid(
     const key = getBidSelectionKey(e);
     const maxQty = Math.max(0, Math.floor(Number(e.quantity) || 0));
     let qty = searchBidMigrateQtyByKey[key];
-    if (qty === undefined) qty = maxQty;
+    if (qty === undefined) qty = 0;
     else qty = Math.floor(Number(qty) || 0);
     if (maxQty <= 0 || qty <= 0) continue;
-    qty = Math.min(maxQty, Math.max(1, qty));
+    qty = Math.min(maxQty, qty);
     const ratio = maxQty > 0 ? qty / maxQty : 1;
     const origW = Number(e.weight) || 0;
     const origTa = Number(e.tokenAdvance) || 0;
@@ -1337,7 +1337,7 @@ const BillingPage = () => {
   const [searchBidSourceBuyer, setSearchBidSourceBuyer] = useState<BuyerPurchase | null>(null);
   const [searchBidDialogOpen, setSearchBidDialogOpen] = useState(false);
   const [searchBidSelectedKeys, setSearchBidSelectedKeys] = useState<string[]>([]);
-  /** Migrate qty (bags) per bid key for Search & Migrate; defaults initialized when dialog opens. */
+  /** Migrate qty (bags) per bid key for Search & Migrate; unset keys = 0 until user enters amount. */
   const [searchBidMigrateQtyByKey, setSearchBidMigrateQtyByKey] = useState<Record<string, number>>({});
   const [showSearchBidBuyerSuggestions, setShowSearchBidBuyerSuggestions] = useState(false);
   const searchBidBuyerSelectRef = useRef<HTMLDivElement | null>(null);
@@ -2982,12 +2982,7 @@ const BillingPage = () => {
       .filter(e => Math.floor(Number(e.quantity) || 0) > 0)
       .map(e => getBidSelectionKey(e));
     setSearchBidSelectedKeys(visibleKeys);
-    const initQty: Record<string, number> = {};
-    for (const ent of picked.entries) {
-      const k = getBidSelectionKey(ent);
-      initQty[k] = Math.max(0, Math.floor(Number(ent.quantity) || 0));
-    }
-    setSearchBidMigrateQtyByKey(initQty);
+    setSearchBidMigrateQtyByKey({});
     setShowSearchBidBuyerSuggestions(false);
     setSearchBidDialogOpen(true);
   }, []);
@@ -3939,10 +3934,10 @@ const BillingPage = () => {
                         const bidKey = getBidSelectionKey(entry);
                         const checked = searchBidSelectedKeys.includes(bidKey);
                         const maxQty = Math.max(0, Math.floor(Number(entry.quantity) || 0));
-                        const qtyVal = searchBidMigrateQtyByKey[bidKey] ?? maxQty;
-                        const effectiveMigrateQty =
-                          maxQty <= 0 ? 0 : Math.min(maxQty, Math.max(1, Math.round(Number(qtyVal)) || 0));
-                        const remainingAfterMigrate = Math.max(0, maxQty - effectiveMigrateQty);
+                        const qtyVal = searchBidMigrateQtyByKey[bidKey] ?? 0;
+                        const enteredMigrateQty =
+                          maxQty <= 0 ? 0 : Math.min(maxQty, Math.max(0, Math.round(Number(qtyVal)) || 0));
+                        const remainingAfterMigrate = Math.max(0, maxQty - enteredMigrateQty);
                         const lotLabel = formatLotIdentifierForBillEntry(entry);
                         const rowCellBg = checked
                           ? 'bg-primary/10'
@@ -3998,14 +3993,14 @@ const BillingPage = () => {
                               <div className="flex h-8 items-center justify-end gap-0.5 whitespace-nowrap tabular-nums">
                                 <BillingMoneyInput
                                   integerOnly
-                                  min={1}
+                                  min={0}
                                   commitMode="live"
                                   liveDebounceMs={0}
                                   disabled={maxQty <= 0}
                                   value={maxQty <= 0 ? 0 : qtyVal}
                                   onCommit={n => {
                                     if (maxQty <= 0) return;
-                                    const capped = Math.min(maxQty, Math.max(1, Math.round(n)));
+                                    const capped = Math.min(maxQty, Math.max(0, Math.round(n)));
                                     setSearchBidMigrateQtyByKey(prev => ({ ...prev, [bidKey]: capped }));
                                   }}
                                   title={`Migrate quantity for ${lotLabel}`}
