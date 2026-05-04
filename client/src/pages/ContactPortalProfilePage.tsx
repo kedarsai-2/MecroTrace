@@ -8,7 +8,6 @@ const ContactPortalProfilePage = () => {
   const { contact, isGuest, loginWithProfile, clearError } = useContactAuth();
   const [name, setName] = useState(contact?.name ?? '');
   const [email, setEmail] = useState(contact?.email ?? '');
-  const [address, setAddress] = useState(contact?.address ?? '');
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [isSaving, setIsSaving] = useState(false);
@@ -30,7 +29,6 @@ const ContactPortalProfilePage = () => {
         body: JSON.stringify({
           name: name.trim() || undefined,
           email: email.trim() || undefined,
-          address: address.trim() || undefined,
           currentPassword: newPassword ? currentPassword || undefined : undefined,
           newPassword: newPassword || undefined,
         }),
@@ -123,16 +121,6 @@ const ContactPortalProfilePage = () => {
                 value={email}
                 onChange={e => setEmail(e.target.value)}
                 placeholder="you@example.com"
-                className="h-10"
-              />
-            </div>
-
-            <div>
-              <label className="block text-xs font-medium text-muted-foreground mb-1">Address</label>
-              <Input
-                value={address}
-                onChange={e => setAddress(e.target.value)}
-                placeholder="Address (optional)"
                 className="h-10"
               />
             </div>

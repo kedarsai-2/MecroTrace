@@ -421,15 +421,16 @@ const CommoditySettings = () => {
 
     // Parse GST rate (can be string from raw input or number from loaded config)
     let gstRateValue: number | undefined;
-    if (typeof cfg.gst_rate === 'string') {
-      const s = cfg.gst_rate.trim();
+    const rawGst = cfg.gst_rate as number | string | undefined;
+    if (typeof rawGst === 'string') {
+      const s = rawGst.trim();
       if (s === '') gstRateValue = undefined;
       else {
         const n = parseFloat(s);
         gstRateValue = Number.isNaN(n) ? undefined : n;
       }
     } else {
-      gstRateValue = (cfg.gst_rate ?? undefined) as number | undefined;
+      gstRateValue = (rawGst ?? undefined) as number | undefined;
     }
 
     if (item.gstApplicable && item.taxType === 'GST') {
@@ -561,6 +562,7 @@ const CommoditySettings = () => {
         commodityId: cid,
         thresholdWeight: Number(s.threshold_weight),
         fixedRate: Number(s.fixed_rate),
+        perKgRate: 0,
       })),
       dynamicCharges: item.charges.map(ch => ({
         commodityId: cid,

@@ -1,5 +1,5 @@
 import type { ArrivalSellerFullDetail } from '@/services/api/arrivals';
-import type { LotSummaryDTO } from '@/services/api/auction';
+import type { AuctionEntryDTO, LotSummaryDTO } from '@/services/api/auction';
 import { formatAuctionLotIdentifier } from '@/utils/auctionLotIdentifier';
 
 export function sellerKeyFromArrivalSeller(s: ArrivalSellerFullDetail): string {
@@ -57,4 +57,37 @@ export function sellerBagSoldPending(lots: LotSummaryDTO[]): { sold: number; pen
     pending += Math.max(0, bc - sb);
   }
   return { sold, pending };
+}
+
+/** Σ sold_bags covers bag_count — lot auction complete. */
+export function isLotFullyAuctioned(lot: LotSummaryDTO): boolean {
+  const bc = lot.bag_count ?? 0;
+  if (bc <= 0) return true;
+  return (lot.sold_bags ?? 0) >= bc;
+}
+
+/**
+ * FIFO by bid_number: row is auction-complete when cumulative sold_bags fully covers this bid’s qty.
+ * Self-sale rows use auctioned (brand green) strip (not competing for normal FIFO bags).
+ */
+export function entryFullyAuctionedBySoldBags(entries: AuctionEntryDTO[], soldBags: number): Map<number, boolean> {
+  const sorted = [...entries].sort((a, b) => (a.bid_number ?? 0) - (b.bid_number ?? 0));
+  let rem = Math.max(0, Number(soldBags) || 0);
+  const m = new Map<number, boolean>();
+  for (const e of sorted) {
+    const id = e.auction_entry_id;
+    if (e.is_self_sale) {
+      m.set(id, true);
+      continue;
+    }
+    const q = Number(e.quantity) || 0;
+    if (q <= 0) {
+      m.set(id, true);
+      continue;
+    }
+    const take = Math.min(q, rem);
+    rem -= take;
+    m.set(id, take >= q - 1e-9);
+  }
+  return m;
 }

@@ -15,7 +15,7 @@ export { logisticsApi } from './api/logistics';
 export { selfSaleApi } from './api/selfSale';
 export { stockPurchaseApi } from './api/stockPurchase';
 export { cdnApi } from './api/cdn';
-export { settlementApi } from './api/settlement';
+export { settlementApi, SETTLEMENT_LIST_PAGE_SIZE } from './api/settlement';
 export { billingApi } from './api/billing';
 export { chartOfAccountsApi } from './api/chartOfAccounts';
 export { writersPadApi } from './api/writersPad';
@@ -43,6 +43,7 @@ export type {
   DeductionItemDTO,
   ListSellersParams,
   ListPattisParams,
+  SettlementPagedResult,
 } from './api/settlement';
 export type {
   CDNResponseDTO,

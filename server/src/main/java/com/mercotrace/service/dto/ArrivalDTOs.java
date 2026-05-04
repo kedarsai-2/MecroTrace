@@ -367,6 +367,9 @@ public final class ArrivalDTOs {
 
         private boolean partiallyCompleted;
 
+        /** Vehicle row last-modified (auditing); UI sorts by this so edited arrivals rise to top. */
+        private Instant lastModifiedDate;
+
         public Long getVehicleId() {
             return vehicleId;
         }
@@ -509,6 +512,14 @@ public final class ArrivalDTOs {
 
         public void setPartiallyCompleted(boolean partiallyCompleted) {
             this.partiallyCompleted = partiallyCompleted;
+        }
+
+        public Instant getLastModifiedDate() {
+            return lastModifiedDate;
+        }
+
+        public void setLastModifiedDate(Instant lastModifiedDate) {
+            this.lastModifiedDate = lastModifiedDate;
         }
     }
 
@@ -735,6 +746,8 @@ public final class ArrivalDTOs {
         /** Mirrors {@code vehicle.multi_seller}; used so edit form restores Multi vs Single seller mode. */
         private boolean multiSeller = true;
         private List<ArrivalSellerFullDTO> sellers;
+        /** Non-empty when {@link com.mercotrace.service.ArrivalService#getArrivalById} found downstream references; enum names (e.g. {@code BILLING}). */
+        private List<String> deleteBlockers = List.of();
 
         public Long getVehicleId() { return vehicleId; }
         public void setVehicleId(Long vehicleId) { this.vehicleId = vehicleId; }
@@ -782,6 +795,10 @@ public final class ArrivalDTOs {
         public boolean isMultiSeller() { return multiSeller; }
         public void setMultiSeller(boolean multiSeller) { this.multiSeller = multiSeller; }
         public void setSellers(List<ArrivalSellerFullDTO> sellers) { this.sellers = sellers; }
+        public List<String> getDeleteBlockers() { return deleteBlockers; }
+        public void setDeleteBlockers(List<String> deleteBlockers) {
+            this.deleteBlockers = deleteBlockers != null ? deleteBlockers : List.of();
+        }
     }
 
     /** Request body for PATCH /api/arrivals/:id (full update; all fields optional). When sellers present, replaces all sellers/lots. */

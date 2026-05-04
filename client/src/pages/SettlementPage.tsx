@@ -1,10 +1,11 @@
-import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef, type ReactNode } from 'react';
+import { useVirtualizer, measureElement } from '@tanstack/react-virtual';
 import { flushSync } from 'react-dom';
 import { motion } from 'framer-motion';
 import {
   ArrowLeft, FileText, Search, Users, Package, Truck,
   Edit3, Save, Printer, PlusCircle, Receipt, Scale, Gavel, IndianRupee, Trash2, Loader2,
-  ChevronDown, ChevronUp, Info, RotateCcw, AlertTriangle, Check, X,
+  ChevronDown, ChevronUp, Info, RotateCcw, AlertTriangle, Check, X, LayoutGrid, List, Lock,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useDesktopMode } from '@/hooks/use-desktop';
@@ -29,6 +30,7 @@ import {
   parsePrintCopiesJson,
   printLogApi,
   printSettingsApi,
+  SETTLEMENT_LIST_PAGE_SIZE,
   settlementApi,
   arrivalsApi,
   commodityApi,
@@ -61,6 +63,8 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+
+const SETTLEMENT_SAVED_PATTI_LAYOUT_STORAGE_KEY = 'merco.settlement.savedPatti.layout';
 
 /**
  * Settlement button language:
@@ -265,6 +269,8 @@ interface SavedArrivalSummaryRow {
   bids: number;
   weighed: number;
   representativePattiId: number | null;
+  /** Sum over pattis in this vehicle group: max(Σ rate-cluster qty, seller lots) per patti. */
+  totalBags: number;
 }
 
 type InProgressSettlementDraft = {
@@ -337,6 +343,100 @@ function uniqueArrivalSellerCount(sellerIds: string[] | undefined): number {
     if (s) set.add(s);
   }
   return set.size;
+}
+
+function totalBagsFromPattiRateClusters(p: PattiDTO): number {
+  let s = 0;
+  for (const c of p.rateClusters ?? []) {
+    const q = (c as { totalQuantity?: unknown }).totalQuantity;
+    const n = typeof q === 'number' && !Number.isNaN(q) ? q : Number(q) || 0;
+    s += n;
+  }
+  return Math.round(s);
+}
+
+/** Vehicle-group saved patti card (same grouping as table): bags + weighed bar + aggregated sellers. */
+function SettlementSavedPattiVehicleCard({
+  row,
+  onOpen,
+}: {
+  row: SavedArrivalSummaryRow;
+  onOpen: () => void;
+}) {
+  const total = Math.round(Math.max(row.totalBags ?? 0, row.lots));
+  const weighedPct = total > 0 ? (Math.min(Math.max(0, row.weighed), total) / total) * 100 : 0;
+  const nSellers = uniqueArrivalSellerCount(row.sellerIds);
+  const canOpen = row.representativePattiId != null;
+
+  return (
+    <button
+      type="button"
+      disabled={!canOpen}
+      onClick={onOpen}
+      className={cn(
+        'w-full rounded-2xl border border-border/50 bg-white p-4 text-left shadow-sm transition-colors dark:bg-card touch-manipulation',
+        canOpen
+          ? 'hover:bg-muted/25 active:scale-[0.99]'
+          : 'cursor-not-allowed opacity-60',
+      )}
+    >
+      <div className="mb-3 flex items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="inline-flex items-center rounded-full bg-[#eef0ff] px-2 py-0.5 text-[10px] font-bold text-[#6075FF] dark:bg-[#6075FF]/20">
+              {row.vehicleNumber}
+            </span>
+            <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-semibold text-muted-foreground tabular-nums">
+              {nSellers} seller{nSellers === 1 ? '' : 's'}
+            </span>
+          </div>
+          <p className="mt-2 line-clamp-2 text-sm font-bold text-foreground">{row.sellerNames || '-'}</p>
+          <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">{row.fromLocation}</p>
+        </div>
+        <div className="shrink-0 text-right">
+          <p className="text-lg font-bold tabular-nums leading-none text-foreground">{total}</p>
+          <p className="text-[11px] font-medium text-muted-foreground">Bags</p>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-3 gap-2 text-center">
+        <div className="rounded-lg bg-muted/40 px-1 py-2">
+          <div className="text-base font-bold tabular-nums text-foreground">{row.lots}</div>
+          <div className="text-[9px] font-medium uppercase tracking-wide text-muted-foreground">Lots</div>
+        </div>
+        <div className="rounded-lg bg-muted/40 px-1 py-2">
+          <div className="text-base font-bold tabular-nums text-foreground">{row.bids}</div>
+          <div className="text-[9px] font-medium uppercase tracking-wide text-muted-foreground">Bids</div>
+        </div>
+        <div className="rounded-lg bg-muted/40 px-1 py-2">
+          <div className="text-base font-bold tabular-nums text-foreground">{row.weighed}</div>
+          <div className="text-[9px] font-medium uppercase tracking-wide text-muted-foreground">Weighed</div>
+        </div>
+      </div>
+
+      <div className="mt-3 flex min-w-0 items-center gap-2 border-t border-border/30 pt-2">
+        <span className="shrink-0 text-xs font-semibold text-emerald-600 dark:text-emerald-400">Completed</span>
+        <div
+          className="relative h-8 min-h-[2rem] min-w-0 flex-1 overflow-hidden rounded-xl border-2 border-foreground/15 shadow-inner dark:border-white/20"
+          title={total > 0 ? `Weighed ${row.weighed} of ${total} bags` : 'Bag total unavailable'}
+          aria-label={total > 0 ? `Weighed ${row.weighed} of ${total} bags` : 'Weighing progress'}
+        >
+          <div className="absolute inset-0 bg-red-500" aria-hidden />
+          <div
+            className="absolute inset-y-0 left-0 bg-emerald-500 transition-[width] duration-300 ease-out"
+            style={{ width: `${weighedPct}%` }}
+            aria-hidden
+          />
+          <div className="relative flex h-full items-center justify-center px-2">
+            <span className="text-[11px] font-bold tabular-nums text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.85)]">
+              {total > 0 ? `${row.weighed}/${total}` : '—'}
+            </span>
+          </div>
+        </div>
+        <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{row.dateLabel}</span>
+      </div>
+    </button>
+  );
 }
 
 function InlineCalcTip({ label, lines }: { label: string; lines: string[] }) {
@@ -826,6 +926,10 @@ const settlementReadOnlyCellClass =
 /** Uniform editable expense amount fields (per seller). */
 const settlementExpenseInputClass =
   'h-9 w-full min-w-[5.5rem] max-w-[6.75rem] rounded-md border border-border bg-background px-2 text-right text-xs tabular-nums shadow-sm [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none';
+
+/** Freight & unloading on Expenses card: auto-derived — dashed border, muted fill, lock (matches Billing computed-cell language). */
+const settlementExpenseDerivedInputAffordanceClass =
+  'border-dashed border-border/75 bg-muted/45 shadow-inner cursor-not-allowed select-text';
 
 /** Per-seller registration (Sales report): registered = linked to contact registry. */
 interface SellerRegFormState {
@@ -1904,6 +2008,63 @@ function useDebouncedValue<T>(value: T, delayMs: number): T {
   return debounced;
 }
 
+function isAbortError(e: unknown): boolean {
+  return (
+    (typeof DOMException !== 'undefined' && e instanceof DOMException && e.name === 'AbortError') ||
+    (e instanceof Error && e.name === 'AbortError')
+  );
+}
+
+const SETTLEMENT_VIRTUAL_MIN_ROWS = 48;
+
+/** Long mobile card stacks: measured row heights inside bounded scroll (Sales Pad–style). */
+function SettlementMobileVirtualStack({
+  count,
+  estimateItemSize,
+  getItemKey,
+  containerClassName,
+  children,
+}: {
+  count: number;
+  estimateItemSize: number;
+  getItemKey: (index: number) => string | number;
+  containerClassName?: string;
+  children: (index: number) => ReactNode;
+}) {
+  const parentRef = useRef<HTMLDivElement | null>(null);
+  const virtualizer = useVirtualizer({
+    count,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => estimateItemSize,
+    overscan: 8,
+    measureElement,
+    getItemKey,
+  });
+  return (
+    <div
+      ref={parentRef}
+      className={cn(
+        'max-h-[min(72vh,720px)] overflow-y-auto overscroll-contain [-webkit-overflow-scrolling:touch]',
+        containerClassName,
+      )}
+    >
+      <div className="relative w-full" style={{ height: virtualizer.getTotalSize() }}>
+        {virtualizer.getVirtualItems().map(vi => (
+          <div
+            key={vi.key}
+            data-index={vi.index}
+            ref={virtualizer.measureElement}
+            className="absolute left-0 top-0 w-full pb-3"
+            style={{ transform: `translateY(${vi.start}px)` }}
+          >
+            {children(vi.index)}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 const SettlementPage = () => {
   const navigate = useNavigate();
   const isDesktop = useDesktopMode();
@@ -1914,6 +2075,26 @@ const SettlementPage = () => {
     return <ForbiddenPage moduleName="Settlement" />;
   }
   const [sellers, setSellers] = useState<SellerSettlement[]>([]);
+  const loadSellersGenRef = useRef(0);
+  const loadSellersAbortRef = useRef<AbortController | null>(null);
+  const [sellersLoading, setSellersLoading] = useState(true);
+  const [sellersFetchingMore, setSellersFetchingMore] = useState(false);
+  const [sellersLoadComplete, setSellersLoadComplete] = useState(false);
+  const [sellersTotal, setSellersTotal] = useState<number | null>(null);
+
+  const loadSavedPattisGenRef = useRef(0);
+  const loadSavedPattisAbortRef = useRef<AbortController | null>(null);
+  const [savedPattisFetchingMore, setSavedPattisFetchingMore] = useState(false);
+  const [savedPattisLoadComplete, setSavedPattisLoadComplete] = useState(false);
+  const [savedPattisTotal, setSavedPattisTotal] = useState<number | null>(null);
+
+  const loadInProgressPattisGenRef = useRef(0);
+  const loadInProgressPattisAbortRef = useRef<AbortController | null>(null);
+  const [inProgressPattisLoading, setInProgressPattisLoading] = useState(false);
+  const [inProgressPattisFetchingMore, setInProgressPattisFetchingMore] = useState(false);
+  const [inProgressPattisLoadComplete, setInProgressPattisLoadComplete] = useState(false);
+  const [inProgressPattisTotal, setInProgressPattisTotal] = useState<number | null>(null);
+
   const [selectedSeller, setSelectedSeller] = useState<SellerSettlement | null>(null);
   const [selectedArrivalSellerIds, setSelectedArrivalSellerIds] = useState<string[]>([]);
   const [draftMainPattiNo, setDraftMainPattiNo] = useState('');
@@ -1921,6 +2102,14 @@ const SettlementPage = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [settlementMainTab, setSettlementMainTab] = useState<'arrival-summary' | 'create-settlements'>('arrival-summary');
   const [arrivalSummaryTab, setArrivalSummaryTab] = useState<'new-patti' | 'in-progress-patti' | 'saved-patti'>('new-patti');
+  const [savedPattiLayout, setSavedPattiLayout] = useState<'grid' | 'list'>(() => {
+    try {
+      const v = localStorage.getItem(SETTLEMENT_SAVED_PATTI_LAYOUT_STORAGE_KEY);
+      return v === 'grid' || v === 'list' ? v : 'list';
+    } catch {
+      return 'list';
+    }
+  });
   const [inProgressPattiDtos, setInProgressPattiDtos] = useState<PattiDTO[]>([]);
   /** Drives Sales Patti header subtitle: new vs draft vs completed edit. */
   const [settlementFormMode, setSettlementFormMode] = useState<'idle' | 'new' | 'in-progress' | 'saved'>('idle');
@@ -2055,6 +2244,13 @@ const SettlementPage = () => {
     };
     void loadPrintSetting();
   }, []);
+  useEffect(() => {
+    try {
+      localStorage.setItem(SETTLEMENT_SAVED_PATTI_LAYOUT_STORAGE_KEY, savedPattiLayout);
+    } catch {
+      /* ignore */
+    }
+  }, [savedPattiLayout]);
   useEffect(() => {
     const onVis = () => {
       if (document.visibilityState === 'visible') setAmountSummaryNonce(n => n + 1);
@@ -2306,50 +2502,278 @@ const SettlementPage = () => {
   const [sellerContactSearchLoading, setSellerContactSearchLoading] = useState<Record<string, boolean>>({});
   const [sellerRegSaving, setSellerRegSaving] = useState<Record<string, boolean>>({});
 
-  // Load sellers from backend only (no localStorage or mock data).
-  useEffect(() => {
-    settlementApi
-      .listSellers({ page: 0, size: 500 })
-      .then((apiSellers: SellerSettlement[]) => {
-        setSellers(Array.isArray(apiSellers) ? apiSellers : []);
-      })
-      .catch(() => {
+  // Load sellers from backend only (no localStorage or mock data): progressive pages + X-Total-Count.
+  const loadSellers = useCallback(async () => {
+    const myGen = ++loadSellersGenRef.current;
+    loadSellersAbortRef.current?.abort();
+    const ac = new AbortController();
+    loadSellersAbortRef.current = ac;
+    const { signal } = ac;
+
+    setSellersLoading(true);
+    setSellersFetchingMore(false);
+    setSellersLoadComplete(false);
+    setSellersTotal(null);
+    setSellers([]);
+
+    const applyIfCurrent = (fn: () => void) => {
+      if (loadSellersGenRef.current === myGen) fn();
+    };
+
+    const merged = new Map<string, SellerSettlement>();
+    let lastArr: SellerSettlement[] = [];
+
+    try {
+      let page = 0;
+      let reportedTotal = 0;
+      for (;;) {
+        const { items, totalElements } = await settlementApi.listSellersPage(
+          { page, size: SETTLEMENT_LIST_PAGE_SIZE },
+          { signal }
+        );
+
+        if (signal.aborted || loadSellersGenRef.current !== myGen) {
+          return lastArr;
+        }
+
+        if (page === 0) {
+          reportedTotal = totalElements;
+          applyIfCurrent(() => setSellersTotal(totalElements));
+        }
+
+        for (const dto of items) {
+          const sid = String(dto.sellerId ?? '').trim();
+          if (!sid) continue;
+          merged.set(sid, dto as SellerSettlement);
+        }
+        lastArr = [...merged.values()];
+        applyIfCurrent(() => setSellers(lastArr));
+
+        if (page === 0) {
+          applyIfCurrent(() => setSellersLoading(false));
+        }
+
+        const noMore =
+          items.length === 0 ||
+          items.length < SETTLEMENT_LIST_PAGE_SIZE ||
+          merged.size >= reportedTotal;
+        if (noMore) break;
+
+        page += 1;
+        applyIfCurrent(() => setSellersFetchingMore(true));
+      }
+
+      applyIfCurrent(() => setSellersLoadComplete(true));
+      return lastArr;
+    } catch (e) {
+      if (isAbortError(e) || loadSellersGenRef.current !== myGen) {
+        return lastArr;
+      }
+      toast.error(e instanceof Error ? e.message : 'Failed to load settlement sellers');
+      applyIfCurrent(() => {
         setSellers([]);
-        toast.error('Failed to load settlement sellers');
+        setSellersLoadComplete(true);
       });
-  }, []);
-
-  // Load saved pattis when on seller list (no patti open).
-  const loadSavedPattis = useCallback(() => {
-    setLoadingPattis(true);
-    settlementApi
-      .listPattis({ page: 0, size: 500 })
-      .then((list: PattiDTO[]) => {
-        setSavedPattis(Array.isArray(list) ? list : []);
-      })
-      .catch(() => setSavedPattis([]))
-      .finally(() => setLoadingPattis(false));
+      return [];
+    } finally {
+      applyIfCurrent(() => {
+        setSellersLoading(false);
+        setSellersFetchingMore(false);
+      });
+    }
   }, []);
 
   useEffect(() => {
-    if (selectedSeller == null && pattiData == null) {
-      loadSavedPattis();
+    void loadSellers();
+    return () => {
+      loadSellersAbortRef.current?.abort();
+    };
+  }, [loadSellers]);
+
+  const loadSavedPattis = useCallback(async () => {
+    const myGen = ++loadSavedPattisGenRef.current;
+    loadSavedPattisAbortRef.current?.abort();
+    const ac = new AbortController();
+    loadSavedPattisAbortRef.current = ac;
+    const { signal } = ac;
+
+    setLoadingPattis(true);
+    setSavedPattisFetchingMore(false);
+    setSavedPattisLoadComplete(false);
+    setSavedPattisTotal(null);
+    setSavedPattis([]);
+
+    const applyIfCurrent = (fn: () => void) => {
+      if (loadSavedPattisGenRef.current === myGen) fn();
+    };
+
+    const mergedOrder: PattiDTO[] = [];
+    const seenIds = new Set<number>();
+    let lastArr: PattiDTO[] = [];
+
+    try {
+      let page = 0;
+      let reportedTotal = 0;
+      for (;;) {
+        const { items, totalElements } = await settlementApi.listPattisPage(
+          { page, size: SETTLEMENT_LIST_PAGE_SIZE },
+          { signal }
+        );
+
+        if (signal.aborted || loadSavedPattisGenRef.current !== myGen) {
+          return lastArr;
+        }
+
+        if (page === 0) {
+          reportedTotal = totalElements;
+          applyIfCurrent(() => setSavedPattisTotal(totalElements));
+        }
+
+        for (const p of items) {
+          if (p.id == null) continue;
+          const id = Number(p.id);
+          if (seenIds.has(id)) continue;
+          seenIds.add(id);
+          mergedOrder.push(p);
+        }
+        lastArr = mergedOrder;
+        applyIfCurrent(() => setSavedPattis(lastArr));
+
+        if (page === 0) {
+          applyIfCurrent(() => setLoadingPattis(false));
+        }
+
+        const noMore =
+          items.length === 0 ||
+          items.length < SETTLEMENT_LIST_PAGE_SIZE ||
+          mergedOrder.length >= reportedTotal;
+        if (noMore) break;
+
+        page += 1;
+        applyIfCurrent(() => setSavedPattisFetchingMore(true));
+      }
+
+      applyIfCurrent(() => setSavedPattisLoadComplete(true));
+      return lastArr;
+    } catch (e) {
+      if (isAbortError(e) || loadSavedPattisGenRef.current !== myGen) {
+        return lastArr;
+      }
+      applyIfCurrent(() => {
+        setSavedPattis([]);
+        setSavedPattisLoadComplete(true);
+      });
+      return [];
+    } finally {
+      applyIfCurrent(() => {
+        setLoadingPattis(false);
+        setSavedPattisFetchingMore(false);
+      });
     }
+  }, []);
+
+  useEffect(() => {
+    if (selectedSeller != null || pattiData != null) {
+      loadSavedPattisAbortRef.current?.abort();
+      return;
+    }
+    void loadSavedPattis();
+    return () => {
+      loadSavedPattisAbortRef.current?.abort();
+    };
   }, [selectedSeller, pattiData, loadSavedPattis]);
 
-  const loadInProgressPattis = useCallback(() => {
-    settlementApi
-      .listInProgressPattis({ page: 0, size: 500 })
-      .then((list: PattiDTO[]) => {
-        setInProgressPattiDtos(Array.isArray(list) ? list.filter(p => p.id != null) : []);
-      })
-      .catch(() => setInProgressPattiDtos([]));
+  const loadInProgressPattis = useCallback(async () => {
+    const myGen = ++loadInProgressPattisGenRef.current;
+    loadInProgressPattisAbortRef.current?.abort();
+    const ac = new AbortController();
+    loadInProgressPattisAbortRef.current = ac;
+    const { signal } = ac;
+
+    setInProgressPattisLoading(true);
+    setInProgressPattisFetchingMore(false);
+    setInProgressPattisLoadComplete(false);
+    setInProgressPattisTotal(null);
+    setInProgressPattiDtos([]);
+
+    const applyIfCurrent = (fn: () => void) => {
+      if (loadInProgressPattisGenRef.current === myGen) fn();
+    };
+
+    const mergedOrder: PattiDTO[] = [];
+    const seenIds = new Set<number>();
+    let lastArr: PattiDTO[] = [];
+
+    try {
+      let page = 0;
+      let reportedTotal = 0;
+      for (;;) {
+        const { items, totalElements } = await settlementApi.listInProgressPattisPage(
+          { page, size: SETTLEMENT_LIST_PAGE_SIZE },
+          { signal }
+        );
+
+        if (signal.aborted || loadInProgressPattisGenRef.current !== myGen) {
+          return lastArr;
+        }
+
+        if (page === 0) {
+          reportedTotal = totalElements;
+          applyIfCurrent(() => setInProgressPattisTotal(totalElements));
+        }
+
+        for (const p of items) {
+          if (p.id == null) continue;
+          const id = Number(p.id);
+          if (seenIds.has(id)) continue;
+          seenIds.add(id);
+          mergedOrder.push(p);
+        }
+        lastArr = mergedOrder;
+        applyIfCurrent(() => setInProgressPattiDtos(lastArr));
+
+        if (page === 0) {
+          applyIfCurrent(() => setInProgressPattisLoading(false));
+        }
+
+        const noMore =
+          items.length === 0 ||
+          items.length < SETTLEMENT_LIST_PAGE_SIZE ||
+          mergedOrder.length >= reportedTotal;
+        if (noMore) break;
+
+        page += 1;
+        applyIfCurrent(() => setInProgressPattisFetchingMore(true));
+      }
+
+      applyIfCurrent(() => setInProgressPattisLoadComplete(true));
+      return lastArr;
+    } catch (e) {
+      if (isAbortError(e) || loadInProgressPattisGenRef.current !== myGen) {
+        return lastArr;
+      }
+      applyIfCurrent(() => {
+        setInProgressPattiDtos([]);
+        setInProgressPattisLoadComplete(true);
+      });
+      return [];
+    } finally {
+      applyIfCurrent(() => {
+        setInProgressPattisLoading(false);
+        setInProgressPattisFetchingMore(false);
+      });
+    }
   }, []);
 
   useEffect(() => {
-    if (selectedSeller == null && pattiData == null) {
-      loadInProgressPattis();
+    if (selectedSeller != null || pattiData != null) {
+      loadInProgressPattisAbortRef.current?.abort();
+      return;
     }
+    void loadInProgressPattis();
+    return () => {
+      loadInProgressPattisAbortRef.current?.abort();
+    };
   }, [selectedSeller, pattiData, loadInProgressPattis]);
 
   /** One row per arrival: group in-progress DB rows that share vehicle + from + date so multi-seller saves stay together. */
@@ -3179,12 +3603,6 @@ const SettlementPage = () => {
         }
         return `${sellerName}: total quantity (${qtyTot}) is less than arrival bags (${allowedQty}); adjust rows to match.`;
       }
-      if (!isSettlementSellerPrintAllowed(seller, form)) {
-        return (
-          settlementSellerPrintGateMessage(seller, form) ??
-          `${sellerName}: check Unregistered to confirm saving/printing, or link a registered contact`
-        );
-      }
       return null;
     },
     [
@@ -3299,8 +3717,8 @@ const SettlementPage = () => {
               if (!silent) toast.success(payload.inProgress ? `Sales Patti ${updated.pattiId} saved in progress.` : `Sales Patti ${updated.pattiId} ${actionWord}.`);
               if (showPrintAfterSave) setShowPrint(true);
               setPattiSaveHighlightSellerIds(prev => prev.filter(x => x !== sid));
-              loadSavedPattis();
-              loadInProgressPattis();
+              void loadSavedPattis();
+              void loadInProgressPattis();
               resyncBaselineAfterSaveRef.current = true;
               setArrivalSummaryTab(payload.inProgress ? 'in-progress-patti' : 'saved-patti');
               if (!payload.inProgress) setSettlementFormMode('saved');
@@ -3327,8 +3745,8 @@ const SettlementPage = () => {
             }
             if (showPrintAfterSave) setShowPrint(true);
             setPattiSaveHighlightSellerIds(prev => prev.filter(x => x !== sid));
-            loadSavedPattis();
-            loadInProgressPattis();
+            void loadSavedPattis();
+            void loadInProgressPattis();
             resyncBaselineAfterSaveRef.current = true;
             setArrivalSummaryTab(payload.inProgress ? 'in-progress-patti' : 'saved-patti');
             if (!payload.inProgress) setSettlementFormMode('saved');
@@ -3482,7 +3900,7 @@ const SettlementPage = () => {
       setSettlementFormMode('saved');
       setPattiSaveHighlightSellerIds([]);
       resyncBaselineAfterSaveRef.current = true;
-      loadInProgressPattis();
+      void loadInProgressPattis();
       return true;
     } finally {
       pattiSaveBusyRef.current = false;
@@ -3536,7 +3954,7 @@ const SettlementPage = () => {
       toast.success('Settlement progress saved.');
       /** Per-seller save sets `resyncBaselineAfterSaveRef`; one explicit sync avoids repeated dirty/baseline churn before navigation. */
       resyncBaselineAfterSaveRef.current = false;
-      loadInProgressPattis();
+      void loadInProgressPattis();
       requestAnimationFrame(() => {
         settlementDirtyBaselineRef.current = settlementWorkspaceSnapshotRef.current;
         setSettlementDirtyNonce(n => n + 1);
@@ -3700,11 +4118,21 @@ const SettlementPage = () => {
   const filteredSavedPattis = useMemo(() => {
     if (!searchQuery) return savedPattis;
     const q = searchQuery.toLowerCase();
-    return savedPattis.filter(p =>
-      (p.pattiId ?? '').toLowerCase().includes(q) ||
-      (p.sellerName ?? '').toLowerCase().includes(q)
+    return savedPattis.filter(
+      p =>
+        (p.pattiId ?? '').toLowerCase().includes(q) ||
+        (p.sellerName ?? '').toLowerCase().includes(q) ||
+        (p.vehicleNumber ?? '').toLowerCase().includes(q) ||
+        (p.fromLocation ?? '').toLowerCase().includes(q),
     );
   }, [savedPattis, searchQuery]);
+
+  const sellersCountLabel = useMemo(() => {
+    if (sellersTotal != null && !sellersLoadComplete) {
+      return `${sellers.length} / ${sellersTotal} sellers`;
+    }
+    return `${sellers.length} sellers`;
+  }, [sellers.length, sellersTotal, sellersLoadComplete]);
 
   const sellerSalesPattiNumberBySellerId = useMemo(() => {
     const map: Record<string, string> = { ...draftPattiNoBySellerId };
@@ -3832,6 +4260,7 @@ const SettlementPage = () => {
       const lots = seller ? getSellerLots(seller) : 0;
       const bids = seller ? getSellerBids(seller) : 0;
       const weighed = seller ? getSellerWeighed(seller) : 0;
+      const entryBags = Math.max(totalBagsFromPattiRateClusters(p), lots);
       if (!existing) {
         groups.set(key, {
           key,
@@ -3844,6 +4273,7 @@ const SettlementPage = () => {
           lots,
           bids,
           weighed,
+          totalBags: entryBags,
           representativePattiId: p.id ?? null,
           _fallbackName: (p.sellerName || '').trim() || undefined,
         });
@@ -3855,6 +4285,7 @@ const SettlementPage = () => {
         existing.bids += bids;
         existing.weighed += weighed;
       }
+      existing.totalBags += entryBags;
       if (existing.serialNo == null && serialNo != null) existing.serialNo = serialNo;
       if (existing.representativePattiId == null && p.id != null) existing.representativePattiId = p.id;
       if (!existing._fallbackName && (p.sellerName || '').trim()) {
@@ -5418,6 +5849,15 @@ const SettlementPage = () => {
   };
 
   const renderArrivalSummaryTable = (tab: 'new-patti' | 'in-progress-patti' | 'saved-patti') => {
+    if (tab === 'new-patti' && sellersLoading && sellers.length === 0) {
+      return (
+        <div className="glass-card flex flex-col items-center justify-center gap-3 rounded-2xl p-12 text-center">
+          <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" aria-hidden />
+          <p className="text-sm text-muted-foreground">Loading sellers…</p>
+        </div>
+      );
+    }
+
     if (tab === 'new-patti' && newPattiArrivalRows.length === 0) {
       return (
         <div className="glass-card rounded-2xl p-8 text-center">
@@ -5455,8 +5895,40 @@ const SettlementPage = () => {
       );
     }
 
+    /** Saved patti: seller-level cards (Summary-style), desktop grid mode. */
+    if (tab === 'saved-patti' && savedPattiLayout === 'grid' && savedPattiArrivalRows.length > 0) {
+      return (
+        <>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+            {savedPattiArrivalRows.map(row => (
+              <SettlementSavedPattiVehicleCard
+                key={row.key}
+                row={row}
+                onOpen={() => {
+                  if (row.representativePattiId != null) {
+                    void openPattiForEdit(row.representativePattiId, row.sellerIds, { formContext: 'saved' });
+                  }
+                }}
+              />
+            ))}
+          </div>
+          {(savedPattisFetchingMore || (savedPattis.length > 0 && !savedPattisLoadComplete)) && (
+            <p className="py-3 text-center text-xs text-muted-foreground">Loading more pattis…</p>
+          )}
+        </>
+      );
+    }
+
     if (tab === 'in-progress-patti') {
       const q = searchQuery.trim().toLowerCase();
+      if (inProgressPattisLoading && inProgressPattiDrafts.length === 0) {
+        return (
+          <div className="glass-card flex flex-col items-center justify-center gap-3 rounded-2xl p-12 text-center">
+            <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" aria-hidden />
+            <p className="text-sm text-muted-foreground">Loading in-progress pattis…</p>
+          </div>
+        );
+      }
       const rows = inProgressPattiDrafts
         .filter(r => {
           if (!q) return true;
@@ -5481,74 +5953,173 @@ const SettlementPage = () => {
         );
       }
       return (
-        <div className="glass-card rounded-2xl border border-border/50 overflow-hidden">
-          <div className="overflow-x-auto rounded-xl border border-border/50 bg-background/40 shadow-sm">
-            <table className="w-full min-w-[1060px] border-separate border-spacing-0 text-sm">
-              <thead className={cn(SETTLEMENT_LOTS_TABLE_HEADER_GRADIENT, 'shadow-md')}>
-                <tr>
-                  <th className="whitespace-nowrap border-b border-r border-white/25 px-3 py-2 text-center font-semibold text-white">Vehicle Number</th>
-                  <th className="whitespace-nowrap border-b border-r border-white/25 px-3 py-2 text-center font-semibold text-white">Seller</th>
-                  <th className="whitespace-nowrap border-b border-r border-white/25 px-3 py-2 text-center font-semibold text-white">Total Sellers</th>
-                  <th className="whitespace-nowrap border-b border-r border-white/25 px-3 py-2 text-center font-semibold text-white">From</th>
-                  <th className="whitespace-nowrap border-b border-r border-white/25 px-3 py-2 text-center font-semibold text-white">SL No</th>
-                  <th className="whitespace-nowrap border-b border-r border-white/25 px-3 py-2 text-center font-semibold text-white">Lots</th>
-                  <th className="whitespace-nowrap border-b border-r border-white/25 px-3 py-2 text-center font-semibold text-white">Bids</th>
-                  <th className="whitespace-nowrap border-b border-r border-white/25 px-3 py-2 text-center font-semibold text-white">Weighed</th>
-                  <th className="whitespace-nowrap border-b border-r border-white/25 px-3 py-2 text-center font-semibold text-white">Status</th>
-                  <th className="whitespace-nowrap border-b border-white/25 px-3 py-2 text-center font-semibold text-white">Updated</th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((row) => (
-                  <tr
-                    key={row.key}
-                    onClick={() => void openInProgressDraft(row)}
-                    className="border-t border-border/30 hover:bg-muted/20 cursor-pointer"
-                  >
-                    <td className="border-t border-r border-border/30 px-3 py-2 text-center text-foreground">{row.vehicleNumber || '-'}</td>
-                    <td className="border-t border-r border-border/30 px-3 py-2 text-center text-foreground">{row.sellerNames || '-'}</td>
-                    <td className="border-t border-r border-border/30 px-3 py-2 text-center tabular-nums text-foreground">
-                      {uniqueArrivalSellerCount(row.sellerIds)}
-                    </td>
-                    <td className="border-t border-r border-border/30 px-3 py-2 text-center text-foreground">{shortAddressLabel(row.fromLocation)}</td>
-                    <td className="border-t border-r border-border/30 px-3 py-2 text-center text-foreground">{row.serialNo || '-'}</td>
-                    <td className="border-t border-r border-border/30 px-3 py-2 text-center text-foreground">{row.lots ?? 0}</td>
-                    <td className="border-t border-r border-border/30 px-3 py-2 text-center text-foreground">{row.bids ?? 0}</td>
-                    <td className="border-t border-r border-border/30 px-3 py-2 text-center text-foreground">{row.weighed ?? 0}</td>
-                    <td className="border-t border-r border-border/30 px-3 py-2 text-center text-amber-600 dark:text-amber-400 font-medium">In Progress</td>
-                    <td className="border-t border-border/30 px-3 py-2 text-center text-foreground">
-                      {row.updatedAt ? new Date(row.updatedAt).toLocaleString() : '-'}
-                    </td>
+        <>
+          <div className="glass-card hidden rounded-2xl border border-border/50 overflow-hidden lg:block">
+            <div className="overflow-x-auto rounded-xl border border-border/50 bg-background/40 shadow-sm">
+              <table className="w-full min-w-[1060px] border-separate border-spacing-0 text-sm">
+                <thead className={cn(SETTLEMENT_LOTS_TABLE_HEADER_GRADIENT, 'shadow-md')}>
+                  <tr>
+                    <th className="whitespace-nowrap border-b border-r border-white/25 px-3 py-2 text-center font-semibold text-white">Vehicle Number</th>
+                    <th className="whitespace-nowrap border-b border-r border-white/25 px-3 py-2 text-center font-semibold text-white">Seller</th>
+                    <th className="whitespace-nowrap border-b border-r border-white/25 px-3 py-2 text-center font-semibold text-white">Total Sellers</th>
+                    <th className="whitespace-nowrap border-b border-r border-white/25 px-3 py-2 text-center font-semibold text-white">From</th>
+                    <th className="whitespace-nowrap border-b border-r border-white/25 px-3 py-2 text-center font-semibold text-white">SL No</th>
+                    <th className="whitespace-nowrap border-b border-r border-white/25 px-3 py-2 text-center font-semibold text-white">Lots</th>
+                    <th className="whitespace-nowrap border-b border-r border-white/25 px-3 py-2 text-center font-semibold text-white">Bids</th>
+                    <th className="whitespace-nowrap border-b border-r border-white/25 px-3 py-2 text-center font-semibold text-white">Weighed</th>
+                    <th className="whitespace-nowrap border-b border-r border-white/25 px-3 py-2 text-center font-semibold text-white">Status</th>
+                    <th className="whitespace-nowrap border-b border-white/25 px-3 py-2 text-center font-semibold text-white">Updated</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {rows.map(row => (
+                    <tr
+                      key={row.key}
+                      onClick={() => void openInProgressDraft(row)}
+                      className="border-t border-border/30 hover:bg-muted/20 cursor-pointer"
+                    >
+                      <td className="border-t border-r border-border/30 px-3 py-2 text-center text-foreground">{row.vehicleNumber || '-'}</td>
+                      <td className="border-t border-r border-border/30 px-3 py-2 text-center text-foreground">{row.sellerNames || '-'}</td>
+                      <td className="border-t border-r border-border/30 px-3 py-2 text-center tabular-nums text-foreground">
+                        {uniqueArrivalSellerCount(row.sellerIds)}
+                      </td>
+                      <td className="border-t border-r border-border/30 px-3 py-2 text-center text-foreground">{shortAddressLabel(row.fromLocation)}</td>
+                      <td className="border-t border-r border-border/30 px-3 py-2 text-center text-foreground">{row.serialNo || '-'}</td>
+                      <td className="border-t border-r border-border/30 px-3 py-2 text-center text-foreground">{row.lots ?? 0}</td>
+                      <td className="border-t border-r border-border/30 px-3 py-2 text-center text-foreground">{row.bids ?? 0}</td>
+                      <td className="border-t border-r border-border/30 px-3 py-2 text-center text-foreground">{row.weighed ?? 0}</td>
+                      <td className="border-t border-r border-border/30 px-3 py-2 text-center text-amber-600 dark:text-amber-400 font-medium">In Progress</td>
+                      <td className="border-t border-border/30 px-3 py-2 text-center text-foreground">
+                        {row.updatedAt ? new Date(row.updatedAt).toLocaleString() : '-'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
-        </div>
+          <div className="lg:hidden">
+            {rows.length >= SETTLEMENT_VIRTUAL_MIN_ROWS ? (
+              <SettlementMobileVirtualStack
+                count={rows.length}
+                estimateItemSize={168}
+                getItemKey={i => rows[i]!.key}
+              >
+                {i => {
+                  const row = rows[i]!;
+                  return (
+                    <button
+                      type="button"
+                      onClick={() => void openInProgressDraft(row)}
+                      className="w-full rounded-2xl border border-border/50 bg-white p-4 text-left shadow-sm transition-colors hover:bg-muted/25 active:scale-[0.99] dark:bg-card touch-manipulation"
+                    >
+                      <div className="flex flex-wrap items-start justify-between gap-2">
+                        <span className="inline-flex items-center rounded-full bg-[#eef0ff] px-2 py-0.5 text-[10px] font-bold text-[#6075FF] dark:bg-[#6075FF]/20">
+                          {row.vehicleNumber || '-'}
+                        </span>
+                        <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-semibold text-amber-700 dark:text-amber-400">
+                          In progress
+                        </span>
+                      </div>
+                      <p className="mt-2 text-sm font-bold text-foreground">{row.sellerNames || '-'}</p>
+                      <p className="mt-0.5 text-xs text-muted-foreground">
+                        {row.fromLocation || '-'} · SL {row.serialNo || '-'} · {uniqueArrivalSellerCount(row.sellerIds)} seller
+                        {uniqueArrivalSellerCount(row.sellerIds) === 1 ? '' : 's'}
+                      </p>
+                      <div className="mt-3 grid grid-cols-3 gap-2 text-center">
+                        <div className="rounded-lg bg-muted/40 px-1 py-2">
+                          <div className="text-base font-bold tabular-nums text-foreground">{row.lots ?? 0}</div>
+                          <div className="text-[9px] font-medium uppercase tracking-wide text-muted-foreground">Lots</div>
+                        </div>
+                        <div className="rounded-lg bg-muted/40 px-1 py-2">
+                          <div className="text-base font-bold tabular-nums text-foreground">{row.bids ?? 0}</div>
+                          <div className="text-[9px] font-medium uppercase tracking-wide text-muted-foreground">Bids</div>
+                        </div>
+                        <div className="rounded-lg bg-muted/40 px-1 py-2">
+                          <div className="text-base font-bold tabular-nums text-foreground">{row.weighed ?? 0}</div>
+                          <div className="text-[9px] font-medium uppercase tracking-wide text-muted-foreground">Weighed</div>
+                        </div>
+                      </div>
+                      <p className="mt-3 border-t border-border/30 pt-2 text-[11px] text-muted-foreground">
+                        Updated {row.updatedAt ? new Date(row.updatedAt).toLocaleString() : '—'}
+                      </p>
+                    </button>
+                  );
+                }}
+              </SettlementMobileVirtualStack>
+            ) : (
+              <div className="space-y-3">
+                {rows.map(row => (
+                  <button
+                    key={row.key}
+                    type="button"
+                    onClick={() => void openInProgressDraft(row)}
+                    className="w-full rounded-2xl border border-border/50 bg-white p-4 text-left shadow-sm transition-colors hover:bg-muted/25 active:scale-[0.99] dark:bg-card touch-manipulation"
+                  >
+                    <div className="flex flex-wrap items-start justify-between gap-2">
+                      <span className="inline-flex items-center rounded-full bg-[#eef0ff] px-2 py-0.5 text-[10px] font-bold text-[#6075FF] dark:bg-[#6075FF]/20">
+                        {row.vehicleNumber || '-'}
+                      </span>
+                      <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-semibold text-amber-700 dark:text-amber-400">
+                        In progress
+                      </span>
+                    </div>
+                    <p className="mt-2 text-sm font-bold text-foreground">{row.sellerNames || '-'}</p>
+                    <p className="mt-0.5 text-xs text-muted-foreground">
+                      {row.fromLocation || '-'} · SL {row.serialNo || '-'} · {uniqueArrivalSellerCount(row.sellerIds)} seller
+                      {uniqueArrivalSellerCount(row.sellerIds) === 1 ? '' : 's'}
+                    </p>
+                    <div className="mt-3 grid grid-cols-3 gap-2 text-center">
+                      <div className="rounded-lg bg-muted/40 px-1 py-2">
+                        <div className="text-base font-bold tabular-nums text-foreground">{row.lots ?? 0}</div>
+                        <div className="text-[9px] font-medium uppercase tracking-wide text-muted-foreground">Lots</div>
+                      </div>
+                      <div className="rounded-lg bg-muted/40 px-1 py-2">
+                        <div className="text-base font-bold tabular-nums text-foreground">{row.bids ?? 0}</div>
+                        <div className="text-[9px] font-medium uppercase tracking-wide text-muted-foreground">Bids</div>
+                      </div>
+                      <div className="rounded-lg bg-muted/40 px-1 py-2">
+                        <div className="text-base font-bold tabular-nums text-foreground">{row.weighed ?? 0}</div>
+                        <div className="text-[9px] font-medium uppercase tracking-wide text-muted-foreground">Weighed</div>
+                      </div>
+                    </div>
+                    <p className="mt-3 border-t border-border/30 pt-2 text-[11px] text-muted-foreground">
+                      Updated {row.updatedAt ? new Date(row.updatedAt).toLocaleString() : '—'}
+                    </p>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          {(inProgressPattisFetchingMore || (inProgressPattiDtos.length > 0 && !inProgressPattisLoadComplete)) && (
+            <p className="py-3 text-center text-xs text-muted-foreground">Loading more in-progress pattis…</p>
+          )}
+        </>
       );
     }
 
-    return (
-      <div className="glass-card rounded-2xl border border-border/50 overflow-hidden">
-        <div className="overflow-x-auto rounded-xl border border-border/50 bg-background/40 shadow-sm">
-          <table className="w-full min-w-[1060px] border-separate border-spacing-0 text-sm">
-            <thead className={cn(SETTLEMENT_LOTS_TABLE_HEADER_GRADIENT, 'shadow-md')}>
-              <tr>
-                <th className="whitespace-nowrap border-b border-r border-white/25 px-3 py-2 text-center font-semibold text-white">Vehicle Number</th>
-                <th className="whitespace-nowrap border-b border-r border-white/25 px-3 py-2 text-center font-semibold text-white">Seller</th>
-                <th className="whitespace-nowrap border-b border-r border-white/25 px-3 py-2 text-center font-semibold text-white">Total Sellers</th>
-                <th className="whitespace-nowrap border-b border-r border-white/25 px-3 py-2 text-center font-semibold text-white">From</th>
-                <th className="whitespace-nowrap border-b border-r border-white/25 px-3 py-2 text-center font-semibold text-white">SL No</th>
-                <th className="whitespace-nowrap border-b border-r border-white/25 px-3 py-2 text-center font-semibold text-white">Lots</th>
-                <th className="whitespace-nowrap border-b border-r border-white/25 px-3 py-2 text-center font-semibold text-white">Bids</th>
-                <th className="whitespace-nowrap border-b border-r border-white/25 px-3 py-2 text-center font-semibold text-white">Weighed</th>
-                <th className="whitespace-nowrap border-b border-r border-white/25 px-3 py-2 text-center font-semibold text-white">Status</th>
-                <th className="whitespace-nowrap border-b border-white/25 px-3 py-2 text-center font-semibold text-white">Date</th>
-              </tr>
-            </thead>
-            <tbody>
-              {tab === 'new-patti'
-                ? newPattiArrivalRows.map((row) => (
+    if (tab === 'new-patti') {
+      return (
+        <>
+          <div className="glass-card hidden rounded-2xl border border-border/50 overflow-hidden lg:block">
+            <div className="overflow-x-auto rounded-xl border border-border/50 bg-background/40 shadow-sm">
+              <table className="w-full min-w-[1060px] border-separate border-spacing-0 text-sm">
+                <thead className={cn(SETTLEMENT_LOTS_TABLE_HEADER_GRADIENT, 'shadow-md')}>
+                  <tr>
+                    <th className="whitespace-nowrap border-b border-r border-white/25 px-3 py-2 text-center font-semibold text-white">Vehicle Number</th>
+                    <th className="whitespace-nowrap border-b border-r border-white/25 px-3 py-2 text-center font-semibold text-white">Seller</th>
+                    <th className="whitespace-nowrap border-b border-r border-white/25 px-3 py-2 text-center font-semibold text-white">Total Sellers</th>
+                    <th className="whitespace-nowrap border-b border-r border-white/25 px-3 py-2 text-center font-semibold text-white">From</th>
+                    <th className="whitespace-nowrap border-b border-r border-white/25 px-3 py-2 text-center font-semibold text-white">SL No</th>
+                    <th className="whitespace-nowrap border-b border-r border-white/25 px-3 py-2 text-center font-semibold text-white">Lots</th>
+                    <th className="whitespace-nowrap border-b border-r border-white/25 px-3 py-2 text-center font-semibold text-white">Bids</th>
+                    <th className="whitespace-nowrap border-b border-r border-white/25 px-3 py-2 text-center font-semibold text-white">Weighed</th>
+                    <th className="whitespace-nowrap border-b border-r border-white/25 px-3 py-2 text-center font-semibold text-white">Status</th>
+                    <th className="whitespace-nowrap border-b border-white/25 px-3 py-2 text-center font-semibold text-white">Date</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {newPattiArrivalRows.map(row => (
                     <tr
                       key={row.key}
                       onClick={() => generatePatti(row.representativeSeller, { arrivalSellerIds: row.sellerIds })}
@@ -5582,49 +6153,206 @@ const SettlementPage = () => {
                       <td className="border-t border-r border-border/30 px-3 py-2 text-center text-amber-600 dark:text-amber-400 font-medium">New Patti</td>
                       <td className="border-t border-border/30 px-3 py-2 text-center text-foreground">{row.dateLabel}</td>
                     </tr>
-                  ))
-                : savedPattiArrivalRows.map((row) => (
-                    <tr
-                      key={row.key}
-                      onClick={() =>
-                        row.representativePattiId != null &&
-                        openPattiForEdit(row.representativePattiId, row.sellerIds, { formContext: 'saved' })
-                      }
-                      className="border-t border-border/30 hover:bg-muted/20 cursor-pointer"
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+          <div className="lg:hidden">
+            {newPattiArrivalRows.length >= SETTLEMENT_VIRTUAL_MIN_ROWS ? (
+              <SettlementMobileVirtualStack
+                count={newPattiArrivalRows.length}
+                estimateItemSize={168}
+                getItemKey={i => newPattiArrivalRows[i]!.key}
+              >
+                {i => {
+                  const row = newPattiArrivalRows[i]!;
+                  return (
+                    <button
+                      type="button"
+                      onClick={() => generatePatti(row.representativeSeller, { arrivalSellerIds: row.sellerIds })}
+                      className="w-full rounded-2xl border border-border/50 bg-white p-4 text-left shadow-sm transition-colors hover:bg-muted/25 active:scale-[0.99] dark:bg-card touch-manipulation"
                     >
-                      <td className="border-t border-r border-border/30 px-3 py-2 text-center text-foreground">
+                      <div className="flex flex-wrap items-start justify-between gap-2">
                         <span className="inline-flex items-center rounded-full bg-[#eef0ff] px-2 py-0.5 text-[10px] font-bold text-[#6075FF] dark:bg-[#6075FF]/20">
                           {row.vehicleNumber}
                         </span>
-                      </td>
-                      <td className="border-t border-r border-border/30 px-3 py-2 text-center text-foreground">{row.sellerNames || '-'}</td>
-                      <td className="border-t border-r border-border/30 px-3 py-2 text-center tabular-nums text-foreground">
-                        {uniqueArrivalSellerCount(row.sellerIds)}
-                      </td>
-                      <td className="border-t border-r border-border/30 px-3 py-2 text-center text-foreground">
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <span className="inline-block max-w-[10ch] truncate align-bottom">
-                              {shortAddressLabel(row.fromLocation)}
-                            </span>
-                          </TooltipTrigger>
-                          <TooltipContent side="top" sideOffset={8} className="max-w-[260px] text-xs">
-                            {row.fromLocation || '-'}
-                          </TooltipContent>
-                        </Tooltip>
-                      </td>
-                      <td className="border-t border-r border-border/30 px-3 py-2 text-center text-foreground">{row.serialNo ?? '-'}</td>
-                      <td className="border-t border-r border-border/30 px-3 py-2 text-center text-foreground">{row.lots}</td>
-                      <td className="border-t border-r border-border/30 px-3 py-2 text-center text-foreground">{row.bids}</td>
-                      <td className="border-t border-r border-border/30 px-3 py-2 text-center text-foreground">{row.weighed}</td>
-                      <td className="border-t border-r border-border/30 px-3 py-2 text-center text-emerald-600 dark:text-emerald-400 font-medium">Completed Patti</td>
-                      <td className="border-t border-border/30 px-3 py-2 text-center text-foreground">{row.dateLabel}</td>
-                    </tr>
-                  ))}
-            </tbody>
-          </table>
+                        <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-semibold text-amber-700 dark:text-amber-400">New patti</span>
+                      </div>
+                      <p className="mt-2 text-sm font-bold text-foreground">{row.sellerNames || '-'}</p>
+                      <p className="mt-0.5 text-xs text-muted-foreground">
+                        {row.fromLocation || '-'} · SL {row.serialNo ?? '-'} · {uniqueArrivalSellerCount(row.sellerIds)} seller
+                        {uniqueArrivalSellerCount(row.sellerIds) === 1 ? '' : 's'}
+                      </p>
+                      <div className="mt-3 grid grid-cols-3 gap-2 text-center">
+                        <div className="rounded-lg bg-muted/40 px-1 py-2">
+                          <div className="text-base font-bold tabular-nums text-foreground">{row.lots}</div>
+                          <div className="text-[9px] font-medium uppercase tracking-wide text-muted-foreground">Lots</div>
+                        </div>
+                        <div className="rounded-lg bg-muted/40 px-1 py-2">
+                          <div className="text-base font-bold tabular-nums text-foreground">{row.bids}</div>
+                          <div className="text-[9px] font-medium uppercase tracking-wide text-muted-foreground">Bids</div>
+                        </div>
+                        <div className="rounded-lg bg-muted/40 px-1 py-2">
+                          <div className="text-base font-bold tabular-nums text-foreground">{row.weighed}</div>
+                          <div className="text-[9px] font-medium uppercase tracking-wide text-muted-foreground">Weighed</div>
+                        </div>
+                      </div>
+                      <p className="mt-3 border-t border-border/30 pt-2 text-[11px] text-muted-foreground tabular-nums">{row.dateLabel}</p>
+                    </button>
+                  );
+                }}
+              </SettlementMobileVirtualStack>
+            ) : (
+              <div className="space-y-3">
+                {newPattiArrivalRows.map(row => (
+                  <button
+                    key={row.key}
+                    type="button"
+                    onClick={() => generatePatti(row.representativeSeller, { arrivalSellerIds: row.sellerIds })}
+                    className="w-full rounded-2xl border border-border/50 bg-white p-4 text-left shadow-sm transition-colors hover:bg-muted/25 active:scale-[0.99] dark:bg-card touch-manipulation"
+                  >
+                    <div className="flex flex-wrap items-start justify-between gap-2">
+                      <span className="inline-flex items-center rounded-full bg-[#eef0ff] px-2 py-0.5 text-[10px] font-bold text-[#6075FF] dark:bg-[#6075FF]/20">
+                        {row.vehicleNumber}
+                      </span>
+                      <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-semibold text-amber-700 dark:text-amber-400">New patti</span>
+                    </div>
+                    <p className="mt-2 text-sm font-bold text-foreground">{row.sellerNames || '-'}</p>
+                    <p className="mt-0.5 text-xs text-muted-foreground">
+                      {row.fromLocation || '-'} · SL {row.serialNo ?? '-'} · {uniqueArrivalSellerCount(row.sellerIds)} seller
+                      {uniqueArrivalSellerCount(row.sellerIds) === 1 ? '' : 's'}
+                    </p>
+                    <div className="mt-3 grid grid-cols-3 gap-2 text-center">
+                      <div className="rounded-lg bg-muted/40 px-1 py-2">
+                        <div className="text-base font-bold tabular-nums text-foreground">{row.lots}</div>
+                        <div className="text-[9px] font-medium uppercase tracking-wide text-muted-foreground">Lots</div>
+                      </div>
+                      <div className="rounded-lg bg-muted/40 px-1 py-2">
+                        <div className="text-base font-bold tabular-nums text-foreground">{row.bids}</div>
+                        <div className="text-[9px] font-medium uppercase tracking-wide text-muted-foreground">Bids</div>
+                      </div>
+                      <div className="rounded-lg bg-muted/40 px-1 py-2">
+                        <div className="text-base font-bold tabular-nums text-foreground">{row.weighed}</div>
+                        <div className="text-[9px] font-medium uppercase tracking-wide text-muted-foreground">Weighed</div>
+                      </div>
+                    </div>
+                    <p className="mt-3 border-t border-border/30 pt-2 text-[11px] text-muted-foreground tabular-nums">{row.dateLabel}</p>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          {(sellersFetchingMore || (sellers.length > 0 && !sellersLoadComplete)) && (
+            <p className="py-3 text-center text-xs text-muted-foreground">Loading more sellers…</p>
+          )}
+        </>
+      );
+    }
+
+    return (
+      <>
+        <div className="glass-card hidden rounded-2xl border border-border/50 overflow-hidden lg:block">
+          <div className="overflow-x-auto rounded-xl border border-border/50 bg-background/40 shadow-sm">
+            <table className="w-full min-w-[1060px] border-separate border-spacing-0 text-sm">
+              <thead className={cn(SETTLEMENT_LOTS_TABLE_HEADER_GRADIENT, 'shadow-md')}>
+                <tr>
+                  <th className="whitespace-nowrap border-b border-r border-white/25 px-3 py-2 text-center font-semibold text-white">Vehicle Number</th>
+                  <th className="whitespace-nowrap border-b border-r border-white/25 px-3 py-2 text-center font-semibold text-white">Seller</th>
+                  <th className="whitespace-nowrap border-b border-r border-white/25 px-3 py-2 text-center font-semibold text-white">Total Sellers</th>
+                  <th className="whitespace-nowrap border-b border-r border-white/25 px-3 py-2 text-center font-semibold text-white">From</th>
+                  <th className="whitespace-nowrap border-b border-r border-white/25 px-3 py-2 text-center font-semibold text-white">SL No</th>
+                  <th className="whitespace-nowrap border-b border-r border-white/25 px-3 py-2 text-center font-semibold text-white">Lots</th>
+                  <th className="whitespace-nowrap border-b border-r border-white/25 px-3 py-2 text-center font-semibold text-white">Bids</th>
+                  <th className="whitespace-nowrap border-b border-r border-white/25 px-3 py-2 text-center font-semibold text-white">Weighed</th>
+                  <th className="whitespace-nowrap border-b border-r border-white/25 px-3 py-2 text-center font-semibold text-white">Status</th>
+                  <th className="whitespace-nowrap border-b border-white/25 px-3 py-2 text-center font-semibold text-white">Date</th>
+                </tr>
+              </thead>
+              <tbody>
+                {savedPattiArrivalRows.map(row => (
+                  <tr
+                    key={row.key}
+                    onClick={() =>
+                      row.representativePattiId != null &&
+                      void openPattiForEdit(row.representativePattiId, row.sellerIds, { formContext: 'saved' })
+                    }
+                    className="border-t border-border/30 hover:bg-muted/20 cursor-pointer"
+                  >
+                    <td className="border-t border-r border-border/30 px-3 py-2 text-center text-foreground">
+                      <span className="inline-flex items-center rounded-full bg-[#eef0ff] px-2 py-0.5 text-[10px] font-bold text-[#6075FF] dark:bg-[#6075FF]/20">
+                        {row.vehicleNumber}
+                      </span>
+                    </td>
+                    <td className="border-t border-r border-border/30 px-3 py-2 text-center text-foreground">{row.sellerNames || '-'}</td>
+                    <td className="border-t border-r border-border/30 px-3 py-2 text-center tabular-nums text-foreground">
+                      {uniqueArrivalSellerCount(row.sellerIds)}
+                    </td>
+                    <td className="border-t border-r border-border/30 px-3 py-2 text-center text-foreground">
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <span className="inline-block max-w-[10ch] truncate align-bottom">
+                            {shortAddressLabel(row.fromLocation)}
+                          </span>
+                        </TooltipTrigger>
+                        <TooltipContent side="top" sideOffset={8} className="max-w-[260px] text-xs">
+                          {row.fromLocation || '-'}
+                        </TooltipContent>
+                      </Tooltip>
+                    </td>
+                    <td className="border-t border-r border-border/30 px-3 py-2 text-center text-foreground">{row.serialNo ?? '-'}</td>
+                    <td className="border-t border-r border-border/30 px-3 py-2 text-center text-foreground">{row.lots}</td>
+                    <td className="border-t border-r border-border/30 px-3 py-2 text-center text-foreground">{row.bids}</td>
+                    <td className="border-t border-r border-border/30 px-3 py-2 text-center text-foreground">{row.weighed}</td>
+                    <td className="border-t border-r border-border/30 px-3 py-2 text-center text-emerald-600 dark:text-emerald-400 font-medium">Completed Patti</td>
+                    <td className="border-t border-border/30 px-3 py-2 text-center text-foreground">{row.dateLabel}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
-      </div>
+        <div className="lg:hidden">
+          {savedPattiArrivalRows.length >= SETTLEMENT_VIRTUAL_MIN_ROWS ? (
+            <SettlementMobileVirtualStack
+              count={savedPattiArrivalRows.length}
+              estimateItemSize={220}
+              getItemKey={i => savedPattiArrivalRows[i]!.key}
+            >
+              {i => {
+                const row = savedPattiArrivalRows[i]!;
+                return (
+                  <SettlementSavedPattiVehicleCard
+                    row={row}
+                    onOpen={() => {
+                      if (row.representativePattiId != null) {
+                        void openPattiForEdit(row.representativePattiId, row.sellerIds, { formContext: 'saved' });
+                      }
+                    }}
+                  />
+                );
+              }}
+            </SettlementMobileVirtualStack>
+          ) : (
+            <div className="space-y-3">
+              {savedPattiArrivalRows.map(row => (
+                <SettlementSavedPattiVehicleCard
+                  key={row.key}
+                  row={row}
+                  onOpen={() => {
+                    if (row.representativePattiId != null) {
+                      void openPattiForEdit(row.representativePattiId, row.sellerIds, { formContext: 'saved' });
+                    }
+                  }}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+        {(savedPattisFetchingMore || (savedPattis.length > 0 && !savedPattisLoadComplete)) && (
+          <p className="py-3 text-center text-xs text-muted-foreground">Loading more pattis…</p>
+        )}
+      </>
     );
   };
 
@@ -7287,7 +8015,7 @@ const SettlementPage = () => {
                                     'Quick Expenses default: (seller settlement weight / total settlement weight) x arrival freight.',
                                     isWeighingEnabledForSeller(seller.sellerId) &&
                                       isWeighingMergedIntoFreight(seller.sellerId)
-                                      ? 'Add to freight ON: this field shows freight + weighing (edits adjust base freight).'
+                                      ? 'Add to freight ON: this field shows freight + weighing (system-derived; not editable here).'
                                       : 'Freight always applies to net payable; weighing follows Use weighman / Add to freight.',
                                     `Stored freight: ${formatMoney2Display(exp.freight)}`,
                                   ]}
@@ -7298,29 +8026,64 @@ const SettlementPage = () => {
                                   isWeighingEnabledForSeller(seller.sellerId) &&
                                   isWeighingMergedIntoFreight(seller.sellerId);
                                 const displayedFreight = mergeIntoFreightMode ? exp.freight + exp.weighman : exp.freight;
+                                const showDerivedChrome = !isSettlementFormReadOnly;
+                                const freightInput = (
+                                  <SettlementNumericInput
+                                    id={`settlement-seller-expense-${seller.sellerId}-freight`}
+                                    value={displayedFreight}
+                                    onCommit={entered => {
+                                      const v = clampMoney(entered);
+                                      setSellerExpensesById(prev => {
+                                        const e0 = prev[seller.sellerId] ?? defaultSellerExpenses();
+                                        if (mergeIntoFreightMode) {
+                                          const baseFreight = clampMoney(v - e0.weighman);
+                                          return { ...prev, [seller.sellerId]: { ...e0, freight: baseFreight } };
+                                        }
+                                        return { ...prev, [seller.sellerId]: { ...e0, freight: v } };
+                                      });
+                                    }}
+                                    commitMode="live"
+                                    fractionDigits={2}
+                                    emptyWhenZero
+                                    className={cn(
+                                      settlementExpenseInputClass,
+                                      showDerivedChrome && settlementExpenseDerivedInputAffordanceClass,
+                                      showDerivedChrome && 'pr-8'
+                                    )}
+                                    aria-label="Freight amount (read-only, auto-calculated)"
+                                    title={
+                                      showDerivedChrome
+                                        ? 'Auto-calculated from arrival freight and settlement weights — not editable here'
+                                        : undefined
+                                    }
+                                    readOnly={showDerivedChrome}
+                                    disabled={!showDerivedChrome}
+                                  />
+                                );
                                 return (
                                   <div className="flex max-w-[8.5rem] shrink-0 items-center justify-end gap-1">
-                                    <SettlementNumericInput
-                                      id={`settlement-seller-expense-${seller.sellerId}-freight`}
-                                      value={displayedFreight}
-                                      onCommit={entered => {
-                                        const v = clampMoney(entered);
-                                        setSellerExpensesById(prev => {
-                                          const e0 = prev[seller.sellerId] ?? defaultSellerExpenses();
-                                          if (mergeIntoFreightMode) {
-                                            const baseFreight = clampMoney(v - e0.weighman);
-                                            return { ...prev, [seller.sellerId]: { ...e0, freight: baseFreight } };
-                                          }
-                                          return { ...prev, [seller.sellerId]: { ...e0, freight: v } };
-                                        });
-                                      }}
-                                      commitMode="live"
-                                      fractionDigits={2}
-                                      emptyWhenZero
-                                      className={settlementExpenseInputClass}
-                                      aria-label="Freight amount"
-                                      disabled={isSettlementFormReadOnly}
-                                    />
+                                    {showDerivedChrome ? (
+                                      <Tooltip delayDuration={250}>
+                                        <TooltipTrigger asChild>
+                                          <div className="relative w-full">
+                                            {freightInput}
+                                            <Lock
+                                              className="pointer-events-none absolute right-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground/85"
+                                              aria-hidden
+                                            />
+                                          </div>
+                                        </TooltipTrigger>
+                                        <TooltipContent side="left" sideOffset={8} className="max-w-[280px] text-xs leading-relaxed">
+                                          <p className="font-semibold text-foreground">Read-only (auto-calculated)</p>
+                                          <p className="mt-1.5 text-muted-foreground">
+                                            Freight is allocated from arrival freight and this seller&apos;s share of settlement
+                                            weight. To change it, adjust arrival freight or lot weights — not this field.
+                                          </p>
+                                        </TooltipContent>
+                                      </Tooltip>
+                                    ) : (
+                                      freightInput
+                                    )}
                                   </div>
                                 );
                               })()}
@@ -7338,23 +8101,60 @@ const SettlementPage = () => {
                                 />
                               </span>
                               <div className="flex max-w-[8.5rem] shrink-0 items-center justify-end gap-1">
-                                <SettlementNumericInput
-                                  value={exp.unloading}
-                                  onCommit={v => {
-                                    const x = clampMoney(v);
-                                    quickAdjustmentAppliedRef.current = true;
-                                    setSellerExpensesById(prev => {
-                                      const e0 = prev[seller.sellerId] ?? defaultSellerExpenses();
-                                      return { ...prev, [seller.sellerId]: { ...e0, unloading: x } };
-                                    });
-                                  }}
-                                  commitMode="blur"
-                                  fractionDigits={2}
-                                  emptyWhenZero
-                                  className={settlementExpenseInputClass}
-                                  aria-label="Unloading amount"
-                                  disabled={isSettlementFormReadOnly}
-                                />
+                                {(() => {
+                                  const showDerivedChrome = !isSettlementFormReadOnly;
+                                  const unloadingInput = (
+                                    <SettlementNumericInput
+                                      value={exp.unloading}
+                                      onCommit={v => {
+                                        const x = clampMoney(v);
+                                        quickAdjustmentAppliedRef.current = true;
+                                        setSellerExpensesById(prev => {
+                                          const e0 = prev[seller.sellerId] ?? defaultSellerExpenses();
+                                          return { ...prev, [seller.sellerId]: { ...e0, unloading: x } };
+                                        });
+                                      }}
+                                      commitMode="blur"
+                                      fractionDigits={2}
+                                      emptyWhenZero
+                                      className={cn(
+                                        settlementExpenseInputClass,
+                                        showDerivedChrome && settlementExpenseDerivedInputAffordanceClass,
+                                        showDerivedChrome && 'pr-8'
+                                      )}
+                                      aria-label="Unloading amount (read-only, auto-calculated)"
+                                      title={
+                                        showDerivedChrome
+                                          ? 'Auto-calculated from commodity slabs and bag share — not editable here'
+                                          : undefined
+                                      }
+                                      readOnly={showDerivedChrome}
+                                      disabled={!showDerivedChrome}
+                                    />
+                                  );
+                                  return showDerivedChrome ? (
+                                    <Tooltip delayDuration={250}>
+                                      <TooltipTrigger asChild>
+                                        <div className="relative w-full">
+                                          {unloadingInput}
+                                          <Lock
+                                            className="pointer-events-none absolute right-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground/85"
+                                            aria-hidden
+                                          />
+                                        </div>
+                                      </TooltipTrigger>
+                                      <TooltipContent side="left" sideOffset={8} className="max-w-[280px] text-xs leading-relaxed">
+                                        <p className="font-semibold text-foreground">Read-only (auto-calculated)</p>
+                                        <p className="mt-1.5 text-muted-foreground">
+                                          Unloading comes from lot-level commodity slab rules and this seller&apos;s bag share
+                                          (Quick Adjustment distribution). Edit slabs or weights upstream — not here.
+                                        </p>
+                                      </TooltipContent>
+                                    </Tooltip>
+                                  ) : (
+                                    unloadingInput
+                                  );
+                                })()}
                               </div>
                             </div>
                             <div className="flex items-center justify-between gap-2">
@@ -8337,7 +9137,7 @@ const SettlementPage = () => {
               <h1 className="text-lg font-bold text-white flex items-center gap-2">
                 <span className="text-xl font-black">₹</span> Settlement (Sales Patti)
               </h1>
-              <p className="text-white/70 text-xs mt-0.5">{sellers.length} sellers · Settlement & payment reconciliation</p>
+              <p className="text-white/70 text-xs mt-0.5">{sellersCountLabel} · Settlement & payment reconciliation</p>
             </div>
           </div>
           <div className="mb-3 flex flex-wrap gap-2">
@@ -8377,7 +9177,7 @@ const SettlementPage = () => {
           <h2 className="text-lg font-bold text-foreground flex items-center gap-2">
             <span className="text-xl font-black text-emerald-600 dark:text-emerald-400">₹</span> Settlement (Sales Patti)
           </h2>
-          <p className="text-sm text-muted-foreground mt-0.5">{sellers.length} sellers · Settlement & payment reconciliation</p>
+          <p className="text-sm text-muted-foreground mt-0.5">{sellersCountLabel} · Settlement & payment reconciliation</p>
         </div>
         <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:gap-4">
           <div className="flex flex-wrap items-center gap-2 w-full lg:w-auto" role="tablist" aria-label="Settlement views">
@@ -8419,34 +9219,72 @@ const SettlementPage = () => {
       <div className="mt-4 space-y-4 px-4 lg:px-8">
         {settlementMainTab === 'arrival-summary' ? (
           <>
-            <div className="flex flex-wrap gap-2" role="tablist" aria-label="Arrival summary">
-              <button
-                type="button"
-                role="tab"
-                aria-selected={arrivalSummaryTab === 'new-patti'}
-                onClick={() => setArrivalSummaryTab('new-patti')}
-                className={settlementToggleTabBtn(arrivalSummaryTab === 'new-patti')}
-              >
-                Create New Patti{tabHint('Alt X')}
-              </button>
-              <button
-                type="button"
-                role="tab"
-                aria-selected={arrivalSummaryTab === 'in-progress-patti'}
-                onClick={() => setArrivalSummaryTab('in-progress-patti')}
-                className={settlementToggleTabBtn(arrivalSummaryTab === 'in-progress-patti')}
-              >
-                Patti In Progress{tabHint('Alt Y')}
-              </button>
-              <button
-                type="button"
-                role="tab"
-                aria-selected={arrivalSummaryTab === 'saved-patti'}
-                onClick={() => setArrivalSummaryTab('saved-patti')}
-                className={settlementToggleTabBtn(arrivalSummaryTab === 'saved-patti')}
-              >
-                Saved Patti{tabHint('Alt Z')}
-              </button>
+            <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
+              <div className="flex flex-wrap gap-2" role="tablist" aria-label="Arrival summary">
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={arrivalSummaryTab === 'new-patti'}
+                  onClick={() => setArrivalSummaryTab('new-patti')}
+                  className={settlementToggleTabBtn(arrivalSummaryTab === 'new-patti')}
+                >
+                  Create New Patti{tabHint('Alt X')}
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={arrivalSummaryTab === 'in-progress-patti'}
+                  onClick={() => setArrivalSummaryTab('in-progress-patti')}
+                  className={settlementToggleTabBtn(arrivalSummaryTab === 'in-progress-patti')}
+                >
+                  Patti In Progress{tabHint('Alt Y')}
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={arrivalSummaryTab === 'saved-patti'}
+                  onClick={() => setArrivalSummaryTab('saved-patti')}
+                  className={settlementToggleTabBtn(arrivalSummaryTab === 'saved-patti')}
+                >
+                  Saved Patti{tabHint('Alt Z')}
+                </button>
+              </div>
+              {arrivalSummaryTab === 'saved-patti' && !loadingPattis && savedPattis.length > 0 ? (
+                <div
+                  className="inline-flex shrink-0 rounded-xl border border-border/40 bg-muted/40 p-0.5 dark:bg-muted/20"
+                  role="group"
+                  aria-label="Saved patti layout"
+                >
+                  <button
+                    type="button"
+                    title="Table view (vehicle groups)"
+                    aria-pressed={savedPattiLayout === 'list'}
+                    onClick={() => setSavedPattiLayout('list')}
+                    className={cn(
+                      'rounded-lg p-2 transition-colors touch-manipulation',
+                      savedPattiLayout === 'list'
+                        ? 'bg-white text-[#6075FF] shadow-sm dark:bg-card'
+                        : 'text-muted-foreground hover:text-foreground',
+                    )}
+                  >
+                    <List className="h-4 w-4" aria-hidden />
+                  </button>
+                  <button
+                    type="button"
+                    title="Grid view (one card per vehicle / arrival group)"
+                    aria-pressed={savedPattiLayout === 'grid'}
+                    onClick={() => setSavedPattiLayout('grid')}
+                    className={cn(
+                      'rounded-lg p-2 transition-colors touch-manipulation',
+                      savedPattiLayout === 'grid'
+                        ? 'bg-white text-[#6075FF] shadow-sm dark:bg-card'
+                        : 'text-muted-foreground hover:text-foreground',
+                    )}
+                  >
+                    <LayoutGrid className="h-4 w-4" aria-hidden />
+                  </button>
+                </div>
+              ) : null}
             </div>
             {renderArrivalSummaryTable(arrivalSummaryTab)}
           </>

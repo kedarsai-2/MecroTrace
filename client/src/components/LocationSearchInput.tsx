@@ -32,8 +32,8 @@ interface LocationSearchInputProps {
 
 /**
  * Origin/location input with OpenStreetMap Nominatim search (India only).
- * Typing shows a dropdown of suggestions like "Bangalore, Karnataka, India".
- * No API key required.
+ * Typing shows suggestions; if none match, user can pick "Use typed text" or blur/Enter to save free text.
+ * Parent `value` updates on every keystroke so forms persist custom origins without picking a result.
  */
 export default function LocationSearchInput({
   value,
@@ -49,10 +49,13 @@ export default function LocationSearchInput({
   const [suggestions, setSuggestions] = useState<NominatimResult[]>([]);
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
+  /** True after latest Nominatim request for current query finished (success or error). */
+  const [searchFinished, setSearchFinished] = useState(false);
   const [dropdownPos, setDropdownPos] = useState({ top: 0, left: 0, width: 0 });
   const debounceRef = useRef<ReturnType<typeof setTimeout>>();
   const abortRef = useRef<AbortController | null>(null);
   const lastRequestAtRef = useRef(0);
+  const fetchGenerationRef = useRef(0);
   const MIN_REQUEST_INTERVAL_MS = 1100; // Nominatim: max 1 request per second
 
   const updateDropdownPos = useCallback(() => {
@@ -74,6 +77,7 @@ export default function LocationSearchInput({
     if (!query.trim() || query.length < 2) {
       setSuggestions([]);
       setOpen(false);
+      setSearchFinished(false);
       return;
     }
 
@@ -85,7 +89,9 @@ export default function LocationSearchInput({
         lastRequestAtRef.current = Date.now();
         if (abortRef.current) abortRef.current.abort();
         abortRef.current = new AbortController();
+        const gen = ++fetchGenerationRef.current;
         setLoading(true);
+        setSearchFinished(false);
         const params = new URLSearchParams({
           q: query.trim(),
           format: 'json',
@@ -99,13 +105,25 @@ export default function LocationSearchInput({
         })
           .then(res => res.json())
           .then((data: NominatimResult[]) => {
+            if (gen !== fetchGenerationRef.current) return;
             setSuggestions(data);
-            setOpen(data.length > 0);
+            setOpen(data.length > 0 || query.trim().length >= 2);
             updateDropdownPos();
           })
-          .catch(() => setSuggestions([]))
+          .catch((err: unknown) => {
+            if (gen !== fetchGenerationRef.current) return;
+            const aborted =
+              (typeof DOMException !== 'undefined' && err instanceof DOMException && err.name === 'AbortError') ||
+              (err instanceof Error && err.name === 'AbortError');
+            if (aborted) return;
+            setSuggestions([]);
+            setOpen(query.trim().length >= 2);
+            updateDropdownPos();
+          })
           .finally(() => {
+            if (gen !== fetchGenerationRef.current) return;
             setLoading(false);
+            setSearchFinished(true);
             abortRef.current = null;
           });
       };
@@ -127,11 +145,19 @@ export default function LocationSearchInput({
   };
 
   const handleBlur = () => {
+    const trimmed = query.trim();
+    if (trimmed !== value) {
+      onChange(trimmed);
+      setQuery(trimmed);
+    }
     setTimeout(() => setOpen(false), 200);
   };
 
+  const showUseTypedRow =
+    searchFinished && !loading && query.trim().length >= 2 && suggestions.length === 0;
+
   const handleFocus = () => {
-    if (suggestions.length > 0) {
+    if (suggestions.length > 0 || showUseTypedRow) {
       updateDropdownPos();
       setOpen(true);
     }
@@ -157,7 +183,21 @@ export default function LocationSearchInput({
         type="text"
         id={id}
         value={query}
-        onChange={e => setQuery(e.target.value)}
+        onChange={e => {
+          const v = e.target.value;
+          setQuery(v);
+          onChange(v);
+        }}
+        onKeyDown={e => {
+          if (e.key !== 'Enter') return;
+          e.preventDefault();
+          const trimmed = query.trim();
+          onChange(trimmed);
+          setQuery(trimmed);
+          setOpen(false);
+          setSuggestions([]);
+          inputRef.current?.blur();
+        }}
         onFocus={handleFocus}
         onBlur={handleBlur}
         placeholder={placeholder}
@@ -169,7 +209,7 @@ export default function LocationSearchInput({
         <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">Searching…</span>
       )}
 
-      {open && suggestions.length > 0 && createPortal(
+      {open && (suggestions.length > 0 || showUseTypedRow) && createPortal(
         <div
           role="listbox"
           className="fixed z-[9999] bg-card border border-border/50 rounded-xl shadow-2xl max-h-52 overflow-y-auto py-1"
@@ -191,6 +231,22 @@ export default function LocationSearchInput({
               <span className="text-foreground">{s.display_name}</span>
             </button>
           ))}
+          {showUseTypedRow && (
+            <button
+              type="button"
+              role="option"
+              onMouseDown={e => {
+                e.preventDefault();
+                handleSelect(query.trim());
+              }}
+              className="w-full px-3 py-2.5 text-left text-sm hover:bg-muted/50 transition-colors flex items-center gap-2 border-t border-border/20"
+            >
+              <MapPin className="w-4 h-4 text-muted-foreground flex-shrink-0" />
+              <span className="text-foreground">
+                Use typed text: <span className="font-medium">{query.trim()}</span>
+              </span>
+            </button>
+          )}
         </div>,
         document.body
       )}

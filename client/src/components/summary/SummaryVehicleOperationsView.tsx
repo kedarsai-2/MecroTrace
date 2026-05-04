@@ -44,7 +44,7 @@ function formatInr(n: number): string {
 
 function rdSignedClass(n: number | null): string {
   if (n == null || Number.isNaN(n)) return 'text-foreground';
-  if (n > 0) return 'text-emerald-600 dark:text-emerald-400';
+  if (n > 0) return 'text-[#92D050] dark:text-[#B5E87A]';
   if (n < 0) return 'text-rose-600 dark:text-rose-400';
   return 'text-foreground';
 }

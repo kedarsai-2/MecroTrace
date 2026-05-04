@@ -4,7 +4,7 @@
  */
 import type { ArrivalDetail } from '@/services/api/arrivals';
 import type { BillPrintData, BillPrintFirmInfo, PattiPrintData } from '@/utils/printDocumentTemplates';
-import { effectiveGstPercent, gstOnSubtotal, percentOfAmount, roundMoney2 } from '@/utils/billingMoney';
+import { percentOfAmount, roundMoney2, syncGstRatesFromFixedAmounts, totalGstRupeesForGroup } from '@/utils/billingMoney';
 import type { BidInfo } from '@/utils/printTemplates';
 
 /** Structural twin of `FirmInfo` from printPreviewTemplates (avoid circular imports). */
@@ -151,15 +151,17 @@ export function firmInputToBillPrintFirm(f: PrintPreviewFirmInput): BillPrintFir
 
 function recalcSampleBillGrandTotal(b: BillPrintData): BillPrintData {
   const commodityGroups = b.commodityGroups.map((group) => {
-    const next = { ...group };
-    const sub = roundMoney2(next.subtotal);
-    const commissionAmount = percentOfAmount(sub, next.commissionPercent || 0);
-    const userFeeAmount = percentOfAmount(sub, next.userFeePercent || 0);
-    const gstAmount = gstOnSubtotal(sub, effectiveGstPercent(next));
-    next.commissionAmount = commissionAmount;
-    next.userFeeAmount = userFeeAmount;
-    next.totalCharges = roundMoney2(commissionAmount + userFeeAmount + gstAmount);
-    return next;
+    const synced = syncGstRatesFromFixedAmounts({ ...group });
+    const sub = roundMoney2(synced.subtotal);
+    const commissionAmount = percentOfAmount(sub, synced.commissionPercent || 0);
+    const userFeeAmount = percentOfAmount(sub, synced.userFeePercent || 0);
+    const gstAmount = totalGstRupeesForGroup(synced);
+    return {
+      ...synced,
+      commissionAmount,
+      userFeeAmount,
+      totalCharges: roundMoney2(commissionAmount + userFeeAmount + gstAmount),
+    };
   });
 
   let grandTotal = 0;

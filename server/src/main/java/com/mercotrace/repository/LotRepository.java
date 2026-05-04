@@ -128,6 +128,23 @@ public interface LotRepository extends JpaRepository<Lot, Long> {
         @Param("dateTo") java.time.Instant dateTo
     );
 
+    /** Sum lot bag counts grouped by vehicle id. */
+    @Query(
+        "SELECT siv.vehicleId, COALESCE(SUM(l.bagCount), 0) FROM Lot l " +
+        "JOIN SellerInVehicle siv ON l.sellerVehicleId = siv.id " +
+        "WHERE siv.vehicleId IN :vehicleIds " +
+        "GROUP BY siv.vehicleId"
+    )
+    List<Object[]> sumBagCountGroupedByVehicleId(@Param("vehicleIds") Collection<Long> vehicleIds);
+
+    /** Sum lot bag counts grouped by seller-in-vehicle id. */
+    @Query(
+        "SELECT l.sellerVehicleId, COALESCE(SUM(l.bagCount), 0) FROM Lot l " +
+        "WHERE l.sellerVehicleId IN :sellerVehicleIds " +
+        "GROUP BY l.sellerVehicleId"
+    )
+    List<Object[]> sumBagCountGroupedBySellerVehicleId(@Param("sellerVehicleIds") Collection<Long> sellerVehicleIds);
+
     /** Per UTC calendar day of vehicle arrival: sum of lot bag_count. */
     @Query(
         value =
@@ -147,4 +164,3 @@ public interface LotRepository extends JpaRepository<Lot, Long> {
         @Param("toInstant") java.time.Instant toInstant
     );
 }
-

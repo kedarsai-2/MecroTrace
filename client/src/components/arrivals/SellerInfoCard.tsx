@@ -1,5 +1,5 @@
 import { ChevronDown, ChevronUp, Printer, RotateCcw } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 interface SellerInfoCardProps {
   sellers: Array<{
@@ -21,12 +21,34 @@ interface SellerInfoCardProps {
   hidePrint?: boolean;
 }
 
+/** Stable identity for accordion reset — parent often passes a new array ref each render. */
+function sellerListResetKey(
+  sellers: NonNullable<SellerInfoCardProps['sellers']>,
+): string {
+  return sellers
+    .map((s) =>
+      [
+        s.sellerSerialNumber ?? '',
+        s.sellerName,
+        s.sellerMark ?? '',
+        s.lots
+          .map((l) => [l.id ?? '', l.lotName, l.bagCount ?? '', l.commodityName ?? ''].join('\u0001'))
+          .join('\u0002'),
+      ].join('\u0003'),
+    )
+    .join('\u0004');
+}
+
 const SellerInfoCard = ({ sellers, onPrint, onRefresh, hidePrint }: SellerInfoCardProps) => {
   if (!sellers || sellers.length === 0) return null;
   const [expandedSellerIdx, setExpandedSellerIdx] = useState<number | null>(null);
+  const sellerListKeyRef = useRef('');
 
-  // Reset accordion whenever seller list changes; default remains all-collapsed.
+  // Reset only when seller/lot data actually changes, not when `sellers` is a new array instance.
   useEffect(() => {
+    const nextKey = sellerListResetKey(sellers);
+    if (nextKey === sellerListKeyRef.current) return;
+    sellerListKeyRef.current = nextKey;
     setExpandedSellerIdx(null);
   }, [sellers]);
 
@@ -78,7 +100,10 @@ const SellerInfoCard = ({ sellers, onPrint, onRefresh, hidePrint }: SellerInfoCa
           <div key={si} className="space-y-2">
             <button
               type="button"
-              onClick={() => setExpandedSellerIdx((prev) => (prev === si ? null : si))}
+              onClick={(e) => {
+                e.stopPropagation();
+                setExpandedSellerIdx((prev) => (prev === si ? null : si));
+              }}
               className="w-full flex items-center justify-between gap-2 rounded-lg px-1 py-1 hover:bg-muted/30 transition-colors text-left"
               aria-expanded={isExpanded}
               aria-label={isExpanded ? 'Collapse seller lots' : 'Expand seller lots'}

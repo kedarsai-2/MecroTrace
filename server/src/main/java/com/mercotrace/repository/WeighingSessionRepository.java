@@ -7,6 +7,8 @@ import java.util.Optional;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 /**
@@ -22,6 +24,9 @@ public interface WeighingSessionRepository extends JpaRepository<WeighingSession
     List<WeighingSession> findAllByBidNumber(Integer bidNumber);
 
     List<WeighingSession> findByLotIdIn(Collection<Long> lotIds);
+
+    @Query("SELECT CASE WHEN COUNT(w) > 0 THEN true ELSE false END FROM WeighingSession w WHERE w.lotId IN :lotIds")
+    boolean existsByLotIdIn(@Param("lotIds") Collection<Long> lotIds);
 
     boolean existsByBidNumber(Integer bidNumber);
 }

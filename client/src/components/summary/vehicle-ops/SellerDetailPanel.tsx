@@ -5,11 +5,11 @@ import type { ArrivalSellerFullDetail } from '@/services/api/arrivals';
 import type { AuctionSessionDTO, LotSummaryDTO } from '@/services/api/auction';
 import { auctionApi } from '@/services/api/auction';
 import { cn } from '@/lib/utils';
-import { formatLotLabelFromSummary, sellerBagSoldPending, sellerKeyFromArrivalSeller } from './vehicleOpsUtils';
+import { formatLotLabelFromSummary, isLotFullyAuctioned, sellerBagSoldPending, sellerKeyFromArrivalSeller } from './vehicleOpsUtils';
 import { LotBidsTable } from './LotBidsTable';
 import {
+  vehicleOpsLotHeaderBgClass,
   vehicleOpsPrimaryBtnClass,
-  vehicleOpsSaveStripClass,
   vehicleOpsSecondaryOutlineBtnClass,
 } from './vehicleOpsUi';
 
@@ -37,7 +37,7 @@ function LotBlockHeader({
   showExpandToggle,
   expanded = false,
   onToggleExpand,
-  hasUnsavedRates,
+  lotFullyAuctioned,
 }: {
   lot: LotSummaryDTO;
   pendingBags: number;
@@ -45,16 +45,17 @@ function LotBlockHeader({
   showExpandToggle: boolean;
   expanded?: boolean;
   onToggleExpand?: () => void;
-  /** Matches seller list strip / bids table bar (rose until Save syncs rates). */
-  hasUnsavedRates: boolean;
+  /** True when sold_bags ≥ bag_count — header uses brand green tint; else rose (50% opacity). */
+  lotFullyAuctioned: boolean;
 }) {
   const label = formatLotLabelFromSummary(lot);
   return (
-    <div className="flex w-full min-w-0 items-stretch gap-2 sm:items-center sm:gap-3">
-      <span
-        className={cn('w-1.5 shrink-0 self-stretch rounded-full sm:self-center sm:min-h-[2.5rem]', vehicleOpsSaveStripClass(hasUnsavedRates))}
-        aria-hidden
-      />
+    <div
+      className={cn(
+        'flex w-full min-w-0 items-stretch gap-2 rounded-xl px-2 py-2 sm:items-center sm:gap-3',
+        vehicleOpsLotHeaderBgClass(lotFullyAuctioned),
+      )}
+    >
       <div className="flex min-w-0 flex-1 items-start gap-2 sm:items-center sm:gap-3">
         <div className="min-w-0 flex-1">
           <p className="break-words text-sm font-semibold leading-tight text-foreground sm:truncate" title={label}>
@@ -96,9 +97,6 @@ export type SellerDetailPanelProps = {
   onPrint: () => void;
   /** Refetch vehicle-ops summary after auction writes (lots, RD, billing slice). */
   onAuctionDataInvalidate?: () => void | Promise<void>;
-  /** Lot id → unsaved “new seller rate” edits (lifted for seller list strips). */
-  unsavedRatesByLotId?: Record<number, boolean>;
-  onLotUnsavedRatesChange?: (lotId: number, unsaved: boolean) => void;
 };
 
 type LotSessionState = {
@@ -112,8 +110,6 @@ export function SellerDetailPanel({
   sellerLots,
   onPrint,
   onAuctionDataInvalidate,
-  unsavedRatesByLotId = {},
-  onLotUnsavedRatesChange,
 }: SellerDetailPanelProps) {
   const isLgUp = useIsLgUp();
   const isLgUpRef = useRef(isLgUp);
@@ -313,7 +309,7 @@ export function SellerDetailPanel({
                           showExpandToggle
                           expanded={panelOpen}
                           onToggleExpand={() => toggleLot(lid)}
-                          hasUnsavedRates={Boolean(unsavedRatesByLotId[lid])}
+                          lotFullyAuctioned={isLotFullyAuctioned(lot)}
                         />
                       </div>
                       <div
@@ -330,7 +326,6 @@ export function SellerDetailPanel({
                           error={st?.error ?? null}
                           onSessionUpdated={(s) => onSessionUpdated(lid, s)}
                           onAuctionDataInvalidate={onAuctionDataInvalidate}
-                          onUnsavedRatesChange={(u) => onLotUnsavedRatesChange?.(lid, u)}
                         />
                       </div>
                     </div>
@@ -357,13 +352,13 @@ export function SellerDetailPanel({
                         className="glass-card w-[calc(100%-0.1rem)] shrink-0 snap-start overflow-hidden rounded-2xl border border-border/40 shadow-sm"
                       >
                         <div className="px-3 py-3">
-                          <LotBlockHeader
-                            lot={lot}
-                            lotId={lid}
-                            pendingBags={pendingBags}
-                            showExpandToggle={false}
-                            hasUnsavedRates={Boolean(unsavedRatesByLotId[lid])}
-                          />
+                        <LotBlockHeader
+                          lot={lot}
+                          lotId={lid}
+                          pendingBags={pendingBags}
+                          showExpandToggle={false}
+                          lotFullyAuctioned={isLotFullyAuctioned(lot)}
+                        />
                         </div>
                       </div>
                     );
@@ -383,7 +378,6 @@ export function SellerDetailPanel({
                       error={mobilePanelSt?.error ?? null}
                       onSessionUpdated={(s) => onSessionUpdated(visibleLotId, s)}
                       onAuctionDataInvalidate={onAuctionDataInvalidate}
-                      onUnsavedRatesChange={(u) => onLotUnsavedRatesChange?.(visibleLotId, u)}
                     />
                   </div>
                 )}

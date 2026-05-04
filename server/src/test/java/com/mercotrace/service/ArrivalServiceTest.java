@@ -14,17 +14,24 @@ import com.mercotrace.domain.VehicleWeight;
 import com.mercotrace.domain.enumeration.FreightMethod;
 import com.mercotrace.repository.AuctionEntryRepository;
 import com.mercotrace.repository.AuctionRepository;
+import com.mercotrace.repository.AuctionSelfSaleUnitRepository;
+import com.mercotrace.repository.CdnItemRepository;
 import com.mercotrace.repository.CommodityRepository;
 import com.mercotrace.repository.ContactRepository;
+import com.mercotrace.repository.DailySerialAllocationRepository;
 import com.mercotrace.repository.DailySerialRepository;
 import com.mercotrace.repository.FreightCalculationRepository;
 import com.mercotrace.repository.FreightDistributionRepository;
 import com.mercotrace.repository.LotRepository;
+import com.mercotrace.repository.SalesBillLineItemRepository;
 import com.mercotrace.repository.SellerInVehicleRepository;
+import com.mercotrace.repository.SelfSaleClosureRepository;
+import com.mercotrace.repository.StockPurchaseItemRepository;
 import com.mercotrace.repository.VehicleRepository;
 import com.mercotrace.repository.VehicleWeightRepository;
 import com.mercotrace.repository.VoucherRepository;
 import com.mercotrace.repository.WeighingSessionRepository;
+import com.mercotrace.repository.WriterPadSessionRepository;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
@@ -67,6 +74,9 @@ class ArrivalServiceTest {
     private DailySerialRepository dailySerialRepository;
 
     @Mock
+    private DailySerialAllocationRepository dailySerialAllocationRepository;
+
+    @Mock
     private CommodityRepository commodityRepository;
 
     @Mock
@@ -82,6 +92,24 @@ class ArrivalServiceTest {
     private WeighingSessionRepository weighingSessionRepository;
 
     @Mock
+    private SalesBillLineItemRepository salesBillLineItemRepository;
+
+    @Mock
+    private AuctionSelfSaleUnitRepository auctionSelfSaleUnitRepository;
+
+    @Mock
+    private SelfSaleClosureRepository selfSaleClosureRepository;
+
+    @Mock
+    private CdnItemRepository cdnItemRepository;
+
+    @Mock
+    private StockPurchaseItemRepository stockPurchaseItemRepository;
+
+    @Mock
+    private WriterPadSessionRepository writerPadSessionRepository;
+
+    @Mock
     private ContactService contactService;
 
     @Mock
@@ -93,6 +121,13 @@ class ArrivalServiceTest {
     @BeforeEach
     void setUp() {
         when(traderContextService.getCurrentTraderId()).thenReturn(1L);
+        when(salesBillLineItemRepository.existsForTraderLotsDeletionScope(anyLong(), anyList(), anyList())).thenReturn(false);
+        when(auctionSelfSaleUnitRepository.existsByLotIdIn(anyList())).thenReturn(false);
+        when(selfSaleClosureRepository.existsActiveByTraderIdAndLotIdIn(anyLong(), anyList())).thenReturn(false);
+        when(cdnItemRepository.existsActiveByLotIdIn(anyList())).thenReturn(false);
+        when(stockPurchaseItemRepository.existsActiveByTraderIdAndLotIdIn(anyLong(), anyList())).thenReturn(false);
+        when(weighingSessionRepository.existsByLotIdIn(anyList())).thenReturn(false);
+        when(writerPadSessionRepository.existsByLotIdIn(anyList())).thenReturn(false);
     }
 
     @Test

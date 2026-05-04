@@ -1,4 +1,5 @@
 import { useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback, Fragment, type ReactNode } from 'react';
+import { useWindowVirtualizer, measureElement } from '@tanstack/react-virtual';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Capacitor } from '@capacitor/core';
@@ -15,6 +16,7 @@ import { useNavigate } from 'react-router-dom';
 import { cn } from '@/lib/utils';
 import { contactApi, arrivalsApi, commodityApi } from '@/services/api';
 import type { ArrivalSummary, ArrivalCreatePayload, ArrivalFullDetail, ArrivalDetail } from '@/services/api/arrivals';
+import { ArrivalDeletionBlockedError, formatArrivalDeletionBlockerCodes } from '@/services/api/arrivals';
 import ArrivalStatusBadge, { getArrivalStatus, type ArrivalStatus } from '@/components/arrivals/ArrivalStatusBadge';
 import ArrivalSummaryVehicleSellerQty from '@/components/arrivals/ArrivalSummaryVehicleSellerQty';
 import { ARRIVALS_TABLE_HEADER_GRADIENT } from '@/components/arrivals/arrivalsTableTokens';
@@ -27,7 +29,7 @@ import FreightDetailsCard from '@/components/arrivals/FreightDetailsCard';
 import SellerInfoCard from '@/components/arrivals/SellerInfoCard';
 import BuyerMarkSection from '@/components/arrivals/BuyerMarkSection';
 import LocationSearchInput from '@/components/LocationSearchInput';
-import type { Vehicle, Contact, FreightMethod } from '@/types/models';
+import type { Vehicle, Contact, FreightMethod, Commodity } from '@/types/models';
 import { toast } from 'sonner';
 import { useDesktopMode } from '@/hooks/use-desktop';
 import useAutofocusWhen from '@/hooks/useAutofocusWhen';
@@ -49,6 +51,37 @@ import { ConfirmDeleteDialog } from '@/components/ConfirmDeleteDialog';
  *   3.3.5 Rental & Advance Logic
  *   3.3.6 Validation & Constraints
  */
+
+const ARRIVALS_PAGE_SIZE = 90;
+/** Align with server vehicle ordering (arrival date descending). */
+const ARRIVAL_LIST_SORT = 'arrivalDatetime,desc';
+
+function isAbortError(e: unknown): boolean {
+  return (
+    (typeof DOMException !== 'undefined' && e instanceof DOMException && e.name === 'AbortError') ||
+    (e instanceof Error && e.name === 'AbortError')
+  );
+}
+
+function arrivalSummarySortKeyMs(row: ArrivalSummary): number {
+  const lm = row.lastModifiedDate ? new Date(row.lastModifiedDate).getTime() : NaN;
+  if (Number.isFinite(lm)) return lm;
+  return new Date(row.arrivalDatetime).getTime();
+}
+
+function sortArrivalSummaries(a: ArrivalSummary, b: ArrivalSummary): number {
+  const ta = arrivalSummarySortKeyMs(a);
+  const tb = arrivalSummarySortKeyMs(b);
+  if (tb !== ta) return tb - ta;
+  return Number(b.vehicleId) - Number(a.vehicleId);
+}
+
+function sortArrivalDetails(a: ArrivalDetail, b: ArrivalDetail): number {
+  const ta = new Date(a.arrivalDatetime).getTime();
+  const tb = new Date(b.arrivalDatetime).getTime();
+  if (tb !== ta) return tb - ta;
+  return b.vehicleId - a.vehicleId;
+}
 
 // ── Types for local arrival data ──────────────────────────
 interface LotEntry {
@@ -869,8 +902,10 @@ const ArrivalsPage = () => {
   const [apiArrivals, setApiArrivals] = useState<ArrivalSummary[]>([]);
   const [apiArrivalsLoading, setApiArrivalsLoading] = useState(true);
   const [contacts, setContacts] = useState<Contact[]>([]);
-  const [commodities, setCommodities] = useState<any[]>([]);
-  const [commodityConfigs, setCommodityConfigs] = useState<any[]>([]);
+  const [commodities, setCommodities] = useState<Commodity[]>([]);
+  const [commodityConfigs, setCommodityConfigs] = useState<
+    Array<{ commodityId?: string | number; commodity_id?: string | number; config?: { minWeight?: number; maxWeight?: number } }>
+  >([]);
   const [expandedArrival, setExpandedArrival] = useState<number | null>(null);
   const [desktopTab, setDesktopTab] = useState<'summary' | 'new-arrival'>('summary');
 
@@ -908,13 +943,24 @@ const ArrivalsPage = () => {
   const [expandedDetail, setExpandedDetail] = useState<ArrivalFullDetail | null>(null);
   const [expandedDetailLoading, setExpandedDetailLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
-  let summaryMode: 'arrivals' | 'sellers' | 'lots' = 'arrivals';
+  const summaryMode: 'arrivals' | 'sellers' | 'lots' = 'arrivals';
   type StatusFilter = 'ALL' | ArrivalStatus;
   const SUMMARY_STATUS_FILTERS: StatusFilter[] = ['ALL', 'PENDING', 'WEIGHED', 'AUCTIONED', 'SETTLED', 'PARTIALLY_COMPLETED'];
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('ALL');
   const [partialArrivals, setPartialArrivals] = useState<ArrivalSummary[]>([]);
   const [partialArrivalsLoading, setPartialArrivalsLoading] = useState(false);
   const [arrivalDetails, setArrivalDetails] = useState<ArrivalDetail[]>([]);
+  const loadArrivalsGenRef = useRef(0);
+  const loadArrivalsAbortRef = useRef<AbortController | null>(null);
+  const arrivalFullDetailCacheRef = useRef<Map<string, ArrivalFullDetail>>(new Map());
+  const arrivalFullDetailPrefetchingRef = useRef<Set<string>>(new Set());
+  const [arrivalsStreamingMore, setArrivalsStreamingMore] = useState(false);
+  const [completedArrivalsTotal, setCompletedArrivalsTotal] = useState<number | null>(null);
+  const [completedArrivalsComplete, setCompletedArrivalsComplete] = useState(false);
+  const [partialArrivalsTotal, setPartialArrivalsTotal] = useState<number | null>(null);
+  const [partialArrivalsComplete, setPartialArrivalsComplete] = useState(false);
+  const [detailArrivalsTotal, setDetailArrivalsTotal] = useState<number | null>(null);
+  const [detailArrivalsComplete, setDetailArrivalsComplete] = useState(false);
   const [editingVehicleId, setEditingVehicleId] = useState<number | string | null>(null);
   const [editLoading, setEditLoading] = useState(false);
   const submitArrivalInFlightRef = useRef(false);
@@ -939,7 +985,7 @@ const ArrivalsPage = () => {
   /** Lot-field focus: tear down visualViewport listeners / timers from prior focus. */
   const lotFieldVVDetachRef = useRef<(() => void) | null>(null);
   /** Merge rapid ensureLastThreeLotsVisible calls (legacy multi-timeout pattern). */
-  const ensureLotsCoalesceTimerRef = useRef<ReturnType<typeof window.setTimeout> | null>(null);
+  const ensureLotsCoalesceTimerRef = useRef<number | null>(null);
   const newArrivalPanelScrollRef = useRef<HTMLDivElement | null>(null);
   /** Mobile sheet: "Sellers & Lots" row — scroll target to tuck arrival hero under sticky header. */
   const arrivalSellersWorkSectionRef = useRef<HTMLDivElement | null>(null);
@@ -1177,7 +1223,7 @@ const ArrivalsPage = () => {
         return;
       }
 
-      let resizeTimer: ReturnType<typeof window.setTimeout> | null = null;
+      let resizeTimer: number | null = null;
       const onVVChange = () => {
         if (resizeTimer != null) window.clearTimeout(resizeTimer);
         resizeTimer = window.setTimeout(() => {
@@ -1225,6 +1271,21 @@ const ArrivalsPage = () => {
   useAutofocusWhen(isStep1PanelOpen && !isMultiSeller, loadedWeightInputRef);
 
   const isArrivalPanelOpen = isDesktop ? desktopTab === 'new-arrival' : showAdd;
+
+  useEffect(() => {
+    if (isDesktop || !showAdd) return;
+
+    const previousBodyOverflow = document.body.style.overflow;
+    const previousHtmlOverflow = document.documentElement.style.overflow;
+    document.body.style.overflow = 'hidden';
+    document.documentElement.style.overflow = 'hidden';
+
+    return () => {
+      document.body.style.overflow = previousBodyOverflow;
+      document.documentElement.style.overflow = previousHtmlOverflow;
+    };
+  }, [isDesktop, showAdd]);
+
   // Detect the "lots flow" context.
   // We hide printer + Net/Billable cards whenever the arrival editor/sheet is open,
   // since the lots-related UI is accessible from there and we can't reliably infer
@@ -1250,6 +1311,75 @@ const ArrivalsPage = () => {
       })),
     }));
   }, []);
+
+  const populateEditFormFromDetail = useCallback((detail: ArrivalFullDetail) => {
+    setVehicleNumber(detail?.vehicleNumber ?? '');
+    setVehicleMarkAlias(sanitizeVehicleMarkAliasInput(detail?.vehicleMarkAlias ?? ''));
+    setLoadedWeight(detail?.loadedWeight != null ? String(detail.loadedWeight) : '');
+    setEmptyWeight(detail?.emptyWeight != null ? String(detail.emptyWeight) : '');
+    setDeductedWeight(detail?.deductedWeight != null ? String(detail.deductedWeight) : '');
+    setFreightMethod((detail?.freightMethod as FreightMethod) ?? 'BY_WEIGHT');
+    setFreightRate(detail?.freightRate != null ? String(detail.freightRate) : '');
+    setFreightKgs(detail?.freightKgs != null ? String(detail.freightKgs) : '1');
+    setNoRental(Boolean(detail?.noRental));
+    setAdvancePaid(detail?.advancePaid != null ? String(detail.advancePaid) : '');
+    setGodown(detail?.godown ?? '');
+    setGatepassNumber(detail?.gatepassNumber ?? '');
+    setOrigin(detail?.origin ?? '');
+    setBrokerName(detail?.brokerName ?? '');
+    setBrokerContactId(detail?.brokerContactId ?? null);
+    setNarration(detail?.narration ?? '');
+    setStep(2);
+
+    const mappedSellers: SellerEntry[] = (detail?.sellers ?? []).map((s, idx) => ({
+      seller_vehicle_id: `edit-${s?.contactId ?? idx}-${idx}`,
+      contact_id: String(s?.contactId ?? ''),
+      seller_serial_number: s?.sellerSerialNumber ?? null,
+      seller_name: s?.sellerName ?? '',
+      seller_phone: s?.sellerPhone ?? '',
+      seller_mark: s?.sellerMark ?? '',
+      lots: (s?.lots ?? []).map((l, lotIdx) => ({
+        lot_id: l?.id != null ? String(l.id) : `lot-${idx}-${lotIdx}`,
+        lot_name: l?.lotName ?? '',
+        lot_serial_number: l?.lotSerialNumber ?? null,
+        quantity: l?.bagCount ?? 0,
+        commodity_name: l?.commodityName ?? '',
+        broker_tag: l?.brokerTag ?? '',
+        variant: l?.variant ?? '',
+      })),
+    }));
+    setSellers(mappedSellers);
+    setSellerExpanded(
+      mappedSellers.reduce<Record<string, boolean>>((acc, s) => {
+        acc[s.seller_vehicle_id] = false;
+        return acc;
+      }, {})
+    );
+    const resolvedMulti = resolveMultiSellerForEdit(detail, mappedSellers.length);
+    setIsMultiSeller(resolvedMulti);
+
+    editBaselineSnapshotRef.current = JSON.stringify({
+      step: 2,
+      isMultiSeller: resolvedMulti,
+      vehicleNumber: detail?.vehicleNumber ?? '',
+      vehicleMarkAlias: detail?.vehicleMarkAlias ?? '',
+      loadedWeight: detail?.loadedWeight != null ? String(detail.loadedWeight) : '',
+      emptyWeight: detail?.emptyWeight != null ? String(detail.emptyWeight) : '',
+      deductedWeight: detail?.deductedWeight != null ? String(detail.deductedWeight) : '',
+      freightMethod: (detail?.freightMethod as FreightMethod) ?? 'BY_WEIGHT',
+      freightRate: detail?.freightRate != null ? String(detail.freightRate) : '',
+      freightKgs: detail?.freightKgs != null ? String(detail.freightKgs) : '1',
+      noRental: Boolean(detail?.noRental),
+      advancePaid: detail?.advancePaid != null ? String(detail.advancePaid) : '',
+      brokerName: detail?.brokerName ?? '',
+      brokerContactId: detail?.brokerContactId ?? null,
+      narration: detail?.narration ?? '',
+      godown: detail?.godown ?? '',
+      gatepassNumber: detail?.gatepassNumber ?? '',
+      origin: detail?.origin ?? '',
+      sellers: serializeSellersForDirty(mappedSellers),
+    });
+  }, [serializeSellersForDirty]);
 
   const formatSellerSerialNumber = useCallback((sellerSerialNumber?: number | null) => {
     if (sellerSerialNumber == null || sellerSerialNumber < 1) return null;
@@ -1285,6 +1415,11 @@ const ArrivalsPage = () => {
         })),
       }));
   }, []);
+
+  const expandedSellerInfoRows = useMemo(
+    () => (expandedDetail ? mapSellerInfoRows(expandedDetail.sellers) : []),
+    [expandedDetail, mapSellerInfoRows],
+  );
 
   const isArrivalDirty = useMemo(() => {
     if (!isArrivalPanelOpen) return false;
@@ -1433,6 +1568,7 @@ const ArrivalsPage = () => {
           partially_completed: true,
           sellers: payload.sellers,
         });
+        arrivalFullDetailCacheRef.current.delete(String(editingVehicleId));
       } else {
         await arrivalsApi.create(buildPartialPayload());
       }
@@ -1443,10 +1579,14 @@ const ArrivalsPage = () => {
       return true;
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to save partial data';
-      if (message.includes('Vehicle mark/alias')) {
+      if (err instanceof ArrivalDeletionBlockedError) {
+        toast.error(message);
+      } else if (message.includes('Vehicle mark/alias')) {
         setVehicleMarkAliasApiError(message);
+        toast.error(message);
+      } else {
+        toast.error(message);
       }
-      toast.error(message);
       return false;
     }
   }, [editingVehicleId, buildPartialPayload, vehicleMarkAlias]);
@@ -1619,7 +1759,7 @@ const ArrivalsPage = () => {
     if (!ln) return false;
     if (ln.length < 2 || ln.length > 50) return true;
     // Lot names are stored and submitted as strings; allow alphanumeric plus common separators.
-    return !/^[a-zA-Z0-9][a-zA-Z0-9\s_\-]*$/.test(ln);
+    return !/^[a-zA-Z0-9][a-zA-Z0-9\s_-]*$/.test(ln);
   };
   const isLotQuantityInvalid = (l: LotEntry) => {
     const q = l.quantity ?? 0;
@@ -1678,11 +1818,23 @@ const ArrivalsPage = () => {
     return false;
   }, [isVehicleNumberInvalid, isVehicleMarkAliasInvalid, isLoadedWeightInvalid, isEmptyWeightInvalid, isDeductedWeightInvalid, isGodownInvalid, isGatepassNumberInvalid, isBrokerNameInvalid, isFreightRateInvalid, isFreightKgsInvalid, isAdvancePaidInvalid, sellers, contacts, lotNameCountsBySellerId, isLotNameDuplicateInvalid, isSellerMarkInvalid]);
 
-  // Summary stats for four cards (mobile-first, same as raghav-style UI)
-  const totalVehicles = useMemo(() => apiArrivals.length, [apiArrivals]);
-  const totalSellers = useMemo(() => apiArrivals.reduce((acc, a) => acc + (a.sellerCount ?? 0), 0), [apiArrivals]);
-  const totalLots = useMemo(() => apiArrivals.reduce((acc, a) => acc + (a.lotCount ?? 0), 0), [apiArrivals]);
-  const totalNetWeightKg = useMemo(() => apiArrivals.reduce((acc, a) => acc + (a.netWeight ?? 0), 0), [apiArrivals]);
+  // Summary stats for four cards (mobile-first, same as raghav-style UI) — completed + partial lists
+  const combinedSummaryRows = useMemo(
+    () => [...apiArrivals, ...partialArrivals],
+    [apiArrivals, partialArrivals]
+  );
+  const totalSellers = useMemo(
+    () => combinedSummaryRows.reduce((acc, a) => acc + (a.sellerCount ?? 0), 0),
+    [combinedSummaryRows]
+  );
+  const totalLots = useMemo(
+    () => combinedSummaryRows.reduce((acc, a) => acc + (a.lotCount ?? 0), 0),
+    [combinedSummaryRows]
+  );
+  const totalNetWeightKg = useMemo(
+    () => combinedSummaryRows.reduce((acc, a) => acc + (a.netWeight ?? 0), 0),
+    [combinedSummaryRows]
+  );
   const totalNetWeightTons = useMemo(() => (totalNetWeightKg > 0 ? totalNetWeightKg / 1000 : 0), [totalNetWeightKg]);
 
   const filteredArrivals = useMemo(() => {
@@ -1690,7 +1842,7 @@ const ArrivalsPage = () => {
       statusFilter === 'PARTIALLY_COMPLETED'
         ? partialArrivals
         : statusFilter === 'ALL'
-          ? [...apiArrivals, ...partialArrivals]
+          ? [...apiArrivals, ...partialArrivals].sort(sortArrivalSummaries)
           : apiArrivals;
     let result = source;
     const q = searchQuery.trim().toLowerCase();
@@ -1732,22 +1884,265 @@ const ArrivalsPage = () => {
         ? partialArrivalsLoading
         : apiArrivalsLoading;
 
+  const allStreamsComplete =
+    completedArrivalsComplete && partialArrivalsComplete && detailArrivalsComplete;
+
+  const summaryVehiclesDisplay = useMemo(() => {
+    const loaded = apiArrivals.length + partialArrivals.length;
+    if (allStreamsComplete) return String(loaded);
+    const sum =
+      completedArrivalsTotal != null && partialArrivalsTotal != null
+        ? completedArrivalsTotal + partialArrivalsTotal
+        : null;
+    if (sum != null) return `${loaded} / ${sum}`;
+    if (loaded > 0) return `${loaded} / —`;
+    return '—';
+  }, [
+    apiArrivals.length,
+    partialArrivals.length,
+    allStreamsComplete,
+    completedArrivalsTotal,
+    partialArrivalsTotal,
+  ]);
+
+  const summaryLotsDisplay = useMemo(() => {
+    if (allStreamsComplete) return String(totalLots);
+    return '—';
+  }, [allStreamsComplete, totalLots]);
+
+  const summarySellersDisplay = useMemo(() => {
+    if (allStreamsComplete) return String(totalSellers);
+    return '—';
+  }, [allStreamsComplete, totalSellers]);
+
+  const summaryWeightDisplay = useMemo(() => {
+    if (allStreamsComplete) return `${totalNetWeightTons.toFixed(1)}t`;
+    return '—';
+  }, [allStreamsComplete, totalNetWeightTons]);
+
+  const mobileArrivalsVirtualizer = useWindowVirtualizer({
+    count: isDesktop ? 0 : filteredArrivals.length,
+    estimateSize: () => 200,
+    overscan: 8,
+    measureElement,
+    getItemKey: index => String(filteredArrivals[index]?.vehicleId ?? index),
+    enabled: !isDesktop && filteredArrivals.length > 0,
+  });
+
+  useEffect(() => {
+    if (!allStreamsComplete || filteredArrivals.length === 0 || showAdd) return;
+    const rows = filteredArrivals.slice(0, 12);
+
+    const prefetchVisibleDetails = async () => {
+      for (const row of rows) {
+        const key = String(row.vehicleId);
+        if (arrivalFullDetailCacheRef.current.has(key) || arrivalFullDetailPrefetchingRef.current.has(key)) continue;
+        arrivalFullDetailPrefetchingRef.current.add(key);
+        try {
+          const detail = await arrivalsApi.getById(row.vehicleId);
+          arrivalFullDetailCacheRef.current.set(key, detail);
+        } catch {
+          // Best-effort warm cache only; visible UI should not be noisy.
+        } finally {
+          arrivalFullDetailPrefetchingRef.current.delete(key);
+        }
+      }
+    };
+
+    const idleWindow = window as Window & {
+      requestIdleCallback?: (cb: IdleRequestCallback, options?: IdleRequestOptions) => number;
+      cancelIdleCallback?: (id: number) => void;
+    };
+    if (idleWindow.requestIdleCallback) {
+      const id = idleWindow.requestIdleCallback(() => {
+        void prefetchVisibleDetails();
+      }, { timeout: 2500 });
+      return () => idleWindow.cancelIdleCallback?.(id);
+    }
+
+    const id = window.setTimeout(() => {
+      void prefetchVisibleDetails();
+    }, 1500);
+    return () => window.clearTimeout(id);
+  }, [allStreamsComplete, filteredArrivals, showAdd]);
+
   const loadArrivalsFromApi = useCallback(async () => {
+    const myGen = ++loadArrivalsGenRef.current;
+    loadArrivalsAbortRef.current?.abort();
+    const ac = new AbortController();
+    loadArrivalsAbortRef.current = ac;
+    const { signal } = ac;
+
+    const applyIfCurrent = (fn: () => void) => {
+      if (loadArrivalsGenRef.current === myGen) fn();
+    };
+
     setApiArrivalsLoading(true);
     setPartialArrivalsLoading(true);
+    setArrivalsStreamingMore(false);
+    setCompletedArrivalsTotal(null);
+    setCompletedArrivalsComplete(false);
+    setPartialArrivalsTotal(null);
+    setPartialArrivalsComplete(false);
+    setDetailArrivalsTotal(null);
+    setDetailArrivalsComplete(false);
+    setApiArrivals([]);
+    setPartialArrivals([]);
+    setArrivalDetails([]);
+
+    const mergeSummaryMap = (map: Map<string, ArrivalSummary>, items: ArrivalSummary[]) => {
+      for (const it of items) map.set(String(it.vehicleId), it);
+    };
+    const mergeDetailMap = (map: Map<string, ArrivalDetail>, items: ArrivalDetail[]) => {
+      for (const it of items) map.set(String(it.vehicleId), it);
+    };
+
+    const runCompletedStream = async () => {
+      const merged = new Map<string, ArrivalSummary>();
+      let page = 0;
+      let reportedTotal = 0;
+      try {
+        for (;;) {
+          const { items, totalElements } = await arrivalsApi.listPage(
+            {
+              page,
+              size: ARRIVALS_PAGE_SIZE,
+              sort: ARRIVAL_LIST_SORT,
+              partiallyCompleted: false,
+            },
+            { signal }
+          );
+          if (signal.aborted || loadArrivalsGenRef.current !== myGen) return;
+
+          if (page === 0) {
+            reportedTotal = totalElements;
+            applyIfCurrent(() => setCompletedArrivalsTotal(totalElements));
+            applyIfCurrent(() => setApiArrivalsLoading(false));
+          } else {
+            applyIfCurrent(() => setArrivalsStreamingMore(true));
+          }
+
+          mergeSummaryMap(merged, items);
+          applyIfCurrent(() => setApiArrivals([...merged.values()].sort(sortArrivalSummaries)));
+
+          const noMore =
+            items.length === 0 ||
+            items.length < ARRIVALS_PAGE_SIZE ||
+            merged.size >= reportedTotal;
+          if (noMore) break;
+          page += 1;
+        }
+        applyIfCurrent(() => setCompletedArrivalsComplete(true));
+      } catch (e) {
+        if (isAbortError(e) || loadArrivalsGenRef.current !== myGen) return;
+        const message = e instanceof Error ? e.message : 'Failed to load arrivals';
+        toast.error(message);
+        applyIfCurrent(() => {
+          setApiArrivals([]);
+          setApiArrivalsLoading(false);
+          setCompletedArrivalsComplete(true);
+        });
+      }
+    };
+
+    const runPartialStream = async () => {
+      const merged = new Map<string, ArrivalSummary>();
+      let page = 0;
+      let reportedTotal = 0;
+      try {
+        for (;;) {
+          const { items, totalElements } = await arrivalsApi.listPage(
+            {
+              page,
+              size: ARRIVALS_PAGE_SIZE,
+              sort: ARRIVAL_LIST_SORT,
+              partiallyCompleted: true,
+            },
+            { signal }
+          );
+          if (signal.aborted || loadArrivalsGenRef.current !== myGen) return;
+
+          if (page === 0) {
+            reportedTotal = totalElements;
+            applyIfCurrent(() => setPartialArrivalsTotal(totalElements));
+            applyIfCurrent(() => setPartialArrivalsLoading(false));
+          } else {
+            applyIfCurrent(() => setArrivalsStreamingMore(true));
+          }
+
+          mergeSummaryMap(merged, items);
+          applyIfCurrent(() => setPartialArrivals([...merged.values()].sort(sortArrivalSummaries)));
+
+          const noMore =
+            items.length === 0 ||
+            items.length < ARRIVALS_PAGE_SIZE ||
+            merged.size >= reportedTotal;
+          if (noMore) break;
+          page += 1;
+        }
+        applyIfCurrent(() => setPartialArrivalsComplete(true));
+      } catch (e) {
+        if (isAbortError(e) || loadArrivalsGenRef.current !== myGen) return;
+        applyIfCurrent(() => {
+          setPartialArrivals([]);
+          setPartialArrivalsLoading(false);
+          setPartialArrivalsComplete(true);
+        });
+      }
+    };
+
+    const runDetailStream = async () => {
+      const merged = new Map<string, ArrivalDetail>();
+      let page = 0;
+      let reportedTotal = 0;
+      try {
+        for (;;) {
+          const { items, totalElements } = await arrivalsApi.listDetailPage(
+            {
+              page,
+              size: ARRIVALS_PAGE_SIZE,
+              sort: ARRIVAL_LIST_SORT,
+            },
+            { signal }
+          );
+          if (signal.aborted || loadArrivalsGenRef.current !== myGen) return;
+
+          if (page === 0) {
+            reportedTotal = totalElements;
+            applyIfCurrent(() => setDetailArrivalsTotal(totalElements));
+          } else {
+            applyIfCurrent(() => setArrivalsStreamingMore(true));
+          }
+
+          mergeDetailMap(merged, items);
+          applyIfCurrent(() => setArrivalDetails([...merged.values()].sort(sortArrivalDetails)));
+
+          const noMore =
+            items.length === 0 ||
+            items.length < ARRIVALS_PAGE_SIZE ||
+            merged.size >= reportedTotal;
+          if (noMore) break;
+          page += 1;
+        }
+        applyIfCurrent(() => setDetailArrivalsComplete(true));
+      } catch (e) {
+        if (isAbortError(e) || loadArrivalsGenRef.current !== myGen) return;
+        applyIfCurrent(() => {
+          setArrivalDetails([]);
+          setDetailArrivalsComplete(true);
+        });
+      }
+    };
+
     try {
-      // Always load full arrivals list so summary counts stay stable across filter changes.
-      const list = await arrivalsApi.list(0, 100, undefined, false);
-      setApiArrivals(list);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to load arrivals';
-      toast.error(message);
-      setApiArrivals([]);
+      await Promise.all([runCompletedStream(), runPartialStream(), runDetailStream()]);
     } finally {
-      setApiArrivalsLoading(false);
+      applyIfCurrent(() => {
+        setArrivalsStreamingMore(false);
+        setApiArrivalsLoading(false);
+        setPartialArrivalsLoading(false);
+      });
     }
-    arrivalsApi.list(0, 100, undefined, true).then(setPartialArrivals).catch(() => setPartialArrivals([])).finally(() => setPartialArrivalsLoading(false));
-    arrivalsApi.listDetail(0, 500).then(setArrivalDetails).catch(() => setArrivalDetails([]));
   }, []);
 
   const loadContactsFromApi = useCallback(async () => {
@@ -1768,6 +2163,10 @@ const ArrivalsPage = () => {
   useEffect(() => {
     loadArrivalsFromApi();
   }, [loadArrivalsFromApi]);
+
+  useEffect(() => {
+    return () => loadArrivalsAbortRef.current?.abort();
+  }, []);
 
   // Close broker dropdown on scroll or resize (same: close when any scroll happens so it doesn't stay stuck)
   useEffect(() => {
@@ -2264,8 +2663,10 @@ const ArrivalsPage = () => {
     const warnings: string[] = [];
     sellers.forEach(seller => {
       seller.lots.forEach(lot => {
-        const comm = commodities.find((cm: any) => cm.commodity_name === lot.commodity_name);
-        const fullCfg = comm ? commodityConfigs.find((c: any) => String(c.commodityId) === String(comm.commodity_id)) : null;
+        const comm = commodities.find(cm => cm.commodity_name === lot.commodity_name);
+        const fullCfg = comm
+          ? commodityConfigs.find(c => String(c.commodityId ?? c.commodity_id) === String(comm.commodity_id))
+          : null;
         const cfg = fullCfg?.config;
         if (cfg && cfg.minWeight > 0 && cfg.maxWeight > 0) {
           if (lot.quantity < cfg.minWeight / 50 || lot.quantity > cfg.maxWeight / 10) {
@@ -2373,6 +2774,7 @@ const ArrivalsPage = () => {
     setExpandedDetailLoading(true);
     try {
       const detail = await arrivalsApi.getById(vehicleId);
+      arrivalFullDetailCacheRef.current.set(String(vehicleId), detail);
       setExpandedDetail(detail);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to load detail');
@@ -2389,15 +2791,25 @@ const ArrivalsPage = () => {
     }
     try {
       await arrivalsApi.delete(vehicleId);
+      arrivalFullDetailCacheRef.current.delete(String(vehicleId));
       setExpandedDetail(null);
       await loadArrivalsFromApi();
       toast.success('Arrival deleted');
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to delete arrival');
+      if (err instanceof ArrivalDeletionBlockedError) {
+        toast.error(err.message);
+      } else {
+        toast.error(err instanceof Error ? err.message : 'Failed to delete arrival');
+      }
     }
   };
 
   const handleEditArrival = async (a: Pick<ArrivalSummary, 'vehicleId'>) => {
+    const key = String(a.vehicleId);
+    const cachedDetail = sameArrivalVehicleId(expandedDetail?.vehicleId, a.vehicleId)
+      ? expandedDetail
+      : arrivalFullDetailCacheRef.current.get(key);
+
     setActiveSellerSearch(null);
     setSellerDropdown(false);
     setAddLotForm(null);
@@ -2406,77 +2818,19 @@ const ArrivalsPage = () => {
     editBaselineSnapshotRef.current = null;
     setShowAdd(true);
     setExpandedDetail(null);
-    setEditLoading(true);
     if (isDesktop) setDesktopTab('new-arrival');
+
+    if (cachedDetail) {
+      setEditLoading(false);
+      populateEditFormFromDetail(cachedDetail);
+      return;
+    }
+
+    setEditLoading(true);
     try {
       const detail = await arrivalsApi.getById(a.vehicleId);
-      setVehicleNumber(detail?.vehicleNumber ?? '');
-      setVehicleMarkAlias(sanitizeVehicleMarkAliasInput(detail?.vehicleMarkAlias ?? ''));
-      setLoadedWeight(detail?.loadedWeight != null ? String(detail.loadedWeight) : '');
-      setEmptyWeight(detail?.emptyWeight != null ? String(detail.emptyWeight) : '');
-      setDeductedWeight(detail?.deductedWeight != null ? String(detail.deductedWeight) : '');
-      setFreightMethod((detail?.freightMethod as FreightMethod) ?? 'BY_WEIGHT');
-      setFreightRate(detail?.freightRate != null ? String(detail.freightRate) : '');
-      setFreightKgs(detail?.freightKgs != null ? String(detail.freightKgs) : '1');
-      setNoRental(Boolean(detail?.noRental));
-      setAdvancePaid(detail?.advancePaid != null ? String(detail.advancePaid) : '');
-      setGodown(detail?.godown ?? '');
-      setGatepassNumber(detail?.gatepassNumber ?? '');
-      setOrigin(detail?.origin ?? '');
-      setBrokerName(detail?.brokerName ?? '');
-      setBrokerContactId(detail?.brokerContactId ?? null);
-      setNarration(detail?.narration ?? '');
-      setStep(2);
-      const mappedSellers: SellerEntry[] = (detail?.sellers ?? []).map((s, idx) => ({
-        seller_vehicle_id: `edit-${s?.contactId ?? idx}-${idx}`,
-        contact_id: String(s?.contactId ?? ''),
-        seller_serial_number: s?.sellerSerialNumber ?? null,
-        seller_name: s?.sellerName ?? '',
-        seller_phone: s?.sellerPhone ?? '',
-        seller_mark: s?.sellerMark ?? '',
-        lots: (s?.lots ?? []).map((l, lotIdx) => ({
-          lot_id: l?.id != null ? String(l.id) : `lot-${idx}-${lotIdx}`,
-          lot_name: l?.lotName ?? '',
-          lot_serial_number: l?.lotSerialNumber ?? null,
-          quantity: l?.bagCount ?? 0,
-          commodity_name: l?.commodityName ?? '',
-          broker_tag: l?.brokerTag ?? '',
-          variant: l?.variant ?? '',
-        })),
-      }));
-      setSellers(mappedSellers);
-      setSellerExpanded(
-        mappedSellers.reduce<Record<string, boolean>>((acc, s) => {
-          acc[s.seller_vehicle_id] = false; // keep seller cards collapsed on edit open
-          return acc;
-        }, {})
-      );
-      const resolvedMulti = resolveMultiSellerForEdit(detail, mappedSellers.length);
-      setIsMultiSeller(resolvedMulti);
-
-      // Capture baseline immediately after we populate all edit fields,
-      // so dirty detection works reliably even with invalid data.
-      editBaselineSnapshotRef.current = JSON.stringify({
-        step: 2,
-        isMultiSeller: resolvedMulti,
-        vehicleNumber: detail?.vehicleNumber ?? '',
-        vehicleMarkAlias: detail?.vehicleMarkAlias ?? '',
-        loadedWeight: detail?.loadedWeight != null ? String(detail.loadedWeight) : '',
-        emptyWeight: detail?.emptyWeight != null ? String(detail.emptyWeight) : '',
-        deductedWeight: detail?.deductedWeight != null ? String(detail.deductedWeight) : '',
-        freightMethod: (detail?.freightMethod as FreightMethod) ?? 'BY_WEIGHT',
-        freightRate: detail?.freightRate != null ? String(detail.freightRate) : '',
-        freightKgs: detail?.freightKgs != null ? String(detail.freightKgs) : '1',
-        noRental: Boolean(detail?.noRental),
-        advancePaid: detail?.advancePaid != null ? String(detail.advancePaid) : '',
-        brokerName: detail?.brokerName ?? '',
-        brokerContactId: detail?.brokerContactId ?? null,
-        narration: detail?.narration ?? '',
-        godown: detail?.godown ?? '',
-        gatepassNumber: detail?.gatepassNumber ?? '',
-        origin: detail?.origin ?? '',
-        sellers: serializeSellersForDirty(mappedSellers),
-      });
+      arrivalFullDetailCacheRef.current.set(key, detail);
+      populateEditFormFromDetail(detail);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to load arrival for edit');
       setEditingVehicleId(null);
@@ -2543,6 +2897,7 @@ const ArrivalsPage = () => {
           };
         }) : undefined,
       });
+      arrivalFullDetailCacheRef.current.delete(String(editingVehicleId));
       await loadArrivalsFromApi();
       await loadContactsFromApi();
       setEditingVehicleId(null);
@@ -2552,10 +2907,14 @@ const ArrivalsPage = () => {
       toast.success('Arrival updated');
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to update arrival';
-      if (message.includes('Vehicle mark/alias')) {
+      if (err instanceof ArrivalDeletionBlockedError) {
+        toast.error(message);
+      } else if (message.includes('Vehicle mark/alias')) {
         setVehicleMarkAliasApiError(message);
+        toast.error(message);
+      } else {
+        toast.error(message);
       }
-      toast.error(message);
     }
   };
 
@@ -2587,7 +2946,7 @@ const ArrivalsPage = () => {
                 </button>
                 <div>
                   <h1 className="text-xl font-bold text-white">Arrivals</h1>
-                  <p className="text-white/70 text-xs">{apiArrivalsLoading ? '…' : apiArrivals.reduce((s, a) => s + a.lotCount, 0)} lots · Inward Logistics</p>
+                  <p className="text-white/70 text-xs">{activeArrivalsLoading ? '…' : totalLots} lots · Inward Logistics</p>
                 </div>
               </div>
               <button onClick={() => { resetForm(); setShowAdd(true); }} className="w-10 h-10 rounded-full bg-white/20 backdrop-blur flex items-center justify-center">
@@ -2629,7 +2988,7 @@ const ArrivalsPage = () => {
               Arrivals
             </h2>
             <p className="text-sm text-muted-foreground mt-0.5">
-              {apiArrivalsLoading ? '…' : apiArrivals.reduce((sum, item) => sum + item.sellerCount, 0)} sellers · Inward logistics & seller lot intake
+              {activeArrivalsLoading ? '…' : totalSellers} sellers · Inward logistics & seller lot intake
             </p>
           </div>
 
@@ -2645,7 +3004,7 @@ const ArrivalsPage = () => {
               <Truck className="w-4 h-4" />
               Summary
               <span className={arrivalsTabCountPill(desktopTab === 'summary')}>
-                {apiArrivalsLoading ? '…' : apiArrivals.length}
+                {activeArrivalsLoading ? '…' : summaryVehiclesDisplay}
               </span>
             </button>
             <button
@@ -2675,7 +3034,7 @@ const ArrivalsPage = () => {
                           <Truck className="w-5 h-5 text-white" />
                         </div>
                         <div>
-                          <p className="text-xl font-bold text-foreground leading-tight">{totalVehicles}</p>
+                          <p className="text-xl font-bold text-foreground leading-tight">{summaryVehiclesDisplay}</p>
                           <p className="text-[11px] font-medium text-muted-foreground">Total Vehicles</p>
                         </div>
                       </div>
@@ -2684,7 +3043,7 @@ const ArrivalsPage = () => {
                           <Users className="w-5 h-5 text-white" />
                         </div>
                         <div>
-                          <p className="text-xl font-bold text-foreground leading-tight">{totalSellers}</p>
+                          <p className="text-xl font-bold text-foreground leading-tight">{summarySellersDisplay}</p>
                           <p className="text-[11px] font-medium text-muted-foreground">Total Sellers</p>
                         </div>
                       </div>
@@ -2693,7 +3052,7 @@ const ArrivalsPage = () => {
                           <Package className="w-5 h-5 text-white" />
                         </div>
                         <div>
-                          <p className="text-xl font-bold text-foreground leading-tight">{totalLots}</p>
+                          <p className="text-xl font-bold text-foreground leading-tight">{summaryLotsDisplay}</p>
                           <p className="text-[11px] font-medium text-muted-foreground">Total Lots</p>
                         </div>
                       </div>
@@ -2702,7 +3061,7 @@ const ArrivalsPage = () => {
                           <Scale className="w-5 h-5 text-white" />
                         </div>
                         <div>
-                          <p className="text-xl font-bold text-foreground leading-tight">{totalNetWeightTons.toFixed(1)}t</p>
+                          <p className="text-xl font-bold text-foreground leading-tight">{summaryWeightDisplay}</p>
                           <p className="text-[11px] font-medium text-muted-foreground">Total Weight</p>
                         </div>
                       </div>
@@ -2768,6 +3127,7 @@ const ArrivalsPage = () => {
                           </div>
                         )
                       ) : (
+                    <>
                     <div className="glass-card rounded-2xl overflow-x-auto max-w-full [-webkit-overflow-scrolling:touch] touch-[pan-x_pan-y] lg:touch-auto">
                       <table className="w-full min-w-[62rem] text-sm border-separate border-spacing-0">
                         <thead className={cn(ARRIVALS_TABLE_HEADER_GRADIENT, 'shadow-md')}>
@@ -2849,7 +3209,7 @@ const ArrivalsPage = () => {
                                             </div>
                                             <div className="space-y-3">
                                               <SellerInfoCard
-                                                sellers={mapSellerInfoRows(expandedDetail.sellers)}
+                                                sellers={expandedSellerInfoRows}
                                                 hidePrint
                                                 onRefresh={() => loadExpandedDetail(expandedDetail.vehicleId)}
                                               />
@@ -2865,7 +3225,23 @@ const ArrivalsPage = () => {
                                                   </Button>
                                                 )}
                                                 {can('Arrivals', 'Delete') && (
-                                                  <Button type="button" variant="destructive" size="sm" onClick={e => { e.stopPropagation(); setPendingDelete({ kind: 'arrival', vehicleId: expandedDetail.vehicleId, label: expandedDetail.vehicleNumber }); }}><Trash2 className="w-3.5 h-3.5 mr-1" /> Delete</Button>
+                                                  <Button
+                                                    type="button"
+                                                    variant="destructive"
+                                                    size="sm"
+                                                    disabled={(expandedDetail.deleteBlockers?.length ?? 0) > 0}
+                                                    title={
+                                                      (expandedDetail.deleteBlockers?.length ?? 0) > 0
+                                                        ? `Cannot delete: ${formatArrivalDeletionBlockerCodes(expandedDetail.deleteBlockers ?? [])}`
+                                                        : undefined
+                                                    }
+                                                    onClick={e => {
+                                                      e.stopPropagation();
+                                                      setPendingDelete({ kind: 'arrival', vehicleId: expandedDetail.vehicleId, label: expandedDetail.vehicleNumber });
+                                                    }}
+                                                  >
+                                                    <Trash2 className="w-3.5 h-3.5 mr-1" /> Delete
+                                                  </Button>
                                                 )}
                                               </div>
                                             </div>
@@ -2881,93 +3257,13 @@ const ArrivalsPage = () => {
                         </tbody>
                       </table>
                     </div>
+                    {!allStreamsComplete && (
+                      <p className="py-2 text-center text-xs text-muted-foreground">
+                        {arrivalsStreamingMore ? 'Loading more…' : 'Finishing…'}
+                      </p>
+                    )}
+                    </>
                       )
-                    )}
-                    {false && (
-                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-                        {filteredArrivals.flatMap(a => {
-                          const detail = arrivalDetails.find(d => String(d.vehicleId) === String(a.vehicleId));
-                          if (!detail?.sellers?.length) {
-                            return [{ sellerName: '-', origin: '-', lotCount: a.lotCount ?? 0, lots: [] as { id: number; lotName: string }[], vehicleNumber: a.vehicleNumber, key: `seller-${a.vehicleId}-0` }];
-                          }
-                          return detail.sellers.map((s, si) => ({
-                            sellerName: s.sellerName || '-',
-                            origin: '-',
-                            lotCount: s.lots?.length ?? 0,
-                            lots: s.lots ?? [],
-                            vehicleNumber: a.vehicleNumber,
-                            key: `seller-${a.vehicleId}-${si}`,
-                          }));
-                        }).map((item, mapIndex) => {
-                          const bgColors = ['bg-[#6075FF]', 'bg-[#00c98b]', 'bg-amber-500', 'bg-rose-500', 'bg-violet-500'];
-                          const bgClass = bgColors[mapIndex % bgColors.length];
-                          return (
-                            <motion.div key={item.key} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: mapIndex * 0.03 }} className="bg-white dark:bg-card rounded-[24px] shadow-sm border border-border/40 p-4">
-                              <div className="flex items-start gap-3.5">
-                                <div className={cn('w-[42px] h-[42px] rounded-xl flex items-center justify-center text-white font-bold text-[17px] shrink-0', bgClass)}>{item.sellerName.charAt(0).toUpperCase()}</div>
-                                <div className="flex-1 min-w-0 pt-0.5">
-                                  <h4 className="text-[14px] font-semibold text-foreground mb-1 leading-none">{item.sellerName}</h4>
-                                  <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[10px] text-muted-foreground mb-3 font-medium">
-                                    <span className="flex items-center gap-0.5"><MapPin className="w-2.5 h-2.5" /> {item.origin}</span>
-                                    <span className="text-muted-foreground/40">{item.lotCount} lot(s)</span>
-                                    <span className="w-0.5 h-0.5 rounded-full bg-muted-foreground/30" />
-                                    <span className="text-muted-foreground/60">{item.vehicleNumber}</span>
-                                  </div>
-                                  {item.lots.length > 0 && (
-                                    <div className="bg-zinc-50 dark:bg-zinc-800/50 rounded-[10px] px-2.5 py-1.5 flex items-center gap-2 text-[10px]">
-                                      <Package className="w-3 h-3 text-muted-foreground/70" />
-                                      <span className="font-semibold text-foreground">{item.lots[0].lotName || 'Unnamed'}</span>
-                                      {item.lots.length > 1 && <span className="text-muted-foreground/40 font-medium">+{item.lots.length - 1} more</span>}
-                                    </div>
-                                  )}
-                                </div>
-                              </div>
-                            </motion.div>
-                          );
-                        })}
-                      </div>
-                    )}
-                    {false && (
-                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-                        {filteredArrivals.flatMap(a => {
-                          const detail = arrivalDetails.find(d => String(d.vehicleId) === String(a.vehicleId));
-                          if (!detail?.sellers) return [];
-                          return detail.sellers.flatMap(seller =>
-                            (seller.lots ?? []).map(lot => ({
-                              lotId: lot.id,
-                              lotName: lot.lotName || 'Unnamed',
-                              sellerName: seller.sellerName || '-',
-                              vehicleNumber: a.vehicleNumber,
-                              key: `lot-${a.vehicleId}-${lot.id}`,
-                            }))
-                          );
-                        }).map(item => (
-                          <motion.div key={item.key} initial={{ opacity: 0, scale: 0.98 }} animate={{ opacity: 1, scale: 1 }} transition={{ delay: 0.03 }} className="bg-white dark:bg-card rounded-[24px] shadow-sm border border-border/40 p-4 hover:shadow-md transition-all">
-                            <div className="flex items-start justify-between">
-                              <div className="flex items-start gap-3">
-                                <div className="w-[42px] h-[42px] rounded-xl bg-[#6075FF] flex items-center justify-center shrink-0">
-                                  <Package className="w-5 h-5 text-white" />
-                                </div>
-                                <div>
-                                  <div className="flex items-center gap-2 mb-1">
-                                    <h4 className="text-[14px] font-semibold text-foreground leading-none">{item.lotName}</h4>
-                                    <span className="text-[10px] text-muted-foreground/60 font-medium">#{item.lotId}</span>
-                                  </div>
-                                  <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground font-medium">
-                                    <span>{item.sellerName}</span>
-                                    <span className="w-0.5 h-0.5 rounded-full bg-muted-foreground/30" />
-                                    <span>{item.vehicleNumber}</span>
-                                  </div>
-                                </div>
-                              </div>
-                              <button type="button" onClick={() => { const text = `Lot: ${item.lotName}\nSeller: ${item.sellerName}\nVehicle: ${item.vehicleNumber}`; navigator.clipboard?.writeText(text).then(() => toast.success('Copied to clipboard')); }} className="p-1 hover:text-foreground text-muted-foreground transition-colors"><Share2 className="w-3.5 h-3.5" /></button>
-                            </div>
-                            <div className="mt-4">
-                              <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-[#eef0ff] dark:bg-[#6075FF]/20 text-[#6075FF] text-[10px] font-bold">{item.vehicleNumber}</span>
-                            </div>
-                          </motion.div>
-                        ))}
-                      </div>
                     )}
                   </>
                 )}
@@ -3448,7 +3744,7 @@ const ArrivalsPage = () => {
                                       className={cn("h-10 sm:h-9 w-full rounded-lg bg-background border border-input text-sm px-2 focus:outline-none focus:ring-0 focus:border-primary focus:shadow-[0_0_0_2px_hsl(var(--ring)/0.25)]", addLotForm.errors.commodity && "border-red-500 ring-2 ring-red-500/30")}
                                     >
                                       <option value="" disabled>Select Commodity</option>
-                                      {commodities.map((c: any) => (
+                                      {commodities.map(c => (
                                         <option key={c.commodity_id} value={c.commodity_name}>{c.commodity_name}</option>
                                       ))}
                                     </select>
@@ -3641,7 +3937,7 @@ const ArrivalsPage = () => {
       {!isDesktop && (
         <>
           {/* Four summary cards — raghav style: blue icon on all, white card */}
-          {!apiArrivalsLoading && apiArrivals.length > 0 && (
+          {!activeArrivalsLoading && (apiArrivals.length > 0 || partialArrivals.length > 0) && (
             <div className="px-4 mb-4">
               <div className="grid grid-cols-2 gap-2">
                 <div className="bg-white dark:bg-card border border-border/40 shadow-sm rounded-2xl p-3 flex items-center gap-3">
@@ -3649,7 +3945,7 @@ const ArrivalsPage = () => {
                     <Truck className="w-5 h-5 text-white" />
                   </div>
                   <div className="min-w-0">
-                    <p className="text-lg font-bold text-foreground leading-tight">{totalVehicles}</p>
+                    <p className="text-lg font-bold text-foreground leading-tight">{summaryVehiclesDisplay}</p>
                     <p className="text-[11px] font-medium text-muted-foreground">Total Vehicles</p>
                   </div>
                 </div>
@@ -3658,7 +3954,7 @@ const ArrivalsPage = () => {
                     <Users className="w-5 h-5 text-white" />
                   </div>
                   <div className="min-w-0">
-                    <p className="text-lg font-bold text-foreground leading-tight">{totalSellers}</p>
+                    <p className="text-lg font-bold text-foreground leading-tight">{summarySellersDisplay}</p>
                     <p className="text-[11px] font-medium text-muted-foreground">Total Sellers</p>
                   </div>
                 </div>
@@ -3667,7 +3963,7 @@ const ArrivalsPage = () => {
                     <Package className="w-5 h-5 text-white" />
                   </div>
                   <div className="min-w-0">
-                    <p className="text-lg font-bold text-foreground leading-tight">{totalLots}</p>
+                    <p className="text-lg font-bold text-foreground leading-tight">{summaryLotsDisplay}</p>
                     <p className="text-[11px] font-medium text-muted-foreground">Total Lots</p>
                   </div>
                 </div>
@@ -3676,7 +3972,7 @@ const ArrivalsPage = () => {
                     <Scale className="w-5 h-5 text-white" />
                   </div>
                   <div className="min-w-0">
-                    <p className="text-lg font-bold text-foreground leading-tight">{totalNetWeightTons.toFixed(1)}t</p>
+                    <p className="text-lg font-bold text-foreground leading-tight">{summaryWeightDisplay}</p>
                     <p className="text-[11px] font-medium text-muted-foreground">Total Weight</p>
                   </div>
                 </div>
@@ -3716,7 +4012,7 @@ const ArrivalsPage = () => {
               </div>
             )}
           </div>
-          <div className="px-4 space-y-2.5 md:space-y-1.5 md:px-6">
+          <div className="px-4 space-y-2.5 md:px-6">
             {activeArrivalsLoading ? (
               <div className="glass-card p-8 rounded-2xl text-center">
                 <p className="text-muted-foreground">Loading arrivals…</p>
@@ -3746,71 +4042,33 @@ const ArrivalsPage = () => {
                 </Button>
               </motion.div>
               )
-            ) : false ? (
-              <div className="grid grid-cols-1 gap-3">
-                {filteredArrivals.flatMap(a => {
-                  const detail = arrivalDetails.find(d => String(d.vehicleId) === String(a.vehicleId));
-                  if (!detail?.sellers?.length) return [{ sellerName: '-', lotCount: a.lotCount ?? 0, lots: [] as { id: number; lotName: string }[], vehicleNumber: a.vehicleNumber, key: `ms-${a.vehicleId}-0` }];
-                  return detail.sellers.map((s, si) => ({ sellerName: s.sellerName || '-', lotCount: s.lots?.length ?? 0, lots: s.lots ?? [], vehicleNumber: a.vehicleNumber, key: `ms-${a.vehicleId}-${si}` }));
-                }).map((item, i) => (
-                  <motion.div key={item.key} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.03 }} className="bg-white dark:bg-card rounded-2xl border border-border/40 shadow-sm p-4">
-                    <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-xl bg-[#6075FF] flex items-center justify-center text-white font-bold shrink-0">{item.sellerName.charAt(0).toUpperCase()}</div>
-                      <div className="min-w-0 flex-1">
-                        <p className="text-sm font-semibold text-foreground">{item.sellerName}</p>
-                        <p className="text-xs text-muted-foreground">{item.lotCount} lot(s) · {item.vehicleNumber}</p>
-                        {item.lots[0] && <p className="text-[10px] text-muted-foreground/80 mt-0.5">{item.lots[0].lotName}{item.lots.length > 1 ? ` +${item.lots.length - 1} more` : ''}</p>}
-                      </div>
-                    </div>
-                  </motion.div>
-                ))}
-              </div>
-            ) : false ? (
-              <div className="grid grid-cols-1 gap-3">
-                {filteredArrivals.flatMap(a => {
-                  const detail = arrivalDetails.find(d => String(d.vehicleId) === String(a.vehicleId));
-                  if (!detail?.sellers) return [];
-                  return detail.sellers.flatMap(s => (s.lots ?? []).map(lot => ({ lotId: lot.id, lotName: lot.lotName || 'Unnamed', sellerName: s.sellerName || '-', vehicleNumber: a.vehicleNumber, key: `ml-${a.vehicleId}-${lot.id}` })));
-                }).map((item, i) => (
-                  <motion.div key={item.key} initial={{ opacity: 0, scale: 0.98 }} animate={{ opacity: 1, scale: 1 }} transition={{ delay: i * 0.03 }} className="bg-white dark:bg-card rounded-2xl border border-border/40 shadow-sm p-4">
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="flex items-center gap-3 min-w-0">
-                        <div className="w-10 h-10 rounded-xl bg-[#6075FF] flex items-center justify-center shrink-0"><Package className="w-5 h-5 text-white" /></div>
-                        <div className="min-w-0">
-                          <p className="text-sm font-semibold text-foreground">{item.lotName}</p>
-                          <p className="text-xs text-muted-foreground">{item.sellerName} · {item.vehicleNumber}</p>
-                        </div>
-                      </div>
-                      <button type="button" onClick={() => { navigator.clipboard?.writeText(`Lot: ${item.lotName}\nSeller: ${item.sellerName}\nVehicle: ${item.vehicleNumber}`).then(() => toast.success('Copied')); }} className="p-2 rounded-lg hover:bg-muted/50 text-muted-foreground"><Share2 className="w-4 h-4" /></button>
-                    </div>
-                    <span className="inline-flex mt-2 px-2 py-0.5 rounded-full bg-[#eef0ff] dark:bg-[#6075FF]/20 text-[#6075FF] text-[10px] font-bold">{item.vehicleNumber}</span>
-                  </motion.div>
-                ))}
-              </div>
-            ) : (() => {
-              if (filteredArrivals.length === 0) {
-                return (
-                  <div className="glass-card p-6 rounded-2xl text-center">
-                    <Filter className="w-8 h-8 text-muted-foreground/30 mx-auto mb-2" />
-                    <p className="text-sm text-muted-foreground">No arrivals match your filter</p>
-                  </div>
-                );
-              }
-              return filteredArrivals.map((a, i) => {
-                const status = getArrivalStatus(a);
-                const isExpanded = sameArrivalVehicleId(expandedDetail?.vehicleId, a.vehicleId);
-                const godownLabel = a.godown?.trim();
-                const showMobileArrivalActions = can('Arrivals', 'Edit') || can('Arrivals', 'Delete');
-                return (
-                  <motion.div key={a.vehicleId + '-' + i} initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: i * 0.04 }}>
-                    <div className="glass-card max-w-full overflow-x-hidden overflow-y-visible rounded-2xl md:rounded-xl md:shadow-sm md:max-w-4xl md:mx-auto">
+            ) : (
+              <>
+                <div className="relative w-full" style={{ height: mobileArrivalsVirtualizer.getTotalSize() }}>
+                  {mobileArrivalsVirtualizer.getVirtualItems().map(vi => {
+                    const a = filteredArrivals[vi.index];
+                    if (!a) return null;
+                    const status = getArrivalStatus(a);
+                    const isExpanded = sameArrivalVehicleId(expandedDetail?.vehicleId, a.vehicleId);
+                    const godownLabel = a.godown?.trim();
+                    const showMobileArrivalActions = can('Arrivals', 'Edit') || can('Arrivals', 'Delete');
+                    return (
+                      <div
+                        key={vi.key}
+                        data-index={vi.index}
+                        ref={mobileArrivalsVirtualizer.measureElement}
+                        className="absolute left-0 top-0 w-full pb-2.5"
+                        style={{ transform: `translateY(${vi.start}px)` }}
+                      >
+                        <motion.div initial={false}>
+                          <div className="glass-card max-w-full overflow-x-hidden overflow-y-visible rounded-2xl md:max-w-4xl md:mx-auto">
                       <button
                         type="button"
                         onClick={() => loadExpandedDetail(a.vehicleId)}
-                        className="flex w-full min-w-0 touch-manipulation items-start gap-3 p-3.5 text-left md:items-center md:gap-2 md:p-2.5 md:pr-2"
+                        className="flex w-full min-w-0 touch-manipulation items-start gap-3 p-3.5 text-left"
                       >
-                        {/* Phone: stacked card (unchanged below md) */}
-                        <div className="min-w-0 flex-1 space-y-2 md:hidden">
+                        {/* Non-desktop: stacked card. Desktop uses the table above. */}
+                        <div className="min-w-0 flex-1 space-y-2">
                           <ArrivalSummaryVehicleSellerQty
                             layout="stack"
                             vehicleNumber={a.vehicleNumber}
@@ -3853,7 +4111,7 @@ const ArrivalsPage = () => {
                             </span>
                           </div>
                         </div>
-                        <div className="flex shrink-0 flex-col items-end gap-1 self-start pt-0.5 md:hidden">
+                        <div className="flex shrink-0 flex-col items-end gap-1 self-start pt-0.5">
                           <span className="whitespace-nowrap text-xs text-muted-foreground">
                             {new Date(a.arrivalDatetime).toLocaleDateString()}
                           </span>
@@ -3869,8 +4127,8 @@ const ArrivalsPage = () => {
                           </span>
                         </div>
 
-                        {/* Tablet (md–lg): single dense row — hidden at lg+ where desktop table is used */}
-                        <div className="hidden w-full min-w-0 items-center gap-2 md:flex">
+                        {/* Reserved for desktop-only alternatives; non-desktop keeps the readable stacked card. */}
+                        <div className="hidden w-full min-w-0 items-center gap-2 lg:flex">
                           <div className="min-w-0 flex-1 overflow-x-auto [-webkit-overflow-scrolling:touch]">
                             <ArrivalSummaryVehicleSellerQty
                               layout="inline"
@@ -3923,7 +4181,7 @@ const ArrivalsPage = () => {
                         </div>
                       </button>
                       {showMobileArrivalActions && !isExpanded && (
-                        <div className="flex w-full gap-2 border-t border-border/30 px-3 py-2.5 md:px-2.5 md:py-2">
+                        <div className="flex w-full gap-2 border-t border-border/30 px-3 py-2.5">
                           {can('Arrivals', 'Edit') && (
                             <button
                               type="button"
@@ -3964,7 +4222,7 @@ const ArrivalsPage = () => {
                                 <>
                                   <FreightDetailsCard freightRate={expandedDetail.freightRate ?? 0} freightKgs={expandedDetail.freightKgs} netWeight={expandedDetail.netWeight ?? 0} freightMethod={expandedDetail.freightMethod ?? 'BY_WEIGHT'} freightTotal={expandedDetail.freightTotal ?? 0} advancePaid={expandedDetail.advancePaid ?? 0} noRental={expandedDetail.noRental ?? false} />
                                   <SellerInfoCard
-                                    sellers={mapSellerInfoRows(expandedDetail.sellers)}
+                                    sellers={expandedSellerInfoRows}
                                     hidePrint
                                   />
                                   {showMobileArrivalActions && (
@@ -3984,6 +4242,12 @@ const ArrivalsPage = () => {
                                       {can('Arrivals', 'Delete') && (
                                         <button
                                           type="button"
+                                          disabled={(expandedDetail.deleteBlockers?.length ?? 0) > 0}
+                                          title={
+                                            (expandedDetail.deleteBlockers?.length ?? 0) > 0
+                                              ? `Cannot delete: ${formatArrivalDeletionBlockerCodes(expandedDetail.deleteBlockers ?? [])}`
+                                              : undefined
+                                          }
                                           onClick={e => {
                                             e.stopPropagation();
                                             setPendingDelete({
@@ -3992,7 +4256,7 @@ const ArrivalsPage = () => {
                                               label: expandedDetail.vehicleNumber ?? a.vehicleNumber,
                                             });
                                           }}
-                                          className="inline-flex min-h-[44px] min-w-0 flex-1 touch-manipulation items-center justify-center gap-1.5 rounded-xl bg-red-50 px-2 text-xs font-semibold text-red-600 dark:bg-red-950/20"
+                                          className="inline-flex min-h-[44px] min-w-0 flex-1 touch-manipulation items-center justify-center gap-1.5 rounded-xl bg-red-50 px-2 text-xs font-semibold text-red-600 dark:bg-red-950/20 disabled:pointer-events-none disabled:opacity-50"
                                         >
                                           <Trash2 className="h-4 w-4 shrink-0" /> Delete
                                         </button>
@@ -4006,38 +4270,39 @@ const ArrivalsPage = () => {
                         )}
                       </AnimatePresence>
                     </div>
-                  </motion.div>
-                );
-              });
-            })()}
+                        </motion.div>
+                      </div>
+                    );
+                  })}
+                </div>
+                {!allStreamsComplete && (
+                  <p className="py-2 text-center text-xs text-muted-foreground">
+                    {arrivalsStreamingMore ? 'Loading more…' : 'Finishing…'}
+                    {!detailArrivalsComplete && detailArrivalsTotal != null ? (
+                      <span className="mt-1 block text-[10px] tabular-nums text-muted-foreground/90">
+                        Search index {arrivalDetails.length} / {detailArrivalsTotal}
+                      </span>
+                    ) : null}
+                  </p>
+                )}
+              </>
+            )}
           </div>
 
-          {/* Mobile / Tablet Modal */}
+          {/* Mobile / Tablet full-screen sheet */}
           <AnimatePresence>
             {showAdd && (
               <>
-                {/* Glassmorphism backdrop overlay — tablet only */}
                 <motion.div
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  exit={{ opacity: 0 }}
-                  className="fixed inset-0 z-40 bg-black/50 backdrop-blur-md hidden md:block lg:hidden"
-                    onClick={() => {
-                      void tryCloseArrivalPanel(() => setShowAdd(false));
-                    }}
-                />
-                <motion.div
-                  initial={{ opacity: 0, y: 30, scale: 0.97 }}
-                  animate={{ opacity: 1, y: 0, scale: 1 }}
-                  exit={{ opacity: 0, y: 30, scale: 0.97 }}
+                  initial={{ opacity: 0, y: 30 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: 30 }}
                   transition={{ type: 'spring', stiffness: 400, damping: 30 }}
                   className={cn(
                     "fixed z-50 flex justify-center",
                     "inset-0 bg-background",
-                    "md:inset-3 md:rounded-3xl md:border md:border-white/20 md:shadow-2xl md:bg-background/80 md:backdrop-blur-2xl",
-                    "lg:inset-0 lg:rounded-none lg:border-0 lg:shadow-none lg:bg-background lg:backdrop-blur-none"
+                    "lg:inset-0 lg:rounded-none lg:border-0 lg:shadow-none lg:bg-background"
                   )}
-                  style={{ WebkitBackdropFilter: 'blur(24px)' }}
                 >
                 <div ref={newArrivalPanelScrollRef} className="w-full max-w-[480px] md:max-w-full overflow-y-auto">
                   <div
@@ -4506,7 +4771,7 @@ const ArrivalsPage = () => {
                                       )}
                                     >
                                       <option value="" disabled>Select</option>
-                                      {commodities.map((c: any) => (
+                                      {commodities.map(c => (
                                         <option key={c.commodity_id} value={c.commodity_name}>{c.commodity_name}</option>
                                       ))}
                                     </select>
@@ -4767,46 +5032,53 @@ const ArrivalsPage = () => {
                     {/* ── Sticky Submit Button ── */}
                     <div className="h-2" />
                   </div>
-
-                  {/* Fixed bottom submit bar - sits above bottom nav */}
-                  <div className="fixed bottom-[calc(3.5rem+env(safe-area-inset-bottom,0px)-1px)] sm:bottom-[calc(3.5rem+env(safe-area-inset-bottom,0px)-1px)] md:bottom-[calc(3.5rem+env(safe-area-inset-bottom,0px)-0.75rem-1px)] lg:bottom-0 left-0 right-0 z-[60] bg-background/90 backdrop-blur-xl px-3 pt-2.5 pb-0 sm:px-4 sm:pt-3 sm:pb-0 md:px-6">
-                    <div className="max-w-[480px] md:max-w-full mx-auto">
-                      <div className="flex items-stretch gap-0 rounded-2xl bg-white dark:bg-card p-1.5 shadow-sm border border-border/30">
-                        <Button
-                          type="button"
-                          size="sm"
-                          onClick={openSellerSearchPanel}
-                          disabled={(!isMultiSeller && sellers.length >= 1) || hasIncompleteSellerDetails}
-                          className={cn(
-                            "h-12 md:h-14 rounded-xl flex-1 text-xs sm:text-sm font-semibold flex items-center justify-center disabled:opacity-60",
-                            ARRIVALS_SETTLEMENT_BUTTON_GRADIENT,
-                          )}
-                        >
-                          <Users className="w-4 h-4 md:w-5 md:h-5" />
-                          <span className="ml-1.5 sm:ml-2">Add Seller</span>
-                        </Button>
-                        <div className="w-2 shrink-0 bg-white dark:bg-card" aria-hidden />
-                        <Button
-                          type="button"
-                          onClick={handleSubmitArrival}
-                          disabled={isSubmittingArrival}
-                          aria-busy={isSubmittingArrival}
-                          className={cn(
-                            "flex-1 h-12 md:h-14 rounded-xl font-bold text-xs sm:text-sm md:text-base disabled:opacity-60 flex items-center justify-center",
-                            ARRIVALS_SETTLEMENT_BUTTON_GRADIENT,
-                          )}
-                        >
-                          <FileText className="w-4 h-4 md:w-5 md:h-5" />
-                          <span className="ml-1.5 sm:ml-2 truncate">{editingVehicleId != null ? 'Update Arrival' : (sellers.length > 0 ? `Submit (${sellers.length})` : 'Submit Arrival')}</span>
-                        </Button>
-                      </div>
-                    </div>
-                  </div>
                 </div>
               </motion.div>
               </>
             )}
           </AnimatePresence>
+
+          {/* Fixed action row: portal to body so z-index wins over BottomNav; sheet stays z-50 so tab bar stays visible */}
+          {showAdd &&
+            createPortal(
+              <div
+                className="fixed bottom-[calc(3.5rem+env(safe-area-inset-bottom,0px)-2px)] left-0 right-0 z-[55] bg-background/90 backdrop-blur-xl px-3 pt-2.5 pb-2 sm:px-4 sm:pt-3 md:bottom-[calc(3.5rem+env(safe-area-inset-bottom,0px)-0.75rem+1px)] md:px-6 md:pb-[max(0.5rem,env(safe-area-inset-bottom,0px))] lg:bottom-0 lg:pb-3 pointer-events-auto"
+                aria-label="Arrival actions"
+              >
+                <div className="max-w-[480px] md:max-w-full mx-auto">
+                  <div className="flex items-stretch gap-0 rounded-2xl bg-white dark:bg-card p-1.5 shadow-sm border border-border/30">
+                    <Button
+                      type="button"
+                      size="sm"
+                      onClick={openSellerSearchPanel}
+                      disabled={(!isMultiSeller && sellers.length >= 1) || hasIncompleteSellerDetails}
+                      className={cn(
+                        "h-12 md:h-14 rounded-xl flex-1 text-xs sm:text-sm font-semibold flex items-center justify-center disabled:opacity-60",
+                        ARRIVALS_SETTLEMENT_BUTTON_GRADIENT,
+                      )}
+                    >
+                      <Users className="w-4 h-4 md:w-5 md:h-5" />
+                      <span className="ml-1.5 sm:ml-2">Add Seller</span>
+                    </Button>
+                    <div className="w-2 shrink-0 bg-white dark:bg-card" aria-hidden />
+                    <Button
+                      type="button"
+                      onClick={handleSubmitArrival}
+                      disabled={isSubmittingArrival}
+                      aria-busy={isSubmittingArrival}
+                      className={cn(
+                        "flex-1 h-12 md:h-14 rounded-xl font-bold text-xs sm:text-sm md:text-base disabled:opacity-60 flex items-center justify-center",
+                        ARRIVALS_SETTLEMENT_BUTTON_GRADIENT,
+                      )}
+                    >
+                      <FileText className="w-4 h-4 md:w-5 md:h-5" />
+                      <span className="ml-1.5 sm:ml-2 truncate">{editingVehicleId != null ? 'Update Arrival' : (sellers.length > 0 ? `Submit (${sellers.length})` : 'Submit Arrival')}</span>
+                    </Button>
+                  </div>
+                </div>
+              </div>,
+              document.body,
+            )}
         </>
       )}
 

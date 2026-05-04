@@ -190,6 +190,19 @@ export interface ListResultsParams {
   sort?: string;
 }
 
+/** Paginated list response with Spring `X-Total-Count` (Sales Pad progressive load). */
+export interface AuctionPagedResult<T> {
+  items: T[];
+  totalElements: number;
+}
+
+function readTotalCount(res: Response, fallback: number): number {
+  const raw = res.headers.get('X-Total-Count');
+  if (raw == null || raw === '') return fallback;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : fallback;
+}
+
 async function parseJsonOrThrow(res: Response, defaultMessage: string): Promise<never> {
   let message = defaultMessage;
   try {
@@ -230,12 +243,44 @@ export const auctionApi = {
     return res.json();
   },
 
+  /**
+   * One page of lots plus total count from `X-Total-Count`. Prefer stable `sort` (e.g. `id,asc`) when paging.
+   * Do not use with non-empty `status` until backend filters status in the query (see AuctionService).
+   */
+  async listLotsPage(
+    params: ListLotsParams = {},
+    init?: RequestInit
+  ): Promise<AuctionPagedResult<LotSummaryDTO>> {
+    const searchParams = new URLSearchParams();
+    if (params.page != null) searchParams.set('page', String(params.page));
+    if (params.size != null) searchParams.set('size', String(params.size));
+    if (params.sort) searchParams.set('sort', params.sort);
+    if (params.status) searchParams.set('status', params.status);
+    if (params.q) searchParams.set('q', params.q);
+    const res = await apiFetch(`${BASE}/lots?${searchParams.toString()}`, { method: 'GET', ...init });
+    if (!res.ok) await parseJsonOrThrow(res, 'Failed to load lots');
+    const items = (await res.json()) as LotSummaryDTO[];
+    const totalElements = readTotalCount(res, items.length);
+    return { items, totalElements };
+  },
+
   async getOrStartSession(lotId: string | number): Promise<AuctionSessionDTO> {
     const id = typeof lotId === 'string' ? lotId : String(lotId);
     const res = await apiFetch(`${BASE}/lots/${encodeURIComponent(id)}/session`, { method: 'GET' });
     if (!res.ok) {
       if (res.status === 404) throw new Error('Lot not found');
       await parseJsonOrThrow(res, 'Failed to get session');
+    }
+    return res.json();
+  },
+
+  async getCurrentSession(lotId: string | number): Promise<AuctionSessionDTO | null> {
+    const id = typeof lotId === 'string' ? lotId : String(lotId);
+    const res = await apiFetch(`${BASE}/lots/${encodeURIComponent(id)}/session/current`, { method: 'GET' });
+    if (res.status === 204) return null;
+    if (!res.ok) {
+      if (res.status === 404) throw new Error('Lot not found');
+      await parseJsonOrThrow(res, 'Failed to get current session');
     }
     return res.json();
   },
@@ -250,6 +295,17 @@ export const auctionApi = {
     return res.json();
   },
 
+  async getCurrentSelfSaleSession(lotId: string | number): Promise<AuctionSessionDTO | null> {
+    const id = typeof lotId === 'string' ? lotId : String(lotId);
+    const res = await apiFetch(`${BASE}/self-sale-units/${encodeURIComponent(id)}/session/current`, { method: 'GET' });
+    if (res.status === 204) return null;
+    if (!res.ok) {
+      if (res.status === 404) throw new Error('Self-sale unit not found');
+      await parseJsonOrThrow(res, 'Failed to get current self-sale session');
+    }
+    return res.json();
+  },
+
   async listSelfSaleUnits(params: ListLotsParams = {}): Promise<AuctionSelfSaleUnitDTO[]> {
     const searchParams = new URLSearchParams();
     if (params.page != null) searchParams.set('page', String(params.page));
@@ -259,6 +315,22 @@ export const auctionApi = {
     const res = await apiFetch(`${BASE}/self-sale-units?${searchParams.toString()}`, { method: 'GET' });
     if (!res.ok) await parseJsonOrThrow(res, 'Failed to load self-sale units');
     return res.json();
+  },
+
+  async listSelfSaleUnitsPage(
+    params: ListLotsParams = {},
+    init?: RequestInit
+  ): Promise<AuctionPagedResult<AuctionSelfSaleUnitDTO>> {
+    const searchParams = new URLSearchParams();
+    if (params.page != null) searchParams.set('page', String(params.page));
+    if (params.size != null) searchParams.set('size', String(params.size));
+    if (params.sort) searchParams.set('sort', params.sort);
+    if (params.q) searchParams.set('q', params.q);
+    const res = await apiFetch(`${BASE}/self-sale-units?${searchParams.toString()}`, { method: 'GET', ...init });
+    if (!res.ok) await parseJsonOrThrow(res, 'Failed to load self-sale units');
+    const items = (await res.json()) as AuctionSelfSaleUnitDTO[];
+    const totalElements = readTotalCount(res, items.length);
+    return { items, totalElements };
   },
 
   async addBid(lotId: string | number, body: AuctionBidCreateRequest): Promise<AuctionSessionDTO> {
@@ -415,6 +487,22 @@ export const auctionApi = {
     return res.json();
   },
 
+  /** One page of completed auction results plus `X-Total-Count` (progressive Print Hub / hooks). */
+  async listResultsPage(
+    params: ListResultsParams = {},
+    init?: RequestInit
+  ): Promise<AuctionPagedResult<AuctionResultDTO>> {
+    const searchParams = new URLSearchParams();
+    if (params.page != null) searchParams.set('page', String(params.page));
+    if (params.size != null) searchParams.set('size', String(params.size));
+    if (params.sort) searchParams.set('sort', params.sort);
+    const res = await apiFetch(`${BASE}/results?${searchParams.toString()}`, { method: 'GET', ...init });
+    if (!res.ok) await parseJsonOrThrow(res, 'Failed to load results');
+    const items = (await res.json()) as AuctionResultDTO[];
+    const totalElements = readTotalCount(res, items.length);
+    return { items, totalElements };
+  },
+
   async getResultByLot(lotId: string | number): Promise<AuctionResultDTO | null> {
     const id = typeof lotId === 'string' ? lotId : String(lotId);
     const res = await apiFetch(`${BASE}/results/lots/${encodeURIComponent(id)}`, { method: 'GET' });
@@ -437,18 +525,25 @@ export const auctionApi = {
  * downstream pages (Billing, Weighing, Logistics, etc.) need minimal changes.
  * Result shape is normalized to include lotId, entries[].bidNumber, etc.
  */
-export async function fetchAllAuctionResults(maxPages = 50, pageSize = 100): Promise<AuctionResultDTO[]> {
+export async function fetchAllAuctionResults(
+  maxPages = 50,
+  pageSize = 100,
+  init?: RequestInit
+): Promise<AuctionResultDTO[]> {
   const all: AuctionResultDTO[] = [];
   let page = 0;
   while (page < maxPages) {
-    const chunk = await auctionApi.listResults({
-      page,
-      size: pageSize,
-      /** Newest first (matches server default); avoids missing today’s auctions when capped at maxPages × pageSize. */
-      sort: 'completedAt,desc',
-    });
-    all.push(...chunk);
-    if (chunk.length < pageSize) break;
+    const { items, totalElements } = await auctionApi.listResultsPage(
+      {
+        page,
+        size: pageSize,
+        /** Newest first (matches server default); avoids missing today’s auctions when capped at maxPages × pageSize. */
+        sort: 'completedAt,desc',
+      },
+      init
+    );
+    all.push(...items);
+    if (items.length < pageSize || (totalElements > 0 && all.length >= totalElements)) break;
     page += 1;
   }
   return all;

@@ -90,5 +90,14 @@ public interface ContactService {
      * @return list of contacts.
      */
     List<ContactDTO> searchByMark(Long traderId, String markFragment);
-}
 
+    /**
+     * Bounded participant search for high-frequency pickers such as Auctions.
+     *
+     * @param traderId current trader.
+     * @param query mark, name, or phone fragment.
+     * @param limit max rows to return.
+     * @return trader contacts first, then portal participants, deduplicated like participant lists.
+     */
+    List<ContactDTO> searchParticipants(Long traderId, String query, int limit);
+}

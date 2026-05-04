@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import type { ArrivalFullDetail, ArrivalSellerFullDetail } from '@/services/api/arrivals';
 import type { LotSummaryDTO } from '@/services/api/auction';
@@ -24,27 +24,8 @@ export function VehicleOpsSellerWorkspace({
 }: VehicleOpsSellerWorkspaceProps) {
   const [sellerSearch, setSellerSearch] = useState('');
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
-  /** Rose/green strips: keyed when that lot has unsaved “new seller rate” drafts. */
-  const [unsavedRatesByLotId, setUnsavedRatesByLotId] = useState<Record<number, boolean>>({});
 
   const sellers = arrivalDetail?.sellers ?? [];
-
-  useEffect(() => {
-    setUnsavedRatesByLotId({});
-  }, [arrivalDetail?.vehicleId]);
-
-  const handleLotUnsavedRatesChange = useCallback((lotId: number, unsaved: boolean) => {
-    setUnsavedRatesByLotId((m) => {
-      if (unsaved) {
-        if (m[lotId] === true) return m;
-        return { ...m, [lotId]: true };
-      }
-      if (!(lotId in m)) return m;
-      const next = { ...m };
-      delete next[lotId];
-      return next;
-    });
-  }, []);
 
   const filteredSellers = useMemo(() => {
     const q = sellerSearch.trim().toLowerCase();
@@ -126,7 +107,6 @@ export function VehicleOpsSellerWorkspace({
               lotSummaries={lotSummariesForVehicle}
               selectedKey={selectedKey}
               onSelectKey={setSelectedKey}
-              unsavedRatesByLotId={unsavedRatesByLotId}
             />
           </div>
           <div className="min-w-0">
@@ -135,8 +115,6 @@ export function VehicleOpsSellerWorkspace({
               sellerLots={sellerLots}
               onPrint={handlePrint}
               onAuctionDataInvalidate={onAuctionDataInvalidate}
-              unsavedRatesByLotId={unsavedRatesByLotId}
-              onLotUnsavedRatesChange={handleLotUnsavedRatesChange}
             />
           </div>
         </div>

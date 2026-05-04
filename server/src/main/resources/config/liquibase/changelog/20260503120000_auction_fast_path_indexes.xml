@@ -1,0 +1,120 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <changeSet id="20260503120000-1" author="mercotrace">
+        <preConditions onFail="MARK_RAN">
+            <not>
+                <indexExists indexName="idx_auction_lot_self_sale_datetime" tableName="auction"/>
+            </not>
+        </preConditions>
+        <createIndex tableName="auction" indexName="idx_auction_lot_self_sale_datetime">
+            <column name="lot_id"/>
+            <column name="self_sale_unit_id"/>
+            <column name="auction_datetime"/>
+        </createIndex>
+    </changeSet>
+
+    <changeSet id="20260503120000-2" author="mercotrace">
+        <preConditions onFail="MARK_RAN">
+            <not>
+                <indexExists indexName="idx_auction_self_sale_datetime" tableName="auction"/>
+            </not>
+        </preConditions>
+        <createIndex tableName="auction" indexName="idx_auction_self_sale_datetime">
+            <column name="self_sale_unit_id"/>
+            <column name="auction_datetime"/>
+        </createIndex>
+    </changeSet>
+
+    <changeSet id="20260503120000-3" author="mercotrace">
+        <preConditions onFail="MARK_RAN">
+            <not>
+                <indexExists indexName="idx_auction_entry_auction_bid" tableName="auction_entry"/>
+            </not>
+        </preConditions>
+        <createIndex tableName="auction_entry" indexName="idx_auction_entry_auction_bid">
+            <column name="auction_id"/>
+            <column name="bid_number"/>
+        </createIndex>
+    </changeSet>
+
+    <changeSet id="20260503120000-4" author="mercotrace">
+        <preConditions onFail="MARK_RAN">
+            <not>
+                <indexExists indexName="idx_auction_entry_scribble_created" tableName="auction_entry"/>
+            </not>
+        </preConditions>
+        <createIndex tableName="auction_entry" indexName="idx_auction_entry_scribble_created">
+            <column name="is_scribble"/>
+            <column name="created_at"/>
+            <column name="buyer_mark"/>
+        </createIndex>
+    </changeSet>
+
+    <changeSet id="20260503120000-5" author="mercotrace">
+        <preConditions onFail="MARK_RAN">
+            <not>
+                <indexExists indexName="idx_contact_trader_active_mark" tableName="contact"/>
+            </not>
+        </preConditions>
+        <createIndex tableName="contact" indexName="idx_contact_trader_active_mark">
+            <column name="trader_id"/>
+            <column name="active"/>
+            <column name="mark"/>
+        </createIndex>
+    </changeSet>
+
+    <changeSet id="20260503120000-6" author="mercotrace">
+        <preConditions onFail="MARK_RAN">
+            <not>
+                <indexExists indexName="idx_contact_trader_active_name" tableName="contact"/>
+            </not>
+        </preConditions>
+        <createIndex tableName="contact" indexName="idx_contact_trader_active_name">
+            <column name="trader_id"/>
+            <column name="active"/>
+            <column name="name"/>
+        </createIndex>
+    </changeSet>
+
+    <changeSet id="20260503120000-7" author="mercotrace">
+        <preConditions onFail="MARK_RAN">
+            <not>
+                <indexExists indexName="idx_contact_trader_active_phone" tableName="contact"/>
+            </not>
+        </preConditions>
+        <createIndex tableName="contact" indexName="idx_contact_trader_active_phone">
+            <column name="trader_id"/>
+            <column name="active"/>
+            <column name="phone"/>
+        </createIndex>
+    </changeSet>
+
+    <changeSet id="20260503120000-8" author="mercotrace">
+        <preConditions onFail="MARK_RAN">
+            <not>
+                <indexExists indexName="idx_contact_active_mark" tableName="contact"/>
+            </not>
+        </preConditions>
+        <createIndex tableName="contact" indexName="idx_contact_active_mark">
+            <column name="active"/>
+            <column name="mark"/>
+        </createIndex>
+    </changeSet>
+
+    <changeSet id="20260503120000-9" author="mercotrace">
+        <preConditions onFail="MARK_RAN">
+            <not>
+                <indexExists indexName="idx_contact_active_name" tableName="contact"/>
+            </not>
+        </preConditions>
+        <createIndex tableName="contact" indexName="idx_contact_active_name">
+            <column name="active"/>
+            <column name="name"/>
+        </createIndex>
+    </changeSet>
+
+</databaseChangeLog>

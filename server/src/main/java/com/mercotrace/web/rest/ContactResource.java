@@ -275,6 +275,21 @@ public class ContactResource {
     }
 
     /**
+     * {@code GET /contacts/participants/search} : bounded participant lookup for latency-sensitive pickers.
+     */
+    @GetMapping("/participants/search")
+    @PreAuthorize("hasAuthority(\"" + AuthoritiesConstants.CONTACTS_VIEW + "\")")
+    public ResponseEntity<List<ContactDTO>> searchParticipantContacts(
+        @RequestParam(name = "q", required = false, defaultValue = "") String q,
+        @RequestParam(name = "limit", required = false, defaultValue = "50") Integer limit
+    ) {
+        Long traderId = resolveTraderId();
+        int cappedLimit = limit == null ? 50 : Math.max(1, Math.min(limit, 100));
+        LOG.debug("REST request to bounded-search participant contacts. traderId={}, q={}, limit={}", traderId, q, cappedLimit);
+        return ResponseEntity.ok().body(contactService.searchParticipants(traderId, q, cappedLimit));
+    }
+
+    /**
      * {@code GET  /contacts/by-phone} : get the contact by phone for the current trader (active or inactive).
      * Used when create fails with "phone exists but inactive" so the client can get the id to call restore.
      *
@@ -444,4 +459,3 @@ public class ContactResource {
         throw new BadRequestAlertException("You are not allowed to modify this contact", ENTITY_NAME, "forbidden");
     }
 }
-

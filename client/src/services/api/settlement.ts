@@ -215,6 +215,22 @@ export interface ListPattisParams {
   sort?: string;
 }
 
+/** Progressive list loads (Arrival Summary tables): align page size with Sales Pad lots paging. */
+export const SETTLEMENT_LIST_PAGE_SIZE = 90;
+
+/** Paginated list response with Spring `X-Total-Count`. */
+export interface SettlementPagedResult<T> {
+  items: T[];
+  totalElements: number;
+}
+
+function readTotalCount(res: Response, fallback: number): number {
+  const raw = res.headers.get('X-Total-Count');
+  if (raw == null || raw === '') return fallback;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : fallback;
+}
+
 async function parseJsonOrThrow(res: Response, defaultMessage: string): Promise<never> {
   let message = defaultMessage;
   try {
@@ -253,6 +269,26 @@ export const settlementApi = {
     return res.json();
   },
 
+  /**
+   * One page of settlement sellers plus total from `X-Total-Count`.
+   * Server uses stable iteration order; pass explicit `sort` only if backend applies it to the full list.
+   */
+  async listSellersPage(
+    params: ListSellersParams = {},
+    init?: RequestInit
+  ): Promise<SettlementPagedResult<SellerSettlementDTO>> {
+    const q = new URLSearchParams();
+    if (params.page != null) q.set('page', String(params.page));
+    if (params.size != null) q.set('size', String(params.size));
+    if (params.sort) q.set('sort', params.sort);
+    if (params.search) q.set('search', params.search);
+    const res = await apiFetch(`${BASE}/sellers?${q}`, { method: 'GET', ...init });
+    if (!res.ok) await parseJsonOrThrow(res, 'Failed to load settlement sellers');
+    const items = (await res.json()) as SellerSettlementDTO[];
+    const totalElements = readTotalCount(res, items.length);
+    return { items, totalElements };
+  },
+
   /** List saved pattis (paginated). */
   async listPattis(params: ListPattisParams = {}): Promise<PattiDTO[]> {
     const q = new URLSearchParams();
@@ -264,6 +300,22 @@ export const settlementApi = {
     return res.json();
   },
 
+  /** One page of saved pattis plus total from `X-Total-Count` (repository default sort: newest first). */
+  async listPattisPage(
+    params: ListPattisParams = {},
+    init?: RequestInit
+  ): Promise<SettlementPagedResult<PattiDTO>> {
+    const q = new URLSearchParams();
+    if (params.page != null) q.set('page', String(params.page));
+    if (params.size != null) q.set('size', String(params.size));
+    if (params.sort) q.set('sort', params.sort);
+    const res = await apiFetch(`${BASE}/pattis?${q}`, { method: 'GET', ...init });
+    if (!res.ok) await parseJsonOrThrow(res, 'Failed to load pattis');
+    const items = (await res.json()) as PattiDTO[];
+    const totalElements = readTotalCount(res, items.length);
+    return { items, totalElements };
+  },
+
   /** List in-progress pattis (paginated). */
   async listInProgressPattis(params: ListPattisParams = {}): Promise<PattiDTO[]> {
     const q = new URLSearchParams();
@@ -273,6 +325,22 @@ export const settlementApi = {
     const res = await apiFetch(`${BASE}/pattis/in-progress?${q}`, { method: 'GET' });
     if (!res.ok) await parseJsonOrThrow(res, 'Failed to load in-progress pattis');
     return res.json();
+  },
+
+  /** One page of in-progress pattis plus total from `X-Total-Count`. */
+  async listInProgressPattisPage(
+    params: ListPattisParams = {},
+    init?: RequestInit
+  ): Promise<SettlementPagedResult<PattiDTO>> {
+    const q = new URLSearchParams();
+    if (params.page != null) q.set('page', String(params.page));
+    if (params.size != null) q.set('size', String(params.size));
+    if (params.sort) q.set('sort', params.sort);
+    const res = await apiFetch(`${BASE}/pattis/in-progress?${q}`, { method: 'GET', ...init });
+    if (!res.ok) await parseJsonOrThrow(res, 'Failed to load in-progress pattis');
+    const items = (await res.json()) as PattiDTO[];
+    const totalElements = readTotalCount(res, items.length);
+    return { items, totalElements };
   },
 
   /** Create patti. Server generates pattiId as base-sequence (e.g. 2255-1). */

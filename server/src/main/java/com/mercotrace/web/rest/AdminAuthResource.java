@@ -7,6 +7,7 @@ import com.mercotrace.service.dto.AdminUserDTO;
 import com.mercotrace.service.dto.TraderAuthDTO;
 import com.mercotrace.web.rest.vm.LoginVM;
 import jakarta.validation.Valid;
+import java.time.Duration;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -99,6 +100,7 @@ public class AdminAuthResource {
             .secure(cookieSecure)
             .sameSite("Lax")
             .path("/")
+            .maxAge(Duration.ofSeconds(authenticateController.tokenValiditySeconds(loginVM.isRememberMe())))
             .build();
         headers.add(org.springframework.http.HttpHeaders.SET_COOKIE, cookie.toString());
 

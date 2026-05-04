@@ -2,16 +2,19 @@ import { useRef } from 'react';
 import { cn } from '@/lib/utils';
 import type { ArrivalSellerFullDetail } from '@/services/api/arrivals';
 import type { LotSummaryDTO } from '@/services/api/auction';
-import { lotSummaryBelongsToSeller, sellerBagSoldPending, sellerKeyFromArrivalSeller } from './vehicleOpsUtils';
-import { vehicleOpsSaveStripClass } from './vehicleOpsUi';
+import {
+  isLotFullyAuctioned,
+  lotSummaryBelongsToSeller,
+  sellerBagSoldPending,
+  sellerKeyFromArrivalSeller,
+} from './vehicleOpsUtils';
+import { vehicleOpsAuctionStripClass } from './vehicleOpsUi';
 
 export type SellerListSidebarProps = {
   sellers: ArrivalSellerFullDetail[];
   lotSummaries: LotSummaryDTO[];
   selectedKey: string | null;
   onSelectKey: (key: string) => void;
-  /** Lots with unsaved bid rates → rose strip on this seller until Save. */
-  unsavedRatesByLotId?: Record<number, boolean>;
 };
 
 export function SellerListSidebar({
@@ -19,7 +22,6 @@ export function SellerListSidebar({
   lotSummaries,
   selectedKey,
   onSelectKey,
-  unsavedRatesByLotId = {},
 }: SellerListSidebarProps) {
   const itemRefs = useRef<(HTMLButtonElement | null)[]>([]);
 
@@ -41,7 +43,7 @@ export function SellerListSidebar({
         const name = (seller.sellerName ?? '').trim() || '—';
         const mark = (seller.sellerMark ?? '').trim() || '—';
         const selected = selectedKey === key;
-        const sellerHasUnsavedRates = lots.some((l) => unsavedRatesByLotId[l.lot_id]);
+        const sellerAllLotsAuctioned = lots.length > 0 && lots.every(isLotFullyAuctioned);
         return (
           <button
             key={key}
@@ -79,7 +81,10 @@ export function SellerListSidebar({
             )}
           >
             <span
-              className={cn('w-1.5 shrink-0 self-stretch rounded-l-2xl', vehicleOpsSaveStripClass(sellerHasUnsavedRates))}
+              className={cn(
+                'w-1.5 shrink-0 self-stretch rounded-l-2xl',
+                vehicleOpsAuctionStripClass(sellerAllLotsAuctioned),
+              )}
               aria-hidden
             />
             <span className="flex min-w-0 flex-1 flex-col gap-1 px-3 py-3">

@@ -46,6 +46,13 @@ export interface WeighingSessionCreateRequest {
   bag_weights?: BagWeightEntryDTO[];
 }
 
+function readTotalCount(res: Response, fallback: number): number {
+  const raw = res.headers.get('X-Total-Count');
+  if (raw == null || raw === '') return fallback;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : fallback;
+}
+
 async function parseJsonOrThrow(res: Response, defaultMessage: string): Promise<never> {
   try {
     const b = await res.json().catch(() => ({}));
@@ -69,6 +76,21 @@ export const weighingApi = {
     const res = await apiFetch(`${BASE}?${q}`, { method: 'GET' });
     if (!res.ok) await parseJsonOrThrow(res, 'Failed to load weighing sessions');
     return res.json();
+  },
+
+  /** One page plus total from `X-Total-Count` (Spring/JHipster). */
+  async listPage(
+    params: { page?: number; size?: number } = {},
+    init?: RequestInit
+  ): Promise<{ items: WeighingSessionDTO[]; totalElements: number }> {
+    const q = new URLSearchParams();
+    if (params.page != null) q.set('page', String(params.page));
+    if (params.size != null) q.set('size', String(params.size));
+    const res = await apiFetch(`${BASE}?${q}`, { method: 'GET', ...init });
+    if (!res.ok) await parseJsonOrThrow(res, 'Failed to load weighing sessions');
+    const items = (await res.json()) as WeighingSessionDTO[];
+    const totalElements = readTotalCount(res, items.length);
+    return { items, totalElements };
   },
   async getByBidNumber(bidNumber: number): Promise<WeighingSessionDTO | null> {
     const res = await apiFetch(`${BASE}/by-bid/${bidNumber}`, { method: 'GET' });

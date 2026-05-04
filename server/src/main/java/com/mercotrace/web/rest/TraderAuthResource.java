@@ -252,7 +252,7 @@ public class TraderAuthResource {
         LoginVM loginVM = new LoginVM();
         loginVM.setUsername(user.getLogin());
         loginVM.setPassword(vm.getPassword());
-        loginVM.setRememberMe(false);
+        loginVM.setRememberMe(true);
         try {
             ResponseEntity<com.mercotrace.web.rest.AuthenticateController.JWTToken> jwtResponse =
                 authenticateController.authorize(loginVM);
@@ -296,6 +296,9 @@ public class TraderAuthResource {
         }
 
         rejectIfPrimaryTraderRejectedForLogin(loginVM.getUsername());
+
+        // Long-lived trader session (JWT + cookie max-age); see jhipster.security.authentication.jwt token-validity-for-remember-me.
+        loginVM.setRememberMe(true);
 
         // Delegate authentication to existing JWT controller
         ResponseEntity<com.mercotrace.web.rest.AuthenticateController.JWTToken> jwtResponse;
@@ -472,8 +475,8 @@ public class TraderAuthResource {
         );
         SecurityContextHolder.getContext().setAuthentication(authentication);
 
-        String jwt = authenticateController.createToken(authentication, false);
-        HttpHeaders httpHeaders = authenticateController.buildAuthHeaders(jwt);
+        String jwt = authenticateController.createToken(authentication, true);
+        HttpHeaders httpHeaders = authenticateController.buildAuthHeaders(jwt, true);
 
         AdminUserDTO account = accountResource.getAccount();
 

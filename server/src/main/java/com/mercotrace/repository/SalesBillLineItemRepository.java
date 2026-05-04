@@ -98,4 +98,25 @@ public interface SalesBillLineItemRepository extends JpaRepository<SalesBillLine
         @Param("lotIdsLong") Collection<Long> lotIdsLong,
         @Param("nameFilter") String nameFilter
     );
+
+    /**
+     * True when any sales bill line references one of the lots (by persisted lot id string or by auction entry under those lots).
+     * Same matching rules as {@link #sumLineAmountByTraderLotsForSettlement} without name filter.
+     */
+    @Query(
+        "SELECT CASE WHEN COUNT(i) > 0 THEN true ELSE false END FROM SalesBillLineItem i " +
+        "JOIN i.commodityGroup g " +
+        "WHERE g.salesBill.traderId = :traderId AND " +
+        "(" +
+        "  (i.lotId IS NOT NULL AND i.lotId IN :lotIdStrs) OR " +
+        "  (i.lotId IS NULL AND i.auctionEntryId IS NOT NULL AND i.auctionEntryId IN (" +
+        "    SELECT ae.id FROM AuctionEntry ae JOIN Auction au ON ae.auctionId = au.id WHERE au.lotId IN :lotIdsLong" +
+        "  ))" +
+        ")"
+    )
+    boolean existsForTraderLotsDeletionScope(
+        @Param("traderId") Long traderId,
+        @Param("lotIdStrs") Collection<String> lotIdStrs,
+        @Param("lotIdsLong") Collection<Long> lotIdsLong
+    );
 }

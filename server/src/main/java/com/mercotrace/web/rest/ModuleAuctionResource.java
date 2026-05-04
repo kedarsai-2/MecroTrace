@@ -146,6 +146,27 @@ public class ModuleAuctionResource {
     }
 
     /**
+     * {@code GET  /module-auctions/lots/:lotId/session/current} : read current auction session without creating one.
+     */
+    @Operation(summary = "Get current session", description = "Returns the current auction session for the lot without creating one")
+    @ApiResponses({
+        @ApiResponse(responseCode = "200", description = "OK"),
+        @ApiResponse(responseCode = "204", description = "No session exists"),
+        @ApiResponse(responseCode = "404", description = "Lot not found")
+    })
+    @GetMapping("/lots/{lotId}/session/current")
+    @PreAuthorize("hasAuthority(\"" + AuthoritiesConstants.AUCTIONS_VIEW + "\")")
+    public ResponseEntity<?> getCurrentSession(@PathVariable("lotId") Long lotId) {
+        LOG.debug("REST request to get current Auction session for lot {}", lotId);
+        try {
+            Optional<AuctionSessionDTO> session = auctionService.getCurrentSession(lotId);
+            return session.<ResponseEntity<?>>map(ResponseEntity::ok).orElseGet(() -> ResponseEntity.noContent().build());
+        } catch (EntityNotFoundException ex) {
+            return buildErrorResponse(HttpStatus.NOT_FOUND, ex.getMessage(), "lotId");
+        }
+    }
+
+    /**
      * {@code GET  /module-auctions/self-sale-units/:id/session} : get or start a re-auction session for a self-sale unit.
      */
     @Operation(summary = "Get or start self-sale re-auction session", description = "Returns active session for the self-sale unit or creates a fresh re-auction session while preserving history")
@@ -160,6 +181,27 @@ public class ModuleAuctionResource {
         try {
             AuctionSessionDTO session = auctionService.getOrStartSelfSaleSession(selfSaleUnitId);
             return ResponseEntity.ok(session);
+        } catch (EntityNotFoundException ex) {
+            return buildErrorResponse(HttpStatus.NOT_FOUND, ex.getMessage(), "selfSaleUnitId");
+        }
+    }
+
+    /**
+     * {@code GET  /module-auctions/self-sale-units/:id/session/current} : read active re-auction session without creating one.
+     */
+    @Operation(summary = "Get current self-sale re-auction session", description = "Returns active self-sale session without creating one")
+    @ApiResponses({
+        @ApiResponse(responseCode = "200", description = "OK"),
+        @ApiResponse(responseCode = "204", description = "No active session exists"),
+        @ApiResponse(responseCode = "404", description = "Self-sale unit not found")
+    })
+    @GetMapping("/self-sale-units/{id}/session/current")
+    @PreAuthorize("hasAuthority(\"" + AuthoritiesConstants.AUCTIONS_VIEW + "\")")
+    public ResponseEntity<?> getCurrentSelfSaleSession(@PathVariable("id") Long selfSaleUnitId) {
+        LOG.debug("REST request to get current Self-Sale Auction session for unit {}", selfSaleUnitId);
+        try {
+            Optional<AuctionSessionDTO> session = auctionService.getCurrentSelfSaleSession(selfSaleUnitId);
+            return session.<ResponseEntity<?>>map(ResponseEntity::ok).orElseGet(() -> ResponseEntity.noContent().build());
         } catch (EntityNotFoundException ex) {
             return buildErrorResponse(HttpStatus.NOT_FOUND, ex.getMessage(), "selfSaleUnitId");
         }
@@ -476,4 +518,3 @@ public class ModuleAuctionResource {
         return ResponseEntity.status(status).body(body);
     }
 }
-

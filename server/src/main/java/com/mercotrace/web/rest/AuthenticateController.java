@@ -11,6 +11,7 @@ import com.mercotrace.security.DomainUserDetailsService.UserWithId;
 import com.mercotrace.web.rest.vm.LoginVM;
 import jakarta.validation.Valid;
 import java.security.Principal;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.stream.Collectors;
@@ -86,31 +87,40 @@ public class AuthenticateController {
 
         // Also issue JWT as secure, httpOnly cookie so the frontend never has
         // to read or store the token directly.
+        long cookieMaxAgeSec = tokenValiditySeconds(loginVM.isRememberMe());
         ResponseCookie cookie = ResponseCookie
             .from("ACCESS_TOKEN", jwt)
             .httpOnly(true)
             .secure(cookieSecure)
             .sameSite("Lax")
             .path("/")
+            .maxAge(Duration.ofSeconds(cookieMaxAgeSec))
             .build();
         httpHeaders.add(HttpHeaders.SET_COOKIE, cookie.toString());
 
         return new ResponseEntity<>(new JWTToken(jwt), httpHeaders, HttpStatus.OK);
     }
 
+    /** JWT lifetime in seconds (same rule as {@link #createToken}). */
+    public long tokenValiditySeconds(boolean rememberMe) {
+        return rememberMe ? tokenValidityInSecondsForRememberMe : tokenValidityInSeconds;
+    }
+
     /**
      * Build HTTP headers with Bearer token and httpOnly cookie for a JWT.
-     * Used by register (and similar flows) that issue a token without going through login.
+     * {@code rememberMe} must match how the JWT was created so cookie max-age aligns with token expiry.
      */
-    public HttpHeaders buildAuthHeaders(String jwt) {
+    public HttpHeaders buildAuthHeaders(String jwt, boolean rememberMe) {
         HttpHeaders httpHeaders = new HttpHeaders();
         httpHeaders.setBearerAuth(jwt);
+        long cookieMaxAgeSec = tokenValiditySeconds(rememberMe);
         ResponseCookie cookie = ResponseCookie
             .from("ACCESS_TOKEN", jwt)
             .httpOnly(true)
             .secure(cookieSecure)
             .sameSite("Lax")
             .path("/")
+            .maxAge(Duration.ofSeconds(cookieMaxAgeSec))
             .build();
         httpHeaders.add(HttpHeaders.SET_COOKIE, cookie.toString());
         return httpHeaders;
@@ -158,12 +168,7 @@ public class AuthenticateController {
         String authorities = authentication.getAuthorities().stream().map(GrantedAuthority::getAuthority).collect(Collectors.joining(" "));
 
         Instant now = Instant.now();
-        Instant validity;
-        if (rememberMe) {
-            validity = now.plus(this.tokenValidityInSecondsForRememberMe, ChronoUnit.SECONDS);
-        } else {
-            validity = now.plus(this.tokenValidityInSeconds, ChronoUnit.SECONDS);
-        }
+        Instant validity = now.plus(tokenValiditySeconds(rememberMe), ChronoUnit.SECONDS);
 
         // @formatter:off
         JwtClaimsSet.Builder builder = JwtClaimsSet.builder()

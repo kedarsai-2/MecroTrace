@@ -14,12 +14,14 @@ import com.mercotrace.service.dto.ContactDTO;
 import com.mercotrace.service.mapper.ContactMapper;
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
+import org.springframework.data.domain.PageRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.cache.annotation.CacheEvict;
@@ -403,6 +405,62 @@ public class ContactServiceImpl implements ContactService {
             )
             .collect(Collectors.toList());
     }
-}
 
+    @Override
+    @Transactional(readOnly = true)
+    public List<ContactDTO> searchParticipants(Long traderId, String query, int limit) {
+        int cappedLimit = Math.max(1, Math.min(limit, 100));
+        String needle = query == null ? "" : query.trim().toLowerCase(Locale.ROOT);
+        LOG.debug("Request to bounded-search participant contacts. traderId={}, query={}, limit={}", traderId, needle, cappedLimit);
+
+        List<Contact> traderMatches = contactRepository.searchActiveTraderContacts(traderId, needle, PageRequest.of(0, cappedLimit));
+        List<Contact> portalMatches = contactRepository.searchActivePortalParticipants(needle, PageRequest.of(0, cappedLimit));
+
+        List<ContactDTO> out = new ArrayList<>(cappedLimit);
+        Set<String> phoneKeys = new HashSet<>();
+        Set<String> markKeysLower = new HashSet<>();
+
+        for (Contact contact : traderMatches) {
+            if (out.size() >= cappedLimit) {
+                break;
+            }
+            addParticipantSearchResult(contact, out, phoneKeys, markKeysLower);
+        }
+
+        for (Contact contact : portalMatches) {
+            if (out.size() >= cappedLimit) {
+                break;
+            }
+            addParticipantSearchResult(contact, out, phoneKeys, markKeysLower);
+        }
+
+        return out;
+    }
+
+    private void addParticipantSearchResult(
+        Contact contact,
+        List<ContactDTO> out,
+        Set<String> phoneKeys,
+        Set<String> markKeysLower
+    ) {
+        String pk = phoneKey(contact.getPhone());
+        if (!pk.isEmpty() && phoneKeys.contains(pk)) {
+            return;
+        }
+        String markKey = contact.getMark() != null && !contact.getMark().isBlank()
+            ? contact.getMark().trim().toLowerCase(Locale.ROOT)
+            : "";
+        if (!markKey.isEmpty() && markKeysLower.contains(markKey)) {
+            return;
+        }
+
+        out.add(contactMapper.toDto(contact));
+        if (!pk.isEmpty()) {
+            phoneKeys.add(pk);
+        }
+        if (!markKey.isEmpty()) {
+            markKeysLower.add(markKey);
+        }
+    }
+}
 

@@ -3,6 +3,11 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { X, Check, PenLine, RotateCcw, Minus, Plus, Loader2, Sparkles } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import {
+  recognizeHandwriting,
+  getHandwritingRecognitionDebounceMs,
+  type HandwritingStroke,
+} from '@/lib/handwritingRecognition';
 
 interface ScribblePadProps {
   open: boolean;
@@ -10,57 +15,7 @@ interface ScribblePadProps {
   onConfirm: (initials: string, quantity: number) => void;
 }
 
-interface Stroke {
-  xs: number[];
-  ys: number[];
-  ts: number[];
-}
-
-/**
- * Recognize handwriting using Google Input Tools (Handwriting IME).
- * Free, no API key required, built for handwritten characters.
- */
-async function recognizeHandwriting(
-  strokes: Stroke[],
-  canvasWidth: number,
-  canvasHeight: number
-): Promise<string[]> {
-  const ink = strokes.map(s => [s.xs, s.ys, s.ts]);
-
-  const payload = {
-    options: 'enable_pre_space',
-    requests: [
-      {
-        writing_guide: {
-          writing_area_width: canvasWidth,
-          writing_area_height: canvasHeight,
-        },
-        ink,
-        language: 'en',
-      },
-    ],
-  };
-
-  const response = await fetch(
-    'https://inputtools.google.com/request?ime=handwriting&app=mobilesearch&cs=1&oe=UTF-8',
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    }
-  );
-
-  if (!response.ok) throw new Error('Recognition request failed');
-
-  const data = await response.json();
-
-  // Response format: ["SUCCESS", [["", [candidates...], ...]]]
-  if (data[0] === 'SUCCESS' && data[1]?.[0]?.[1]) {
-    return data[1][0][1] as string[];
-  }
-
-  return [];
-}
+type Stroke = HandwritingStroke;
 
 const ScribblePad = ({ open, onClose, onConfirm }: ScribblePadProps) => {
   const [initials, setInitials] = useState('');
@@ -77,7 +32,14 @@ const ScribblePad = ({ open, onClose, onConfirm }: ScribblePadProps) => {
   const strokesRef = useRef<Stroke[]>([]);
   const currentStroke = useRef<Stroke>({ xs: [], ys: [], ts: [] });
   const strokeStartTime = useRef(0);
+  const recognitionAbortRef = useRef<AbortController | null>(null);
+  const recognitionGenerationRef = useRef(0);
   const [canvasHeight, setCanvasHeight] = useState(320);
+
+  const abortRecognition = useCallback(() => {
+    recognitionAbortRef.current?.abort();
+    recognitionAbortRef.current = null;
+  }, []);
 
   // Canvas height: mobile/tablet 320px, desktop 280px; update on resize
   useEffect(() => {
@@ -108,30 +70,42 @@ const ScribblePad = ({ open, onClose, onConfirm }: ScribblePadProps) => {
     const canvas = canvasRef.current;
     if (!canvas || strokesRef.current.length === 0) return;
 
-    setDrawingPreview(canvas.toDataURL('image/png'));
+    abortRecognition();
+    const myGen = ++recognitionGenerationRef.current;
+    const ac = new AbortController();
+    recognitionAbortRef.current = ac;
+    const strokesSnapshot = strokesRef.current.map(s => ({
+      xs: [...s.xs],
+      ys: [...s.ys],
+      ts: [...s.ts],
+    }));
+
     setRecognizing(true);
     setRecognizeStatus('Recognizing...');
     setCandidates([]);
+    setDrawingPreview(null);
 
     try {
       const results = await recognizeHandwriting(
-        strokesRef.current,
+        strokesSnapshot,
         canvas.width,
-        canvas.height
+        canvas.height,
+        ac.signal
       );
 
+      if (ac.signal.aborted) return;
+
       if (results.length > 0) {
-        // Take the top result, clean it
         const best = results[0].trim().toUpperCase().replace(/\s+/g, '').replace(/[^A-Z0-9]/g, '');
         if (best) {
           setInitials(best.slice(0, 5));
           setRecognizeStatus(`Detected: ${best.slice(0, 5)}`);
-          // Store alternate candidates for user selection
           const alts = results.slice(0, 5)
             .map(r => r.trim().toUpperCase().replace(/\s+/g, '').replace(/[^A-Z0-9]/g, ''))
             .filter((r, i, arr) => r && arr.indexOf(r) === i)
             .slice(0, 4);
           setCandidates(alts);
+          setDrawingPreview(canvas.toDataURL('image/jpeg', 0.82));
         } else {
           setRecognizeStatus('Could not detect — type manually');
         }
@@ -139,12 +113,13 @@ const ScribblePad = ({ open, onClose, onConfirm }: ScribblePadProps) => {
         setRecognizeStatus('Could not detect — type manually');
       }
     } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') return;
       console.warn('Handwriting recognition failed:', err);
       setRecognizeStatus('Recognition failed — type manually');
     } finally {
-      setRecognizing(false);
+      if (myGen === recognitionGenerationRef.current) setRecognizing(false);
     }
-  }, []);
+  }, [abortRecognition]);
 
   const getPos = (e: React.TouchEvent | React.MouseEvent) => {
     const canvas = canvasRef.current;
@@ -166,6 +141,7 @@ const ScribblePad = ({ open, onClose, onConfirm }: ScribblePadProps) => {
 
   const startDraw = (e: React.TouchEvent | React.MouseEvent) => {
     e.preventDefault();
+    abortRecognition();
     isDrawing.current = true;
     const pos = getPos(e);
     lastPos.current = pos;
@@ -211,11 +187,11 @@ const ScribblePad = ({ open, onClose, onConfirm }: ScribblePadProps) => {
     }
     currentStroke.current = { xs: [], ys: [], ts: [] };
 
-    // Auto-recognize after user stops drawing for 800ms
+    // Auto-recognize shortly after user lifts pen.
     if (drawTimeout.current) clearTimeout(drawTimeout.current);
     drawTimeout.current = setTimeout(() => {
       doRecognition();
-    }, 800);
+    }, getHandwritingRecognitionDebounceMs());
   };
 
   const clearCanvas = () => {
@@ -231,6 +207,7 @@ const ScribblePad = ({ open, onClose, onConfirm }: ScribblePadProps) => {
     setRecognizeStatus('');
     setCandidates([]);
     if (drawTimeout.current) clearTimeout(drawTimeout.current);
+    abortRecognition();
   };
 
   const adjustQty = (delta: number) => {
@@ -259,6 +236,7 @@ const ScribblePad = ({ open, onClose, onConfirm }: ScribblePadProps) => {
     setRecognizeStatus('');
     setCandidates([]);
     if (drawTimeout.current) clearTimeout(drawTimeout.current);
+    abortRecognition();
     onClose();
   };
 

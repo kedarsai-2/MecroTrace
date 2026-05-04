@@ -1,4 +1,5 @@
 import { useState, useEffect, useLayoutEffect, useMemo, useCallback, useRef } from 'react';
+import { useVirtualizer, measureElement } from '@tanstack/react-virtual';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   ArrowLeft, Receipt, Search, User, Package, IndianRupee, Truck, Hash,
@@ -59,11 +60,15 @@ import {
 import { formatAuctionLotIdentifier } from '@/utils/auctionLotIdentifier';
 import {
   billGroupSubtotalWithTaxAndCharges,
+  commodityPreRoundTotalRupees,
   effectiveGstPercent,
   formatBillingInr,
-  gstOnSubtotal,
+  gstComponentRupees,
   percentOfAmount,
   roundMoney2,
+  rupeeWholeRoundOffDelta,
+  syncGstRatesFromFixedAmounts,
+  totalGstRupeesForGroup,
 } from '@/utils/billingMoney';
 import { BillingMoneyInput } from '@/components/billing/BillingMoneyInput';
 
@@ -386,6 +391,10 @@ interface CommodityGroup {
   sgstInputMode?: 'PERCENT' | 'AMOUNT';
   cgstInputMode?: 'PERCENT' | 'AMOUNT';
   igstInputMode?: 'PERCENT' | 'AMOUNT';
+  /** When SGST/CGST/IGST input is ₹, fixed rupees (synced % on subtotal change). */
+  sgstAmountFixed?: number;
+  cgstAmountFixed?: number;
+  igstAmountFixed?: number;
   gstRate: number;
   /** Optional SGST/CGST (intra) or IGST (inter) split; see `effectiveGstPercent` in billingMoney. */
   sgstRate: number;
@@ -404,7 +413,7 @@ interface CommodityGroup {
   weighmanChargeQty?: number;
   discount: number; // Per-commodity discount amount or percentage
   discountType: 'PERCENT' | 'AMOUNT'; // Per-commodity discount type
-  manualRoundOff: number; // Per-commodity manual round off
+  manualRoundOff: number; // Per-commodity round-off (auto: whole-rupee adjustment from fractional paise)
   items: BillLineItem[];
   subtotal: number;
   commissionAmount: number;
@@ -492,6 +501,15 @@ interface BillData {
   versions: any[];
 }
 
+/** Bill-level / line brokerage applies only when a broker is set, or buyer acts as broker. */
+function billHasBrokerForBrokerage(b: Pick<BillData, 'buyerAsBroker' | 'brokerName' | 'brokerMark' | 'brokerContactId'>): boolean {
+  if (b.buyerAsBroker) return true;
+  const mk = (b.brokerMark ?? '').trim();
+  const nm = (b.brokerName ?? '').trim();
+  const id = b.brokerContactId != null && String(b.brokerContactId).trim() !== '';
+  return mk.length > 0 || nm.length > 0 || id;
+}
+
 /** True if billId was issued by backend (numeric string). */
 function isBackendBillId(billId: string): boolean {
   return /^\d+$/.test(billId);
@@ -531,6 +549,18 @@ function roundBillMoneyValues(b: BillData): BillData {
       sgstRate: roundMoney2(Number(g.sgstRate) || 0),
       cgstRate: roundMoney2(Number(g.cgstRate) || 0),
       igstRate: roundMoney2(Number(g.igstRate) || 0),
+      sgstAmountFixed:
+        g.sgstAmountFixed != null && Number.isFinite(Number(g.sgstAmountFixed))
+          ? roundMoney2(Number(g.sgstAmountFixed))
+          : undefined,
+      cgstAmountFixed:
+        g.cgstAmountFixed != null && Number.isFinite(Number(g.cgstAmountFixed))
+          ? roundMoney2(Number(g.cgstAmountFixed))
+          : undefined,
+      igstAmountFixed:
+        g.igstAmountFixed != null && Number.isFinite(Number(g.igstAmountFixed))
+          ? roundMoney2(Number(g.igstAmountFixed))
+          : undefined,
       commissionPercent: roundMoney2(Number(g.commissionPercent) || 0),
       userFeePercent: roundMoney2(Number(g.userFeePercent) || 0),
       coolieRate: roundMoney2(Number(g.coolieRate) || 0),
@@ -759,6 +789,7 @@ function validateBill(
 ): { isValid: boolean; errors: ValidationErrors; warnings: ValidationErrors } {
   const errors: ValidationErrors = {};
   const warnings: ValidationErrors = {};
+  const hasBroker = billHasBrokerForBrokerage(b);
 
   const trimmedBilling = (b.billingName ?? '').trim();
   const tempFallback =
@@ -786,9 +817,11 @@ function validateBill(
 
   if (!Number.isFinite(b.brokerageValue) || b.brokerageValue < 0) {
     errors.brokerageValue = 'Must be a positive number';
-  } else if (b.brokerageType === 'PERCENT' && b.brokerageValue > 100) {
+  } else if (!hasBroker && b.brokerageValue > 0) {
+    errors.brokerageValue = 'Add a broker before using brokerage';
+  } else if (hasBroker && b.brokerageType === 'PERCENT' && b.brokerageValue > 100) {
     errors.brokerageValue = 'Percent cannot exceed 100';
-  } else if (b.brokerageType === 'AMOUNT' && b.brokerageValue > 10000000) {
+  } else if (hasBroker && b.brokerageType === 'AMOUNT' && b.brokerageValue > 10000000) {
     errors.brokerageValue = 'Cannot exceed ₹1,00,00,000';
   }
 
@@ -866,7 +899,7 @@ function validateBill(
         errors[`items.${gi}.${ii}.quantity`] = 'Quantity must be at least 1';
       }
       if (!item.weight || item.weight <= 0) {
-        errors[`items.${gi}.${ii}.weight`] = 'Weight cannot be zero';
+        warnings[`items.${gi}.${ii}.weight`] = 'Weight cannot be zero';
       }
       const avgWeight = item.quantity > 0 ? item.weight / item.quantity : 0;
       const bounds = commodityAvgWeightBounds[group.commodityName];
@@ -879,6 +912,8 @@ function validateBill(
       }
       if (!Number.isFinite(item.brokerage) || item.brokerage < 0) {
         errors[`items.${gi}.${ii}.brokerage`] = 'Invalid';
+      } else if (!hasBroker && item.brokerage > 0) {
+        errors[`items.${gi}.${ii}.brokerage`] = 'Add a broker before using brokerage';
       } else if (item.brokerage > 10000000) {
         errors[`items.${gi}.${ii}.brokerage`] = 'Too large';
       }
@@ -899,6 +934,92 @@ function validateBill(
   });
 
   return { isValid: Object.keys(errors).length === 0, errors, warnings };
+}
+
+/** If true, skip {@link billingApi.assignNumber} so bill stays in progress until every line has positive weight. */
+function billHasAnyLineWeightZeroOrMissing(b: BillData): boolean {
+  return b.commodityGroups.some(g =>
+    (g.items ?? []).some(it => {
+      const w = Number(it.weight);
+      return !Number.isFinite(w) || w <= 0;
+    }),
+  );
+}
+
+/** Saved bills list paging (SummaryPage-style; uses `totalElements` from Spring page). */
+const BILLING_SAVED_BILLS_PAGE_SIZE = 100;
+/** Desktop saved-bills list: column ratios (ex-<colgroup>). Grid avoids broken thead/body sync when rows are `position:absolute` (virtualizer). */
+const SAVED_BILLS_TABLE_GRID_COLS =
+  'minmax(0,10fr) minmax(0,12fr) minmax(0,11fr) minmax(0,8fr) minmax(0,10fr) minmax(0,9fr) minmax(0,9fr) minmax(0,10fr) minmax(0,9fr) minmax(0,12fr)';
+const BILLING_WEIGHING_PAGE_SIZE = 100;
+/** Sales Pad–aligned lot page size for add-bid browser (`id,asc`). */
+const BILLING_ADD_BID_LOTS_PAGE_SIZE = 90;
+
+function isAbortError(e: unknown): boolean {
+  return (
+    (typeof DOMException !== 'undefined' && e instanceof DOMException && e.name === 'AbortError') ||
+    (e instanceof Error && e.name === 'AbortError')
+  );
+}
+
+async function fetchAllWeighingSessions(signal?: AbortSignal): Promise<Awaited<ReturnType<typeof weighingApi.list>>> {
+  const merged: Awaited<ReturnType<typeof weighingApi.list>> = [];
+  let page = 0;
+  let totalElements = Infinity;
+  for (;;) {
+    const { items, totalElements: tot } = await weighingApi.listPage(
+      { page, size: BILLING_WEIGHING_PAGE_SIZE },
+      signal ? { signal } : undefined,
+    );
+    totalElements = tot;
+    merged.push(...items);
+    if (items.length < BILLING_WEIGHING_PAGE_SIZE || merged.length >= totalElements) break;
+    page += 1;
+    if (page > 500) break;
+  }
+  return merged;
+}
+
+async function fetchAllAuctionLotsForBrowse(signal?: AbortSignal): Promise<LotSummaryDTO[]> {
+  const merged = new Map<string, LotSummaryDTO>();
+  let page = 0;
+  let reportedTotal = 0;
+  for (;;) {
+    const { items, totalElements } = await auctionApi.listLotsPage(
+      { page, size: BILLING_ADD_BID_LOTS_PAGE_SIZE, sort: 'id,asc' },
+      signal ? { signal } : undefined,
+    );
+    if (page === 0) reportedTotal = totalElements;
+    for (const lot of items) {
+      const id = String(lot.lot_id ?? '').trim();
+      if (id) merged.set(id, lot);
+    }
+    if (items.length === 0 || items.length < BILLING_ADD_BID_LOTS_PAGE_SIZE || merged.size >= reportedTotal) break;
+    page += 1;
+    if (page > 500) break;
+  }
+  return [...merged.values()].sort((a, b) => Number(a.lot_id) - Number(b.lot_id));
+}
+
+async function fetchAuctionLotsByQuery(q: string, signal?: AbortSignal): Promise<LotSummaryDTO[]> {
+  const merged = new Map<string, LotSummaryDTO>();
+  let page = 0;
+  let reportedTotal = 0;
+  for (;;) {
+    const { items, totalElements } = await auctionApi.listLotsPage(
+      { page, size: BILLING_ADD_BID_LOTS_PAGE_SIZE, sort: 'id,asc', q },
+      signal ? { signal } : undefined,
+    );
+    if (page === 0) reportedTotal = totalElements;
+    for (const lot of items) {
+      const id = String(lot.lot_id ?? '').trim();
+      if (id) merged.set(id, lot);
+    }
+    if (items.length === 0 || items.length < BILLING_ADD_BID_LOTS_PAGE_SIZE || merged.size >= reportedTotal) break;
+    page += 1;
+    if (page > 500) break;
+  }
+  return [...merged.values()].sort((a, b) => Number(a.lot_id) - Number(b.lot_id));
 }
 
 const BillingPage = () => {
@@ -936,6 +1057,9 @@ const BillingPage = () => {
 
   type BillingMainTab = 'create' | 'progress' | 'saved';
   const [billingMainTab, setBillingMainTab] = useState<BillingMainTab>('create');
+  /** Alt+tab shortcuts read latest tab; avoids stale closure in keydown listener. */
+  const billingMainTabRef = useRef<BillingMainTab>(billingMainTab);
+  billingMainTabRef.current = billingMainTab;
   const [buyerBidMarkInput, setBuyerBidMarkInput] = useState('');
   const [selectBidBuyer, setSelectBidBuyer] = useState<BuyerPurchase | null>(null);
   const [selectedBidKeys, setSelectedBidKeys] = useState<string[]>([]);
@@ -1014,7 +1138,13 @@ const BillingPage = () => {
   const isGstBill = useMemo(() => {
     if (!bill) return false;
     return bill.commodityGroups.some(
-      (g) => effectiveGstPercent(g) > 0 || g.taxMode === 'GST' || g.taxMode === 'IGST',
+      (g) =>
+        effectiveGstPercent(g) > 0
+        || (g.sgstAmountFixed ?? 0) > 0
+        || (g.cgstAmountFixed ?? 0) > 0
+        || (g.igstAmountFixed ?? 0) > 0
+        || g.taxMode === 'GST'
+        || g.taxMode === 'IGST',
     );
   }, [bill]);
 
@@ -1221,9 +1351,10 @@ const BillingPage = () => {
   const billingTabConfirmIfDirtyRef = useRef<() => Promise<boolean>>(() => Promise.resolve(true));
 
   useEffect(() => {
+    if (!canView) return;
     commodityApi.list().then(setCommodities);
     commodityApi.getAllFullConfigs().then(setFullConfigs);
-  }, []);
+  }, [canView]);
 
   useEffect(() => {
     if (!bill) {
@@ -1236,64 +1367,76 @@ const BillingPage = () => {
   }, [bill, selectedPrintVersion]);
 
   useEffect(() => {
-    weighingApi.list({ page: 0, size: 2000 }).then(setWeighingSessions).catch(() => setWeighingSessions([]));
-  }, []);
-
-  useEffect(() => {
-    if (!addBidDialogOpen) return;
+    if (!canView) return;
     let cancelled = false;
-    setAddBidLotLoading(true);
-    void auctionApi
-      .listLots({ page: 0, size: 4000 })
-      .then(list => {
-        if (cancelled) return;
-        const arr = Array.isArray(list) ? list : [];
-        addBidBrowseLotsRef.current = arr;
-        if (addBidLotSearchRef.current.trim().length < 2) setAddBidLotOptions(arr);
+    void fetchAllWeighingSessions()
+      .then((list) => {
+        if (!cancelled) setWeighingSessions(list);
       })
       .catch(() => {
-        if (!cancelled) {
-          addBidBrowseLotsRef.current = [];
-          if (addBidLotSearchRef.current.trim().length < 2) setAddBidLotOptions([]);
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setAddBidLotLoading(false);
+        if (!cancelled) setWeighingSessions([]);
       });
     return () => {
       cancelled = true;
     };
-  }, [addBidDialogOpen]);
+  }, [canView]);
+
+  useEffect(() => {
+    if (!canView || !addBidDialogOpen) return;
+    const ac = new AbortController();
+    let cancelled = false;
+    setAddBidLotLoading(true);
+    void (async () => {
+      try {
+        const arr = await fetchAllAuctionLotsForBrowse(ac.signal);
+        if (cancelled || ac.signal.aborted) return;
+        addBidBrowseLotsRef.current = arr;
+        if (addBidLotSearchRef.current.trim().length < 2) setAddBidLotOptions(arr);
+      } catch (e) {
+        if (isAbortError(e) || cancelled || ac.signal.aborted) return;
+        addBidBrowseLotsRef.current = [];
+        if (addBidLotSearchRef.current.trim().length < 2) setAddBidLotOptions([]);
+      } finally {
+        if (!cancelled && !ac.signal.aborted) setAddBidLotLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+      ac.abort();
+    };
+  }, [canView, addBidDialogOpen]);
 
   /** Server search by lot name (backend ignores status — sold lots remain discoverable). */
   useEffect(() => {
-    if (!addBidDialogOpen) return;
+    if (!canView || !addBidDialogOpen) return;
     const q = addBidLotSearch.trim();
     if (q.length < 2) {
       setAddBidLotOptions(addBidBrowseLotsRef.current);
       return;
     }
     let cancelled = false;
+    const ac = new AbortController();
     const t = window.setTimeout(() => {
       setAddBidLotLoading(true);
-      void auctionApi
-        .listLots({ page: 0, size: 1500, q })
-        .then(list => {
-          if (cancelled) return;
-          setAddBidLotOptions(Array.isArray(list) ? list : []);
-        })
-        .catch(() => {
-          if (!cancelled) setAddBidLotOptions([]);
-        })
-        .finally(() => {
-          if (!cancelled) setAddBidLotLoading(false);
-        });
+      void (async () => {
+        try {
+          const list = await fetchAuctionLotsByQuery(q, ac.signal);
+          if (cancelled || ac.signal.aborted) return;
+          setAddBidLotOptions(list);
+        } catch (e) {
+          if (isAbortError(e) || cancelled || ac.signal.aborted) return;
+          setAddBidLotOptions([]);
+        } finally {
+          if (!cancelled && !ac.signal.aborted) setAddBidLotLoading(false);
+        }
+      })();
     }, 300);
     return () => {
       cancelled = true;
+      ac.abort();
       window.clearTimeout(t);
     };
-  }, [addBidDialogOpen, addBidLotSearch]);
+  }, [canView, addBidDialogOpen, addBidLotSearch]);
 
   const getAddBidLotIdentifier = useCallback((lot: LotSummaryDTO): string => {
     const lotQty = Number(lot.bag_count) || 0;
@@ -1330,22 +1473,47 @@ const BillingPage = () => {
       .slice(0, 150);
   }, [addBidLotOptions, addBidLotSearch, getAddBidLotIdentifier]);
 
-  // Load saved bills from backend
+  /** Lot bags left after the qty entered in Add New Bid (live with qty field). */
+  const addBidRuntimeRemaining = useMemo(() => {
+    if (!addBidSelectedLot) return null;
+    const digits = String(addBidQty).replace(/[^\d]/g, '') || '0';
+    const q = Math.max(0, parseInt(digits, 10) || 0);
+    return Math.max(0, addBidRemainingQty - q);
+  }, [addBidSelectedLot, addBidQty, addBidRemainingQty]);
+
+  // Load saved bills from backend (all pages; no 200 cap)
   const loadSavedBills = useCallback(async () => {
+    if (!canView) return;
     setSavedBillsLoading(true);
     try {
-      const page = await billingApi.getPage({ page: 0, size: 200, sort: 'billDate,desc' });
-      setSavedBills(page.content ?? []);
+      const merged: SalesBillDTO[] = [];
+      let page = 0;
+      let totalElements = Infinity;
+      for (;;) {
+        const batch = await billingApi.getPage({
+          page,
+          size: BILLING_SAVED_BILLS_PAGE_SIZE,
+          sort: 'billDate,desc',
+        });
+        const content = batch.content ?? [];
+        totalElements = batch.totalElements ?? totalElements;
+        merged.push(...content);
+        if (content.length < BILLING_SAVED_BILLS_PAGE_SIZE || merged.length >= totalElements) break;
+        page += 1;
+        if (page > 500) break;
+      }
+      setSavedBills(merged);
     } catch {
       setSavedBills([]);
     } finally {
       setSavedBillsLoading(false);
     }
-  }, []);
+  }, [canView]);
 
   useEffect(() => {
-    loadSavedBills();
-  }, [loadSavedBills]);
+    if (!canView) return;
+    void loadSavedBills();
+  }, [canView, loadSavedBills]);
 
   const reloadArrivalDetails = useCallback(async () => {
     const all: ArrivalDetail[] = [];
@@ -1359,6 +1527,7 @@ const BillingPage = () => {
   }, []);
 
   useEffect(() => {
+    if (!canView) return;
     let cancelled = false;
     (async () => {
       try {
@@ -1368,7 +1537,7 @@ const BillingPage = () => {
       }
     })();
     return () => { cancelled = true; };
-  }, [reloadArrivalDetails]);
+  }, [canView, reloadArrivalDetails]);
 
   const handleResync = useCallback(async () => {
     setResyncing(true);
@@ -1377,7 +1546,7 @@ const BillingPage = () => {
         refetchAuctions(),
         commodityApi.list().then(setCommodities),
         commodityApi.getAllFullConfigs().then(setFullConfigs),
-        weighingApi.list({ page: 0, size: 2000 }).then(setWeighingSessions).catch(() => setWeighingSessions([])),
+        fetchAllWeighingSessions().then(setWeighingSessions).catch(() => setWeighingSessions([])),
         loadSavedBills(),
         reloadArrivalDetails(),
       ]);
@@ -1948,19 +2117,19 @@ const BillingPage = () => {
     }
   }, [buyersForBilling, selectBidBuyer]);
 
-  // Recalculate grand total (includes per-commodity discount and round-off)
+  // Recalculate grand total (includes per-commodity discount; round-off auto-snaps each commodity to whole ₹)
   const recalcGrandTotal = useCallback((b: BillData): BillData => {
     const calculateGroupCharges = (group: CommodityGroup) => {
       const sub = roundMoney2(group.subtotal);
       const commissionAmount = percentOfAmount(sub, group.commissionPercent || 0);
       const userFeeAmount = percentOfAmount(sub, group.userFeePercent || 0);
-      const gstAmount = gstOnSubtotal(sub, effectiveGstPercent(group));
+      const gstAmount = totalGstRupeesForGroup(group);
       const totalCharges = roundMoney2(commissionAmount + userFeeAmount + gstAmount);
       return { commissionAmount, userFeeAmount, totalCharges };
     };
 
     const commodityGroups = b.commodityGroups.map(group => {
-      const next = { ...group };
+      const next = { ...syncGstRatesFromFixedAmounts({ ...group }) };
       const charges = calculateGroupCharges(next);
       next.commissionAmount = charges.commissionAmount;
       next.userFeeAmount = charges.userFeeAmount;
@@ -1974,25 +2143,30 @@ const BillingPage = () => {
       return next;
     });
 
+    const commodityGroupsWithRoundOff = commodityGroups.map(group => ({
+      ...group,
+      manualRoundOff: rupeeWholeRoundOffDelta(commodityPreRoundTotalRupees(group)),
+    }));
+
     let grandTotal = 0;
-    commodityGroups.forEach(group => {
-      const subtotalWithCharges = roundMoney2(group.subtotal + group.totalCharges);
-      const additionsSum = roundMoney2((group.coolieAmount || 0) + (group.weighmanChargeAmount || 0));
-      let discountAmount = roundMoney2(group.discount || 0);
-      if (group.discountType === 'PERCENT') {
-        discountAmount = percentOfAmount(subtotalWithCharges, discountAmount);
-      }
+    commodityGroupsWithRoundOff.forEach(group => {
       const commodityTotal = roundMoney2(
-        subtotalWithCharges + additionsSum - discountAmount + roundMoney2(group.manualRoundOff || 0),
+        commodityPreRoundTotalRupees(group) + roundMoney2(group.manualRoundOff || 0),
       );
       grandTotal = roundMoney2(grandTotal + commodityTotal);
     });
 
     grandTotal = roundMoney2(grandTotal + roundMoney2(b.outboundFreight || 0));
 
-    const tokenAdvance = sumLineTokenAdvances({ ...b, commodityGroups });
+    const tokenAdvance = sumLineTokenAdvances({ ...b, commodityGroups: commodityGroupsWithRoundOff });
     const pendingBalance = roundMoney2(grandTotal - tokenAdvance);
-    return roundBillMoneyValues({ ...b, commodityGroups, grandTotal, pendingBalance, tokenAdvance });
+    return roundBillMoneyValues({
+      ...b,
+      commodityGroups: commodityGroupsWithRoundOff,
+      grandTotal,
+      pendingBalance,
+      tokenAdvance,
+    });
   }, []);
 
   const serializeBillForDirty = useCallback((b: BillData): string => {
@@ -2258,7 +2432,7 @@ const BillingPage = () => {
       group.subtotal = roundMoney2(group.items.reduce((s, item) => s + item.amount, 0));
       group.commissionAmount = percentOfAmount(group.subtotal, group.commissionPercent);
       group.userFeeAmount = percentOfAmount(group.subtotal, group.userFeePercent);
-      const gst = gstOnSubtotal(group.subtotal, effectiveGstPercent(group));
+      const gst = totalGstRupeesForGroup(group);
       group.totalCharges = roundMoney2(group.commissionAmount + group.userFeeAmount + gst);
     });
 
@@ -2428,28 +2602,14 @@ const BillingPage = () => {
     generateBill(buyer);
   }, [autoSaveCurrentBillBeforeBuyerSwitch, findBuyerByInput, generateBill, selectedBuyer]);
 
-  const currentBillBidKeys = useMemo(() => {
-    if (!bill) return new Set<string>();
-    const keys = new Set<string>();
-    for (const group of bill.commodityGroups || []) {
-      for (const item of group.items || []) {
-        keys.add(`${item.bidNumber}::${String(item.lotId ?? '').trim()}`);
-      }
-    }
-    return keys;
-  }, [bill]);
-
   const handleSelectBidMode = useCallback(() => {
     const buyer = findBuyerByInput();
     if (!buyer) return;
     setShowBuyerSuggestions(false);
     setSelectBidBuyer(buyer);
-    const preselected = buyer.entries
-      .map(e => getBidSelectionKey(e))
-      .filter(key => currentBillBidKeys.has(key));
-    setSelectedBidKeys(preselected);
+    setSelectedBidKeys(buyer.entries.map(e => getBidSelectionKey(e)));
     toast.success(`Loaded ${buyer.entries.length} bids. Select required bids to create bill.`);
-  }, [currentBillBidKeys, findBuyerByInput]);
+  }, [findBuyerByInput]);
 
   const toggleBidSelection = (entry: BillEntry) => {
     const key = getBidSelectionKey(entry);
@@ -2818,7 +2978,10 @@ const BillingPage = () => {
   const openSearchBidDialogForBuyer = useCallback((picked: BuyerPurchase) => {
     setSearchBidSourceBuyer(picked);
     setSearchBidInput(picked.buyerMark || picked.buyerName);
-    setSearchBidSelectedKeys([]);
+    const visibleKeys = picked.entries
+      .filter(e => Math.floor(Number(e.quantity) || 0) > 0)
+      .map(e => getBidSelectionKey(e));
+    setSearchBidSelectedKeys(visibleKeys);
     const initQty: Record<string, number> = {};
     for (const ent of picked.entries) {
       const k = getBidSelectionKey(ent);
@@ -2974,8 +3137,10 @@ const BillingPage = () => {
     }
     const updated = { ...bill };
     const group = { ...updated.commodityGroups[commIdx] };
+    const brokerOk = billHasBrokerForBrokerage(bill);
     const item = { ...group.items[itemIdx] };
-    (item as any)[field] = v;
+    if (!brokerOk) item.brokerage = 0;
+    (item as any)[field] = field === 'brokerage' && !brokerOk ? 0 : v;
     const preset = (item as { presetApplied?: number }).presetApplied ?? 0;
     item.newRate = roundMoney2(item.baseRate + preset + item.brokerage + item.otherCharges);
     const divisorUsed = group.divisor > 0 ? group.divisor : 50;
@@ -3020,7 +3185,7 @@ const BillingPage = () => {
     group.subtotal = roundMoney2(group.items.reduce((s, i) => s + i.amount, 0));
     group.commissionAmount = percentOfAmount(group.subtotal, group.commissionPercent);
     group.userFeeAmount = percentOfAmount(group.subtotal, group.userFeePercent);
-    const gst = gstOnSubtotal(group.subtotal, effectiveGstPercent(group));
+    const gst = totalGstRupeesForGroup(group);
     group.totalCharges = roundMoney2(group.commissionAmount + group.userFeeAmount + gst);
     updated.commodityGroups = [...updated.commodityGroups];
     updated.commodityGroups[commIdx] = group;
@@ -3042,7 +3207,7 @@ const BillingPage = () => {
       group.subtotal = roundMoney2(items.reduce((s, i) => s + i.amount, 0));
       group.commissionAmount = percentOfAmount(group.subtotal, group.commissionPercent);
       group.userFeeAmount = percentOfAmount(group.subtotal, group.userFeePercent);
-      const gst = gstOnSubtotal(group.subtotal, effectiveGstPercent(group));
+      const gst = totalGstRupeesForGroup(group);
       group.totalCharges = roundMoney2(group.commissionAmount + group.userFeeAmount + gst);
       groups[commIdx] = group;
     }
@@ -3057,9 +3222,9 @@ const BillingPage = () => {
 
   /**
    * Push bill-level brokerage / global other charges onto every line item and refresh group subtotals.
-   * Used by the Apply button and by live edits so New Rate / Amount update immediately.
+   * Call from "Apply to All" only; header fields update bill root without this until user applies.
    */
-  const applyGlobalChargesToBillState = (root: BillData): BillData => {
+  const applyGlobalChargesToBillState = useCallback((root: BillData): BillData => {
     const updated = { ...root };
     updated.commodityGroups = updated.commodityGroups.map(group => {
       const commodity = commodities.find((c: any) => c.commodity_name === group.commodityName);
@@ -3069,9 +3234,12 @@ const BillingPage = () => {
       const dynCharges = fullCfg?.dynamicCharges ?? [];
       const items = group.items.map(item => {
         const preset = item.presetApplied ?? 0;
-        const brk = root.brokerageType === 'PERCENT'
-          ? percentOfAmount(item.baseRate + preset, root.brokerageValue)
-          : roundMoney2(root.brokerageValue);
+        const brokerAllowed = billHasBrokerForBrokerage(root);
+        const brk = brokerAllowed
+          ? (root.brokerageType === 'PERCENT'
+            ? percentOfAmount(item.baseRate + preset, root.brokerageValue)
+            : roundMoney2(root.brokerageValue))
+          : 0;
         const globalOther = roundMoney2(root.globalOtherCharges);
         const newItem = {
           ...item,
@@ -3118,7 +3286,7 @@ const BillingPage = () => {
         return newItem;
       });
       const subtotal = roundMoney2(items.reduce((s, i) => s + i.amount, 0));
-      const gst = gstOnSubtotal(subtotal, effectiveGstPercent(group));
+      const gst = totalGstRupeesForGroup({ ...group, subtotal });
       return {
         ...group,
         items,
@@ -3133,7 +3301,18 @@ const BillingPage = () => {
       };
     });
     return updated;
-  };
+  }, [commodities, fullConfigs]);
+
+  useEffect(() => {
+    setBill(prev => {
+      if (!prev) return prev;
+      if (billHasBrokerForBrokerage(prev)) return prev;
+      const brkVal = Number(prev.brokerageValue) || 0;
+      const anyLine = prev.commodityGroups.some(g => g.items.some(it => (Number(it.brokerage) || 0) !== 0));
+      if (brkVal === 0 && !anyLine) return prev;
+      return recalcGrandTotal(applyGlobalChargesToBillState({ ...prev, brokerageValue: 0 }));
+    });
+  }, [bill, applyGlobalChargesToBillState, recalcGrandTotal]);
 
   const applyGlobalCharges = () => {
     if (!bill) return;
@@ -3160,6 +3339,7 @@ const BillingPage = () => {
       || (bill.billingName ?? '').trim()
       || (bill.buyerMark ?? '').trim()
       || '—';
+    const brokerPersistOk = billHasBrokerForBrokerage(bill);
     const payload = {
       buyerName: buyerNameForApi,
       buyerMark: bill.buyerMark,
@@ -3175,7 +3355,15 @@ const BillingPage = () => {
       billingName: bill.billingName,
       billDate: typeof bill.billDate === 'string' ? bill.billDate : new Date(bill.billDate).toISOString(),
       // Keep all persisted commodity-group values; only remove frontend-only helper fields.
-      commodityGroups: bill.commodityGroups.map(({ divisor: _divisor, taxMode: _taxMode, ...g }: any) => {
+      commodityGroups: bill.commodityGroups.map(
+        ({
+          divisor: _divisor,
+          taxMode: _taxMode,
+          sgstAmountFixed: _sgstAmtFx,
+          cgstAmountFixed: _cgstAmtFx,
+          igstAmountFixed: _igstAmtFx,
+          ...g
+        }: any) => {
         const coolieChargeQty =
           g.coolieChargeQty != null && Number.isFinite(Number(g.coolieChargeQty))
             ? Math.max(0, Math.round(Number(g.coolieChargeQty)))
@@ -3193,7 +3381,7 @@ const BillingPage = () => {
           weighmanChargeQty,
           items: (g.items ?? []).map((it: any) => {
             const { sellerOtherCharges: _soc, ...restIt } = it;
-            return restIt;
+            return brokerPersistOk ? restIt : { ...restIt, brokerage: 0 };
           }),
         };
       }),
@@ -3201,8 +3389,8 @@ const BillingPage = () => {
       outboundVehicle: bill.outboundVehicle ?? '',
       tokenAdvance: sumLineTokenAdvances(bill),
       grandTotal: bill.grandTotal,
-      brokerageType: bill.brokerageType ?? 'AMOUNT',
-      brokerageValue: bill.brokerageValue ?? 0,
+      brokerageType: brokerPersistOk ? (bill.brokerageType ?? 'AMOUNT') : 'AMOUNT',
+      brokerageValue: brokerPersistOk ? (bill.brokerageValue ?? 0) : 0,
       globalOtherCharges: bill.globalOtherCharges ?? 0,
       pendingBalance: bill.pendingBalance ?? bill.grandTotal,
     };
@@ -3286,9 +3474,12 @@ const BillingPage = () => {
     if (!bill) return;
     const result = await persistBill();
     if (!result) return;
-    // Assign bill number on save (completed bill), idempotent if already numbered.
-    const assigned = await billingApi.assignNumber(result.billId);
-    const normalized = recalcGrandTotal(normalizeBillFromApi(assigned, fullConfigs, commodities) as BillData);
+    const persistedHasNoBillNumber = !String(result.billNumber ?? '').trim();
+    const skipAssignNumber =
+      persistedHasNoBillNumber && billHasAnyLineWeightZeroOrMissing(bill);
+    // Assign bill number only when every line has weight — otherwise stay in Bill In Progress (no billNumber).
+    const dtoAfter = skipAssignNumber ? result : await billingApi.assignNumber(result.billId);
+    const normalized = recalcGrandTotal(normalizeBillFromApi(dtoAfter, fullConfigs, commodities) as BillData);
     const withTempFlag: BillData = {
       ...normalized,
       buyerIsTemporary: !normalized.buyerContactId && Boolean(bill.buyerIsTemporary),
@@ -3296,7 +3487,12 @@ const BillingPage = () => {
     setBill(withTempFlag);
     billDirtyBaselineRef.current = serializeBillForDirty(withTempFlag);
     setHasSavedOnce(true);
-    toast.success(result.billNumber ? `Bill ${result.billNumber} updated.` : 'Bill saved.');
+    if (skipAssignNumber) {
+      toast.success('Saved to Bill In Progress. Set weight on every line, then save again to get a bill number.');
+    } else {
+      const bn = (dtoAfter.billNumber ?? '').trim();
+      toast.success(bn ? `Bill ${bn} updated.` : 'Bill saved.');
+    }
     void loadSavedBills();
   };
 
@@ -3438,6 +3634,19 @@ const BillingPage = () => {
       b.outboundVehicle?.toLowerCase().includes(q)
     );
   }, [numberedBills, searchQuery]);
+
+  const savedBillsTableScrollRef = useRef<HTMLDivElement>(null);
+  const savedBillsTableVirtualEnabled =
+    isDesktop && billingMainTab === 'saved' && !savedBillsLoading && filteredSavedBillsOnly.length > 0;
+
+  const savedBillRowVirtualizer = useVirtualizer({
+    count: savedBillsTableVirtualEnabled ? filteredSavedBillsOnly.length : 0,
+    getScrollElement: () => savedBillsTableScrollRef.current,
+    estimateSize: () => 56,
+    overscan: 12,
+    measureElement,
+    getItemKey: index => String(filteredSavedBillsOnly[index]?.billId ?? index),
+  });
 
   const applySelectedVersion = useCallback((versionSel: 'latest' | number) => {
     if (!bill) return;
@@ -3870,7 +4079,7 @@ const BillingPage = () => {
                 value={addBidLotSearch}
                 onFocus={() => setShowAddBidLotDropdown(true)}
                 onBlur={() => {
-                  window.setTimeout(() => setShowAddBidLotDropdown(false), 120);
+                  window.setTimeout(() => setShowAddBidLotDropdown(false), 280);
                 }}
                 onChange={e => {
                   setAddBidLotSearch(e.target.value);
@@ -3890,7 +4099,13 @@ const BillingPage = () => {
                 </p>
               )}
               {!addBidLotLoading && showAddBidLotDropdown && !addBidSelectedLot && (
-                <div className="absolute z-[100] left-0 right-0 top-full mt-1 max-h-[40vh] sm:max-h-48 overflow-y-auto rounded-lg border border-border/50 bg-background shadow-lg">
+                <div
+                  className="absolute z-[100] left-0 right-0 top-full mt-1 max-h-[40vh] sm:max-h-48 overflow-y-auto rounded-lg border border-border/50 bg-background shadow-lg"
+                  onMouseDown={e => {
+                    // Keep lot search focused until click runs; otherwise blur+timeout unmounts list and click is lost.
+                    e.preventDefault();
+                  }}
+                >
                   {filteredAddBidLots.length === 0 && (
                     <p className="px-3 py-2 text-xs text-muted-foreground">No auction lots found.</p>
                   )}
@@ -3899,10 +4114,14 @@ const BillingPage = () => {
                       key={lot.lot_id}
                       type="button"
                       className="w-full px-3 py-2 text-left border-b border-border/30 last:border-b-0 hover:bg-muted/40 min-h-[44px] sm:min-h-0"
+                      onMouseDown={e => e.preventDefault()}
                       onClick={async () => {
                         setAddBidSelectedLot(lot);
                         setAddBidLotSearch(getAddBidLotIdentifier(lot));
                         setShowAddBidLotDropdown(false);
+                        const totalBags = Number(lot.bag_count) || 0;
+                        const soldBags = Number(lot.sold_bags ?? 0);
+                        setAddBidRemainingQty(Math.max(0, totalBags - soldBags));
                         try {
                           const session = await auctionApi.getOrStartSession(lot.lot_id);
                           setAddBidSession(session);
@@ -3936,6 +4155,11 @@ const BillingPage = () => {
                   ))}
                 </div>
               )}
+              {addBidSelectedLot && (
+                <p className="text-xs font-medium text-emerald-700 dark:text-emerald-400 pt-0.5" role="status">
+                  Bid: lot selected — enter quantity and rates, then save.
+                </p>
+              )}
             </div>
             <div className="space-y-1">
               <Label className="text-xs sm:text-sm">Buyer *</Label>
@@ -3949,15 +4173,43 @@ const BillingPage = () => {
             <div className="grid grid-cols-2 gap-2 sm:gap-3 sm:grid-cols-4">
               <div className="space-y-1">
                 <Label className="text-xs">Qty (bags) *</Label>
-                <BillingMoneyInput
-                  value={Number(addBidQty) || 0}
-                  min={0}
-                  integerOnly
-                  onCommit={(n) => setAddBidQty(n > 0 ? String(Math.max(1, Math.round(n))) : '')}
-                  placeholder={String(addBidRemainingQty)}
-                  className={cn('h-10 sm:h-9 rounded-lg text-sm', numberInputNoSpinnerClass)}
-                  title={`Remaining bags: ${addBidRemainingQty}`}
-                />
+                <div className="flex h-10 sm:h-9 items-center justify-end gap-1 whitespace-nowrap tabular-nums">
+                  <BillingMoneyInput
+                    value={Number(addBidQty) || 0}
+                    min={0}
+                    integerOnly
+                    liveDebounceMs={0}
+                    onCommit={(n) => setAddBidQty(n > 0 ? String(Math.max(1, Math.round(n))) : '')}
+                    className={cn(
+                      'h-10 sm:h-9 min-w-0 flex-1 rounded-lg text-sm text-right tabular-nums',
+                      numberInputNoSpinnerClass,
+                    )}
+                    title={
+                      addBidSelectedLot
+                        ? `This bid qty / bags left on lot after this bid (${addBidRuntimeRemaining ?? 0}; ${addBidRemainingQty} before)`
+                        : 'Select a lot first'
+                    }
+                  />
+                  <span
+                    className="inline-flex shrink-0 items-baseline gap-0 text-sm text-muted-foreground"
+                    aria-label={
+                      addBidSelectedLot && addBidRuntimeRemaining != null
+                        ? `Bags remaining on lot after this bid: ${addBidRuntimeRemaining} (${addBidRemainingQty} before this bid)`
+                        : 'No lot selected'
+                    }
+                  >
+                    {addBidSelectedLot && addBidRuntimeRemaining != null ? (
+                      <>
+                        <span className="leading-none select-none" aria-hidden>
+                          /
+                        </span>
+                        <span className="leading-none tabular-nums -ml-0.5">{addBidRuntimeRemaining}</span>
+                      </>
+                    ) : (
+                      <span className="leading-none">—</span>
+                    )}
+                  </span>
+                </div>
               </div>
               <div className="space-y-1">
                 <Label className="text-xs">Base *</Label>
@@ -4759,28 +5011,43 @@ const BillingPage = () => {
                   <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
                     <div className="min-w-0 flex-1">
                       <p
-                        className="text-[10px] font-semibold text-muted-foreground mb-1 uppercase tracking-wide cursor-pointer select-none"
+                        className={cn(
+                          'text-[10px] font-semibold text-muted-foreground mb-1 uppercase tracking-wide select-none',
+                          billHasBrokerForBrokerage(bill) ? 'cursor-pointer' : 'cursor-not-allowed opacity-50',
+                        )}
                         onClick={() =>
                           setBill(prev => {
                             if (!prev) return prev;
+                            if (!billHasBrokerForBrokerage(prev)) return prev;
                             const next: BillData = {
                               ...prev,
                               brokerageType: prev.brokerageType === 'PERCENT' ? 'AMOUNT' : 'PERCENT',
                             };
-                            return recalcGrandTotal(applyGlobalChargesToBillState(next));
+                            return recalcGrandTotal(next);
                           })
                         }
-                        title={`Click to switch type (${bill.brokerageType === 'PERCENT' ? '%' : '₹'})`}
+                        title={
+                          billHasBrokerForBrokerage(bill)
+                            ? `Click to switch type (${bill.brokerageType === 'PERCENT' ? '%' : '₹'})`
+                            : 'Set a broker or use “Use buyer as broker” to enable brokerage'
+                        }
                       >
                         BROKERAGE
                       </p>
                       <BillingMoneyInput
                         value={bill.brokerageValue}
                         min={0}
+                        commitMode="blur"
+                        disabled={!billHasBrokerForBrokerage(bill)}
+                        title={
+                          billHasBrokerForBrokerage(bill)
+                            ? undefined
+                            : 'Add a broker (or buyer as broker) before entering brokerage'
+                        }
                         onCommit={n => {
                           setBill(prev => {
                             if (!prev) return prev;
-                            return recalcGrandTotal(applyGlobalChargesToBillState({ ...prev, brokerageValue: n }));
+                            return recalcGrandTotal({ ...prev, brokerageValue: n });
                           });
                         }}
                         placeholder={bill.brokerageType === 'PERCENT' ? '% Brokerage' : '₹ Brokerage'}
@@ -4805,10 +5072,11 @@ const BillingPage = () => {
                         <BillingMoneyInput
                           value={bill.globalOtherCharges}
                           min={0}
+                          commitMode="blur"
                           onCommit={n => {
                             setBill(prev => {
                               if (!prev) return prev;
-                              return recalcGrandTotal(applyGlobalChargesToBillState({ ...prev, globalOtherCharges: n }));
+                              return recalcGrandTotal({ ...prev, globalOtherCharges: n });
                             });
                           }}
                           placeholder="Other Charges (₹)"
@@ -4837,7 +5105,8 @@ const BillingPage = () => {
                 </div>
               </div>
               <p className="text-[9px] text-muted-foreground">
-                Global charges: brokerage and other amounts apply to all items in this bill.
+                Global charges: other amounts apply to all lines; brokerage applies only when a broker is set (or buyer
+                acts as broker). Use Apply to All to push header values to lines.
               </p>
               {replaceErrors.name && (
                 <p className="text-[11px] text-destructive">{replaceErrors.name}</p>
@@ -5024,16 +5293,13 @@ const BillingPage = () => {
                                       }}
                                       className={cn(
                                         'h-10 lg:h-6 text-[11px] lg:text-[10px] text-center px-2 lg:px-1 py-1 lg:py-0 border border-border rounded bg-background font-bold text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/50',
-                                        (validationErrors[`items.${gi}.${ii}.weight`] || item.weight === 0) &&
-                                          'ring-1 ring-destructive/40 rounded',
+                                        validationWarnings[`items.${gi}.${ii}.weight`] &&
+                                          'ring-1 ring-amber-500/45 rounded border-amber-500/35',
                                       )}
                                     />
-                                    {item.weight === 0 && (
-                                      <p className="mt-0.5 text-[9px] lg:text-[8px] text-destructive text-center">Can&apos;t be 0</p>
-                                    )}
-                                    {validationErrors[`items.${gi}.${ii}.weight`] && (
-                                      <p className="mt-0.5 text-[9px] lg:text-[8px] text-destructive text-center">
-                                        {validationErrors[`items.${gi}.${ii}.weight`]}
+                                    {validationWarnings[`items.${gi}.${ii}.weight`] && (
+                                      <p className="mt-0.5 text-[9px] lg:text-[8px] text-amber-700 dark:text-amber-400 text-center">
+                                        {validationWarnings[`items.${gi}.${ii}.weight`]}
                                       </p>
                                     )}
                                   </div>
@@ -5123,6 +5389,12 @@ const BillingPage = () => {
                                     <BillingMoneyInput
                                       value={item.brokerage}
                                       min={0}
+                                      disabled={!billHasBrokerForBrokerage(bill)}
+                                      title={
+                                        billHasBrokerForBrokerage(bill)
+                                          ? undefined
+                                          : 'Add a broker (or buyer as broker) before line brokerage'
+                                      }
                                       onCommit={n => {
                                         updateLineItem(gi, ii, 'brokerage', n);
                                       }}
@@ -5359,7 +5631,7 @@ const BillingPage = () => {
                                   const cg = { ...updated.commodityGroups[gi] };
                                   cg.commissionPercent = v;
                                   cg.commissionAmount = percentOfAmount(cg.subtotal, cg.commissionPercent);
-                                  const gst = gstOnSubtotal(cg.subtotal, effectiveGstPercent(cg));
+                                  const gst = totalGstRupeesForGroup(cg);
                                   cg.totalCharges = roundMoney2(cg.commissionAmount + cg.userFeeAmount + gst);
                                   updated.commodityGroups = [...updated.commodityGroups];
                                   updated.commodityGroups[gi] = cg;
@@ -5396,7 +5668,7 @@ const BillingPage = () => {
                                   const cg = { ...updated.commodityGroups[gi] };
                                   cg.userFeePercent = v;
                                   cg.userFeeAmount = percentOfAmount(cg.subtotal, cg.userFeePercent);
-                                  const gst = gstOnSubtotal(cg.subtotal, effectiveGstPercent(cg));
+                                  const gst = totalGstRupeesForGroup(cg);
                                   cg.totalCharges = roundMoney2(cg.commissionAmount + cg.userFeeAmount + gst);
                                   updated.commodityGroups = [...updated.commodityGroups];
                                   updated.commodityGroups[gi] = cg;
@@ -5560,14 +5832,17 @@ const BillingPage = () => {
                                   if (value === 'GST') {
                                     cg.igstRate = 0;
                                     cg.gstRate = 0;
+                                    cg.igstAmountFixed = undefined;
                                   } else {
                                     cg.sgstRate = 0;
                                     cg.cgstRate = 0;
                                     cg.gstRate = 0;
+                                    cg.sgstAmountFixed = undefined;
+                                    cg.cgstAmountFixed = undefined;
                                   }
                                   cg.commissionAmount = percentOfAmount(cg.subtotal, cg.commissionPercent);
                                   cg.userFeeAmount = percentOfAmount(cg.subtotal, cg.userFeePercent);
-                                  const gst = gstOnSubtotal(cg.subtotal, effectiveGstPercent(cg));
+                                  const gst = totalGstRupeesForGroup(cg);
                                   cg.totalCharges = roundMoney2(cg.commissionAmount + cg.userFeeAmount + gst);
                                   updated.commodityGroups = [...updated.commodityGroups];
                                   updated.commodityGroups[gi] = cg;
@@ -5623,6 +5898,11 @@ const BillingPage = () => {
                                   const updated = { ...bill };
                                   const cg = { ...updated.commodityGroups[gi] };
                                   cg.sgstInputMode = value;
+                                  if (value === 'PERCENT') {
+                                    cg.sgstAmountFixed = undefined;
+                                  } else {
+                                    cg.sgstAmountFixed = gstComponentRupees(cg, 'sgst');
+                                  }
                                   updated.commodityGroups = [...updated.commodityGroups];
                                   updated.commodityGroups[gi] = cg;
                                   setBill(recalcGrandTotal(updated));
@@ -5638,7 +5918,7 @@ const BillingPage = () => {
                               </Select>
                               <BillingMoneyInput
                                 value={g.sgstInputMode === 'AMOUNT'
-                                  ? gstOnSubtotal(g.subtotal || 0, g.sgstRate ?? 0)
+                                  ? gstComponentRupees(g, 'sgst')
                                   : g.sgstRate}
                                 min={0}
                                 commitMode="live"
@@ -5646,9 +5926,13 @@ const BillingPage = () => {
                                   const v = Math.max(0, val);
                                   const updated = { ...bill };
                                   const cg = { ...updated.commodityGroups[gi] };
-                                  cg.sgstRate = (cg.sgstInputMode === 'AMOUNT')
-                                    ? (cg.subtotal > 0 ? roundMoney2((v * 100) / cg.subtotal) : 0)
-                                    : v;
+                                  if (cg.sgstInputMode === 'AMOUNT') {
+                                    cg.sgstAmountFixed = v;
+                                    cg.sgstRate = cg.subtotal > 0 ? roundMoney2((v * 100) / cg.subtotal) : 0;
+                                  } else {
+                                    cg.sgstRate = v;
+                                    cg.sgstAmountFixed = undefined;
+                                  }
                                   updated.commodityGroups = [...updated.commodityGroups];
                                   updated.commodityGroups[gi] = cg;
                                   setBill(recalcGrandTotal(updated));
@@ -5660,7 +5944,7 @@ const BillingPage = () => {
                               </span>
                             </div>
                             <span className={billingSummaryValueClass}>
-                              ₹{formatBillingInr(gstOnSubtotal(g.subtotal || 0, g.sgstRate ?? 0))}
+                              ₹{formatBillingInr(gstComponentRupees(g, 'sgst'))}
                             </span>
                           </div>
                           )}
@@ -5701,6 +5985,11 @@ const BillingPage = () => {
                                   const updated = { ...bill };
                                   const cg = { ...updated.commodityGroups[gi] };
                                   cg.cgstInputMode = value;
+                                  if (value === 'PERCENT') {
+                                    cg.cgstAmountFixed = undefined;
+                                  } else {
+                                    cg.cgstAmountFixed = gstComponentRupees(cg, 'cgst');
+                                  }
                                   updated.commodityGroups = [...updated.commodityGroups];
                                   updated.commodityGroups[gi] = cg;
                                   setBill(recalcGrandTotal(updated));
@@ -5716,7 +6005,7 @@ const BillingPage = () => {
                               </Select>
                               <BillingMoneyInput
                                 value={g.cgstInputMode === 'AMOUNT'
-                                  ? gstOnSubtotal(g.subtotal || 0, g.cgstRate ?? 0)
+                                  ? gstComponentRupees(g, 'cgst')
                                   : g.cgstRate}
                                 min={0}
                                 commitMode="live"
@@ -5724,9 +6013,13 @@ const BillingPage = () => {
                                   const v = Math.max(0, val);
                                   const updated = { ...bill };
                                   const cg = { ...updated.commodityGroups[gi] };
-                                  cg.cgstRate = (cg.cgstInputMode === 'AMOUNT')
-                                    ? (cg.subtotal > 0 ? roundMoney2((v * 100) / cg.subtotal) : 0)
-                                    : v;
+                                  if (cg.cgstInputMode === 'AMOUNT') {
+                                    cg.cgstAmountFixed = v;
+                                    cg.cgstRate = cg.subtotal > 0 ? roundMoney2((v * 100) / cg.subtotal) : 0;
+                                  } else {
+                                    cg.cgstRate = v;
+                                    cg.cgstAmountFixed = undefined;
+                                  }
                                   updated.commodityGroups = [...updated.commodityGroups];
                                   updated.commodityGroups[gi] = cg;
                                   setBill(recalcGrandTotal(updated));
@@ -5738,7 +6031,7 @@ const BillingPage = () => {
                               </span>
                             </div>
                             <span className={billingSummaryValueClass}>
-                              ₹{formatBillingInr(gstOnSubtotal(g.subtotal || 0, g.cgstRate ?? 0))}
+                              ₹{formatBillingInr(gstComponentRupees(g, 'cgst'))}
                             </span>
                           </div>
                           )}
@@ -5779,6 +6072,11 @@ const BillingPage = () => {
                                   const updated = { ...bill };
                                   const cg = { ...updated.commodityGroups[gi] };
                                   cg.igstInputMode = value;
+                                  if (value === 'PERCENT') {
+                                    cg.igstAmountFixed = undefined;
+                                  } else {
+                                    cg.igstAmountFixed = gstComponentRupees(cg, 'igst');
+                                  }
                                   updated.commodityGroups = [...updated.commodityGroups];
                                   updated.commodityGroups[gi] = cg;
                                   setBill(recalcGrandTotal(updated));
@@ -5794,7 +6092,7 @@ const BillingPage = () => {
                               </Select>
                               <BillingMoneyInput
                                 value={g.igstInputMode === 'AMOUNT'
-                                  ? gstOnSubtotal(g.subtotal || 0, g.igstRate ?? 0)
+                                  ? gstComponentRupees(g, 'igst')
                                   : g.igstRate}
                                 min={0}
                                 commitMode="live"
@@ -5802,9 +6100,13 @@ const BillingPage = () => {
                                   const v = Math.max(0, val);
                                   const updated = { ...bill };
                                   const cg = { ...updated.commodityGroups[gi] };
-                                  cg.igstRate = (cg.igstInputMode === 'AMOUNT')
-                                    ? (cg.subtotal > 0 ? roundMoney2((v * 100) / cg.subtotal) : 0)
-                                    : v;
+                                  if (cg.igstInputMode === 'AMOUNT') {
+                                    cg.igstAmountFixed = v;
+                                    cg.igstRate = cg.subtotal > 0 ? roundMoney2((v * 100) / cg.subtotal) : 0;
+                                  } else {
+                                    cg.igstRate = v;
+                                    cg.igstAmountFixed = undefined;
+                                  }
                                   updated.commodityGroups = [...updated.commodityGroups];
                                   updated.commodityGroups[gi] = cg;
                                   setBill(recalcGrandTotal(updated));
@@ -5816,7 +6118,7 @@ const BillingPage = () => {
                               </span>
                             </div>
                             <span className={billingSummaryValueClass}>
-                              ₹{formatBillingInr(gstOnSubtotal(g.subtotal || 0, g.igstRate ?? 0))}
+                              ₹{formatBillingInr(gstComponentRupees(g, 'igst'))}
                             </span>
                           </div>
                           )}
@@ -5905,22 +6207,12 @@ const BillingPage = () => {
                           )}
                         >
                           <div className={billingSummaryCellOuterClass}>
-                            <div className={billingSummaryCellInputsClass}>
-                              <BillingMoneyInput
-                                value={g.manualRoundOff || 0}
-                                commitMode="live"
-                                onCommit={val => {
-                                  const updated = { ...bill };
-                                  const cg = { ...updated.commodityGroups[gi] };
-                                  cg.manualRoundOff = val;
-                                  updated.commodityGroups = [...updated.commodityGroups];
-                                  updated.commodityGroups[gi] = cg;
-                                  setBill(recalcGrandTotal(updated));
-                                }}
-                                className={billingSummaryInputClass}
-                                placeholder="0"
-                              />
+                            <div className="text-[10px] text-muted-foreground font-medium shrink-0 min-w-0">
+                              Auto
                             </div>
+                            <span className={billingSummaryValueClass}>
+                              {(g.manualRoundOff || 0) > 0 ? '+' : ''}₹{formatBillingInr(g.manualRoundOff || 0)}
+                            </span>
                           </div>
                         </td>
                       ))}
@@ -5929,14 +6221,9 @@ const BillingPage = () => {
                     <tr className="border-t border-border/30">
                       <td className="sticky left-0 z-20 px-2 py-1.5 text-[10px] font-semibold text-foreground bg-background dark:bg-slate-900 border-r border-border/50 whitespace-normal min-w-[110px] max-w-[110px] w-[110px]">Overall Rate</td>
                       {bill.commodityGroups.map((g, gi) => {
-                        const subtotalWithCharges = billGroupSubtotalWithTaxAndCharges(g);
-                        let discountAmount = g.discount || 0;
-                        if (g.discountType === 'PERCENT') {
-                          discountAmount = percentOfAmount(subtotalWithCharges, discountAmount);
-                        } else {
-                          discountAmount = roundMoney2(discountAmount);
-                        }
-                        const totalAmount = roundMoney2(subtotalWithCharges - discountAmount + (g.manualRoundOff || 0));
+                        const totalAmount = roundMoney2(
+                          commodityPreRoundTotalRupees(g) + roundMoney2(g.manualRoundOff || 0),
+                        );
                         return (
                           <td
                             key={`overallrate-${gi}`}
@@ -6233,24 +6520,51 @@ const BillingPage = () => {
           ) : (
             isDesktop ? (
               <div className="glass-card rounded-2xl overflow-hidden">
-                <div className="overflow-x-auto">
-                  <table className="w-full min-w-[1100px] text-sm">
-                    <thead>
-                      <tr className="bg-[linear-gradient(90deg,#4B7CF3_0%,#5B8CFF_45%,#7B61FF_100%)] border-b border-white/25">
-                        <th className="px-4 py-3 text-center font-semibold text-white first:rounded-tl-xl">Bill Number</th>
-                        <th className="px-4 py-3 text-center font-semibold text-white">Buyer</th>
-                        <th className="px-4 py-3 text-center font-semibold text-white">Broker</th>
-                        <th className="px-4 py-3 text-center font-semibold text-white">No of Bids</th>
-                        <th className="px-4 py-3 text-center font-semibold text-white">Amount</th>
-                        <th className="px-4 py-3 text-center font-semibold text-white">Balance</th>
-                        <th className="px-4 py-3 text-center font-semibold text-white">Date</th>
-                        <th className="px-4 py-3 text-center font-semibold text-white">Pending Since</th>
-                        <th className="px-4 py-3 text-center font-semibold text-white">Print Status</th>
-                        <th className="px-4 py-3 text-center font-semibold text-white last:rounded-tr-xl">Billing Name</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {filteredSavedBillsOnly.map((b: SalesBillDTO) => {
+                <div
+                  ref={savedBillsTableScrollRef}
+                  className="max-h-[min(72vh,840px)] overflow-y-auto overflow-x-auto"
+                >
+                  <div className="min-w-[1100px] text-sm" role="table" aria-label="Saved bills">
+                    <div
+                      className="sticky top-0 z-10 grid border-b border-white/25 bg-[linear-gradient(90deg,#4B7CF3_0%,#5B8CFF_45%,#7B61FF_100%)]"
+                      style={{ gridTemplateColumns: SAVED_BILLS_TABLE_GRID_COLS }}
+                      role="row"
+                    >
+                      {(
+                        [
+                          'Bill Number',
+                          'Buyer',
+                          'Broker',
+                          'No of Bids',
+                          'Amount',
+                          'Balance',
+                          'Date',
+                          'Pending Since',
+                          'Print Status',
+                          'Billing Name',
+                        ] as const
+                      ).map((label, i, arr) => (
+                        <div
+                          key={label}
+                          role="columnheader"
+                          className={cn(
+                            'min-w-0 px-4 py-3 text-center font-semibold text-white',
+                            i === 0 && 'rounded-tl-xl',
+                            i === arr.length - 1 && 'rounded-tr-xl',
+                          )}
+                        >
+                          {label}
+                        </div>
+                      ))}
+                    </div>
+                    <div
+                      className="relative w-full"
+                      style={{ height: savedBillRowVirtualizer.getTotalSize() }}
+                      role="rowgroup"
+                    >
+                      {savedBillRowVirtualizer.getVirtualItems().map((virtualRow) => {
+                        const b = filteredSavedBillsOnly[virtualRow.index];
+                        if (!b) return null;
                         const bidsCount = (b.commodityGroups || []).reduce((sum, g) => sum + (g.items?.length || 0), 0);
                         const pendingDays = Math.max(
                           0,
@@ -6260,28 +6574,41 @@ const BillingPage = () => {
                           ? (b.buyerName || b.buyerMark || '-')
                           : (b.brokerName || b.brokerMark || '-');
                         return (
-                          <tr
-                            key={String(b.billId)}
+                          <div
+                            key={virtualRow.key}
+                            role="row"
+                            data-index={virtualRow.index}
+                            ref={savedBillRowVirtualizer.measureElement}
                             onClick={() => openBillFromList(b)}
-                            className="border-b border-border/40 hover:bg-muted/30 cursor-pointer transition-colors"
+                            className="absolute left-0 top-0 grid w-full cursor-pointer items-center border-b border-border/40 transition-colors hover:bg-muted/30"
+                            style={{
+                              gridTemplateColumns: SAVED_BILLS_TABLE_GRID_COLS,
+                              transform: `translateY(${virtualRow.start}px)`,
+                            }}
                           >
-                            <td className="px-4 py-3 text-center text-foreground">{b.billNumber || '-'}</td>
-                            <td className="px-4 py-3 text-center text-foreground">{b.buyerName || '-'}</td>
-                            <td className="px-4 py-3 text-center text-foreground">{brokerDisplay}</td>
-                            <td className="px-4 py-3 text-center text-foreground tabular-nums">{bidsCount}</td>
-                            <td className="px-4 py-3 text-center text-foreground tabular-nums">₹{formatBillingInr(b.grandTotal ?? 0)}</td>
-                            <td className="px-4 py-3 text-center text-foreground tabular-nums">₹{formatBillingInr(b.pendingBalance ?? 0)}</td>
-                            <td className="px-4 py-3 text-center text-foreground">{new Date(b.billDate).toLocaleDateString()}</td>
-                            <td className="px-4 py-3 text-center text-foreground">
+                            <div className="min-w-0 px-4 py-3 text-center text-foreground truncate">{b.billNumber || '-'}</div>
+                            <div className="min-w-0 px-4 py-3 text-center text-foreground truncate">{b.buyerName || '-'}</div>
+                            <div className="min-w-0 px-4 py-3 text-center text-foreground truncate">{brokerDisplay}</div>
+                            <div className="min-w-0 px-4 py-3 text-center text-foreground tabular-nums">{bidsCount}</div>
+                            <div className="min-w-0 px-4 py-3 text-center text-foreground tabular-nums">
+                              ₹{formatBillingInr(b.grandTotal ?? 0)}
+                            </div>
+                            <div className="min-w-0 px-4 py-3 text-center text-foreground tabular-nums">
+                              ₹{formatBillingInr(b.pendingBalance ?? 0)}
+                            </div>
+                            <div className="min-w-0 px-4 py-3 text-center text-foreground">
+                              {new Date(b.billDate).toLocaleDateString()}
+                            </div>
+                            <div className="min-w-0 px-4 py-3 text-center text-foreground">
                               {(b.pendingBalance ?? 0) > 0 ? `${pendingDays} day${pendingDays === 1 ? '' : 's'}` : '-'}
-                            </td>
-                            <td className="px-4 py-3 text-center text-foreground">-</td>
-                            <td className="px-4 py-3 text-center text-foreground">{b.billingName || '-'}</td>
-                          </tr>
+                            </div>
+                            <div className="min-w-0 px-4 py-3 text-center text-foreground">-</div>
+                            <div className="min-w-0 px-4 py-3 text-center text-foreground truncate">{b.billingName || '-'}</div>
+                          </div>
                         );
                       })}
-                    </tbody>
-                  </table>
+                    </div>
+                  </div>
                 </div>
               </div>
             ) : (

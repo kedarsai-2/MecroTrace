@@ -196,7 +196,7 @@ export const authApi = {
   async login(email: string, password: string): Promise<{ trader: Trader; user: User }> {
     const res = await apiFetch('/auth/login', {
       method: 'POST',
-      body: JSON.stringify({ username: email, password }),
+      body: JSON.stringify({ username: email, password, rememberMe: true }),
     });
 
     if (!res.ok) {

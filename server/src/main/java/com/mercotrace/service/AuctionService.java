@@ -67,32 +67,57 @@ public class AuctionService {
         }
     }
 
+    private static final class SessionLotContext {
+
+        final SellerInVehicle sellerInVehicle;
+        final Vehicle vehicle;
+        final Contact contact;
+        final Commodity commodity;
+        final VehicleSellerQtyIndex qtyIndex;
+
+        SessionLotContext(
+            SellerInVehicle sellerInVehicle,
+            Vehicle vehicle,
+            Contact contact,
+            Commodity commodity,
+            VehicleSellerQtyIndex qtyIndex
+        ) {
+            this.sellerInVehicle = sellerInVehicle;
+            this.vehicle = vehicle;
+            this.contact = contact;
+            this.commodity = commodity;
+            this.qtyIndex = qtyIndex;
+        }
+    }
+
     private VehicleSellerQtyIndex buildVehicleSellerQtyIndex(Set<Long> vehicleIds) {
         if (vehicleIds == null || vehicleIds.isEmpty()) {
             return new VehicleSellerQtyIndex(Map.of(), Map.of());
         }
-        List<SellerInVehicle> allSivsForVehicles = sellerInVehicleRepository.findAllByVehicleIdIn(vehicleIds);
-        Set<Long> allSivIds = allSivsForVehicles.stream().map(SellerInVehicle::getId).collect(Collectors.toSet());
-        List<Lot> allLotsOnVehicles = allSivIds.isEmpty() ? List.of() : lotRepository.findAllBySellerVehicleIdIn(allSivIds);
         Map<Long, Integer> sellerVehicleIdToTotal = new HashMap<>();
-        for (Lot l : allLotsOnVehicles) {
-            if (l.getSellerVehicleId() != null) {
-                sellerVehicleIdToTotal.merge(l.getSellerVehicleId(), l.getBagCount() != null ? l.getBagCount() : 0, Integer::sum);
+        Map<Long, Integer> vehicleIdToTotal = new HashMap<>();
+
+        for (Object[] row : lotRepository.sumBagCountGroupedByVehicleId(vehicleIds)) {
+            Long vehicleId = row[0] instanceof Number n ? n.longValue() : null;
+            Integer total = row[1] instanceof Number n ? n.intValue() : 0;
+            if (vehicleId != null) {
+                vehicleIdToTotal.put(vehicleId, total);
             }
         }
-        Map<Long, Integer> vehicleIdToTotal = new HashMap<>();
-        for (Long vid : vehicleIds) {
-            List<Long> sivIdsOfVehicle = allSivsForVehicles
-                .stream()
-                .filter(s -> vid.equals(s.getVehicleId()))
-                .map(SellerInVehicle::getId)
-                .toList();
-            int total = allLotsOnVehicles
-                .stream()
-                .filter(l -> sivIdsOfVehicle.contains(l.getSellerVehicleId()))
-                .mapToInt(l -> l.getBagCount() != null ? l.getBagCount() : 0)
-                .sum();
-            vehicleIdToTotal.put(vid, total);
+        for (Long vehicleId : vehicleIds) {
+            vehicleIdToTotal.putIfAbsent(vehicleId, 0);
+        }
+
+        List<SellerInVehicle> allSivsForVehicles = sellerInVehicleRepository.findAllByVehicleIdIn(vehicleIds);
+        Set<Long> allSivIds = allSivsForVehicles.stream().map(SellerInVehicle::getId).collect(Collectors.toSet());
+        if (!allSivIds.isEmpty()) {
+            for (Object[] row : lotRepository.sumBagCountGroupedBySellerVehicleId(allSivIds)) {
+                Long sellerVehicleId = row[0] instanceof Number n ? n.longValue() : null;
+                Integer total = row[1] instanceof Number n ? n.intValue() : 0;
+                if (sellerVehicleId != null) {
+                    sellerVehicleIdToTotal.put(sellerVehicleId, total);
+                }
+            }
         }
         return new VehicleSellerQtyIndex(vehicleIdToTotal, sellerVehicleIdToTotal);
     }
@@ -380,6 +405,30 @@ public class AuctionService {
         return buildSessionDTO(auction, lot, entries);
     }
 
+    /**
+     * Read the latest normal auction session for a lot without creating a new auction row.
+     */
+    @Transactional(readOnly = true)
+    public Optional<AuctionSessionDTO> getCurrentSession(Long lotId) {
+        Long traderId = resolveTraderId();
+        Lot lot = lotRepository.findById(lotId).orElseThrow(() -> new EntityNotFoundException("Lot not found: " + lotId));
+        if (!isLotOwnedByTrader(lot, traderId)) {
+            throw new EntityNotFoundException("Lot not found: " + lotId);
+        }
+
+        Optional<Auction> auctionOpt = findLatestNormalAuctionForLot(lotId);
+        if (auctionOpt.isEmpty()) {
+            return Optional.empty();
+        }
+
+        Auction auction = auctionOpt.get();
+        List<AuctionEntry> entries = auctionEntryRepository.findAllByAuctionId(auction.getId());
+        if (auction.getCompletedAt() != null && !auctionSelfSaleUnitRepository.findBySourceAuctionId(auction.getId()).isEmpty()) {
+            return Optional.of(buildEffectiveLotSessionDTO(auction, lot, entries));
+        }
+        return Optional.of(buildSessionDTO(auction, lot, entries));
+    }
+
     @Transactional(readOnly = true)
     public Page<AuctionSelfSaleUnitDTO> listSelfSaleUnits(Pageable pageable, String q) {
         Long traderId = resolveTraderId();
@@ -449,6 +498,34 @@ public class AuctionService {
         AuctionSessionDTO dto = buildSessionDTO(auction, lot, entries, unit.getRemainingQty(), unit.getSelfSaleQty());
         dto.setSelfSaleContext(buildSelfSaleContext(unit, lot));
         return dto;
+    }
+
+    /**
+     * Read the active self-sale re-auction session without creating a new auction row.
+     */
+    @Transactional(readOnly = true)
+    public Optional<AuctionSessionDTO> getCurrentSelfSaleSession(Long selfSaleUnitId) {
+        Long traderId = resolveTraderId();
+        AuctionSelfSaleUnit unit = getRequiredSelfSaleUnit(selfSaleUnitId, traderId);
+        if (unit.getLastReauctionAuctionId() == null) {
+            return Optional.empty();
+        }
+
+        Optional<Auction> auctionOpt = auctionRepository.findById(unit.getLastReauctionAuctionId());
+        if (auctionOpt.isEmpty() || auctionOpt.get().getCompletedAt() != null) {
+            return Optional.empty();
+        }
+
+        Lot lot = lotRepository.findById(unit.getLotId()).orElseThrow(() -> new EntityNotFoundException("Lot not found: " + unit.getLotId()));
+        if (!isLotOwnedByTrader(lot, traderId)) {
+            throw new EntityNotFoundException("Lot not found: " + unit.getLotId());
+        }
+
+        Auction auction = auctionOpt.get();
+        List<AuctionEntry> entries = auctionEntryRepository.findAllByAuctionId(auction.getId());
+        AuctionSessionDTO dto = buildSessionDTO(auction, lot, entries, unit.getRemainingQty(), unit.getSelfSaleQty());
+        dto.setSelfSaleContext(buildSelfSaleContext(unit, lot));
+        return Optional.of(dto);
     }
 
     public AuctionSessionDTO addBidToSelfSaleUnit(Long selfSaleUnitId, @Valid AuctionBidCreateRequest request) {
@@ -993,7 +1070,7 @@ public class AuctionService {
     }
 
     private AuctionSessionDTO buildSessionDTO(Auction auction, Lot lot, List<AuctionEntry> entries) {
-        return buildSessionDTOFromDtos(auction, lot, auctionEntryMapper.toDto(entries), lot.getBagCount(), lot.getBagCount());
+        return buildSessionDTOFromDtos(auction, lot, auctionEntryMapper.toDto(entries), lot.getBagCount(), lot.getBagCount(), buildSessionLotContext(lot));
     }
 
     private AuctionSessionDTO buildSessionDTO(
@@ -1003,7 +1080,32 @@ public class AuctionService {
         Integer bagCountOverride,
         Integer originalBagCountOverride
     ) {
-        return buildSessionDTOFromDtos(auction, lot, auctionEntryMapper.toDto(entries), bagCountOverride, originalBagCountOverride);
+        return buildSessionDTOFromDtos(
+            auction,
+            lot,
+            auctionEntryMapper.toDto(entries),
+            bagCountOverride,
+            originalBagCountOverride,
+            buildSessionLotContext(lot)
+        );
+    }
+
+    private SessionLotContext buildSessionLotContext(Lot lot) {
+        if (lot == null) {
+            return new SessionLotContext(null, null, null, null, new VehicleSellerQtyIndex(Map.of(), Map.of()));
+        }
+
+        SellerInVehicle siv = lot.getSellerVehicleId() != null
+            ? sellerInVehicleRepository.findById(lot.getSellerVehicleId()).orElse(null)
+            : null;
+        Vehicle vehicle = siv != null && siv.getVehicleId() != null ? vehicleRepository.findById(siv.getVehicleId()).orElse(null) : null;
+        Contact contact = siv != null && siv.getContactId() != null ? contactRepository.findById(siv.getContactId()).orElse(null) : null;
+        Commodity commodity = lot.getCommodityId() != null ? commodityRepository.findById(lot.getCommodityId()).orElse(null) : null;
+        VehicleSellerQtyIndex qtyIndex = siv != null && siv.getVehicleId() != null
+            ? buildVehicleSellerQtyIndex(Set.of(siv.getVehicleId()))
+            : new VehicleSellerQtyIndex(Map.of(), Map.of());
+
+        return new SessionLotContext(siv, vehicle, contact, commodity, qtyIndex);
     }
 
     private AuctionSessionDTO buildSessionDTOFromDtos(
@@ -1011,7 +1113,8 @@ public class AuctionService {
         Lot lot,
         List<AuctionEntryDTO> entryDtos,
         Integer bagCountOverride,
-        Integer originalBagCountOverride
+        Integer originalBagCountOverride,
+        SessionLotContext context
     ) {
         AuctionSessionDTO dto = new AuctionSessionDTO();
         dto.setAuctionId(auction.getId());
@@ -1025,34 +1128,24 @@ public class AuctionService {
         lotSummary.setWasModified(false);
 
         // Populate seller, vehicle, commodity so client can show them in the Sales Pad toolbar (same as list lots).
-        if (lot.getSellerVehicleId() != null) {
-            SellerInVehicle siv = sellerInVehicleRepository.findById(lot.getSellerVehicleId()).orElse(null);
-            if (siv != null) {
-                Vehicle v = siv.getVehicleId() != null ? vehicleRepository.findById(siv.getVehicleId()).orElse(null) : null;
-                Contact c = siv.getContactId() != null ? contactRepository.findById(siv.getContactId()).orElse(null) : null;
-                lotSummary.setVehicleNumber(v != null ? v.getVehicleNumber() : null);
-                lotSummary.setSellerName(resolveAuctionSellerName(c, siv));
-                lotSummary.setSellerMark(resolveAuctionSellerMark(c, siv));
-                if (v != null && v.getVehicleMarkAlias() != null && !v.getVehicleMarkAlias().isBlank()) {
-                    lotSummary.setVehicleMark(v.getVehicleMarkAlias().trim());
-                }
-                // Vehicle total: sum of all lots on same vehicle. Seller total: sum of all lots for same seller.
-                if (siv.getVehicleId() != null) {
-                    List<SellerInVehicle> sivsOnVehicle = sellerInVehicleRepository.findAllByVehicleId(siv.getVehicleId());
-                    List<Long> sivIds = sivsOnVehicle.stream().map(SellerInVehicle::getId).toList();
-                    List<Lot> lotsOnVehicle = lotRepository.findAllBySellerVehicleIdIn(sivIds);
-                    int vehicleTotal = lotsOnVehicle.stream().mapToInt(l -> l.getBagCount() != null ? l.getBagCount() : 0).sum();
-                    lotSummary.setVehicleTotalQty(vehicleTotal);
-                }
-                List<Lot> lotsForSeller = lotRepository.findAllBySellerVehicleIdIn(List.of(lot.getSellerVehicleId()));
-                int sellerTotal = lotsForSeller.stream().mapToInt(l -> l.getBagCount() != null ? l.getBagCount() : 0).sum();
-                lotSummary.setSellerTotalQty(sellerTotal);
+        if (context != null && context.sellerInVehicle != null) {
+            SellerInVehicle siv = context.sellerInVehicle;
+            Vehicle v = context.vehicle;
+            Contact c = context.contact;
+            lotSummary.setVehicleNumber(v != null ? v.getVehicleNumber() : null);
+            lotSummary.setSellerName(resolveAuctionSellerName(c, siv));
+            lotSummary.setSellerMark(resolveAuctionSellerMark(c, siv));
+            if (v != null && v.getVehicleMarkAlias() != null && !v.getVehicleMarkAlias().isBlank()) {
+                lotSummary.setVehicleMark(v.getVehicleMarkAlias().trim());
+            }
+            if (siv.getVehicleId() != null && context.qtyIndex != null) {
+                lotSummary.setVehicleTotalQty(context.qtyIndex.vehicleIdToTotal.get(siv.getVehicleId()));
+            }
+            if (lot.getSellerVehicleId() != null && context.qtyIndex != null) {
+                lotSummary.setSellerTotalQty(context.qtyIndex.sellerVehicleIdToTotal.get(lot.getSellerVehicleId()));
             }
         }
-        if (lot.getCommodityId() != null) {
-            Commodity commodity = commodityRepository.findById(lot.getCommodityId()).orElse(null);
-            lotSummary.setCommodityName(commodity != null ? commodity.getCommodityName() : null);
-        }
+        lotSummary.setCommodityName(context != null && context.commodity != null ? context.commodity.getCommodityName() : null);
 
         int totalSold = entryDtos.stream().mapToInt(e -> e.getQuantity() != null ? e.getQuantity() : 0).sum();
         int bagCount = bagCountOverride != null ? bagCountOverride : (lot.getBagCount() != null ? lot.getBagCount() : 0);
@@ -1159,7 +1252,7 @@ public class AuctionService {
             }
         }
 
-        return buildSessionDTOFromDtos(auction, lot, displayEntries, lot.getBagCount(), lot.getBagCount());
+        return buildSessionDTOFromDtos(auction, lot, displayEntries, lot.getBagCount(), lot.getBagCount(), buildSessionLotContext(lot));
     }
 
     private Auction createAuctionSession(Long lotId, Long traderId) {
@@ -1624,4 +1717,3 @@ public class AuctionService {
         }
     }
 }
-

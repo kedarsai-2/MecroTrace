@@ -8,6 +8,8 @@ import java.util.Optional;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 /**
@@ -27,4 +29,7 @@ public interface AuctionSelfSaleUnitRepository extends JpaRepository<AuctionSelf
     List<AuctionSelfSaleUnit> findByLotIdIn(Collection<Long> lotIds);
 
     List<AuctionSelfSaleUnit> findByLotId(Long lotId);
+
+    @Query("SELECT CASE WHEN COUNT(u) > 0 THEN true ELSE false END FROM AuctionSelfSaleUnit u WHERE u.lotId IN :lotIds")
+    boolean existsByLotIdIn(@Param("lotIds") Collection<Long> lotIds);
 }

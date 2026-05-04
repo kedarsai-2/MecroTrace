@@ -44,4 +44,10 @@ public interface SelfSaleClosureRepository extends JpaRepository<SelfSaleClosure
      * Latest active self-sale closure for the given lot and trader.
      */
     java.util.Optional<SelfSaleClosure> findFirstByLotIdAndTraderIdAndIsDeletedFalseOrderByClosedAtDesc(Long lotId, Long traderId);
+
+    @Query(
+        "SELECT CASE WHEN COUNT(s) > 0 THEN true ELSE false END FROM SelfSaleClosure s " +
+        "WHERE s.traderId = :traderId AND s.isDeleted = false AND s.lotId IN :lotIds"
+    )
+    boolean existsActiveByTraderIdAndLotIdIn(@Param("traderId") Long traderId, @Param("lotIds") java.util.Collection<Long> lotIds);
 }

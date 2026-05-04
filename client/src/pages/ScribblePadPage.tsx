@@ -9,42 +9,19 @@ import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import useUnsavedChangesGuard from '@/hooks/useUnsavedChangesGuard';
 import { ConfirmDeleteDialog } from '@/components/ConfirmDeleteDialog';
+import {
+  recognizeHandwriting,
+  getHandwritingRecognitionDebounceMs,
+  type HandwritingStroke,
+} from '@/lib/handwritingRecognition';
 
-interface Stroke {
-  xs: number[];
-  ys: number[];
-  ts: number[];
-}
+type Stroke = HandwritingStroke;
 
 interface ScribbleEntry {
   id: string;
   initials: string;
   quantity: number;
   createdAt: string;
-}
-
-async function recognizeHandwriting(
-  strokes: Stroke[],
-  canvasWidth: number,
-  canvasHeight: number
-): Promise<string[]> {
-  const ink = strokes.map(s => [s.xs, s.ys, s.ts]);
-  const payload = {
-    options: 'enable_pre_space',
-    requests: [{
-      writing_guide: { writing_area_width: canvasWidth, writing_area_height: canvasHeight },
-      ink,
-      language: 'en',
-    }],
-  };
-  const response = await fetch(
-    'https://inputtools.google.com/request?ime=handwriting&app=mobilesearch&cs=1&oe=UTF-8',
-    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }
-  );
-  if (!response.ok) throw new Error('Recognition request failed');
-  const data = await response.json();
-  if (data[0] === 'SUCCESS' && data[1]?.[0]?.[1]) return data[1][0][1] as string[];
-  return [];
 }
 
 const ScribblePadPage = () => {
@@ -65,6 +42,13 @@ const ScribblePadPage = () => {
   const strokesRef = useRef<Stroke[]>([]);
   const currentStroke = useRef<Stroke>({ xs: [], ys: [], ts: [] });
   const strokeStartTime = useRef(0);
+  const recognitionAbortRef = useRef<AbortController | null>(null);
+  const recognitionGenerationRef = useRef(0);
+
+  const abortRecognition = useCallback(() => {
+    recognitionAbortRef.current?.abort();
+    recognitionAbortRef.current = null;
+  }, []);
 
   // In-memory only; no localStorage for business data. TODO: backend API for scribble entries if persistence needed.
   const saveEntries = (newEntries: ScribbleEntry[]) => setEntries(newEntries);
@@ -99,12 +83,25 @@ const ScribblePadPage = () => {
   const doRecognition = useCallback(async () => {
     const canvas = canvasRef.current;
     if (!canvas || strokesRef.current.length === 0) return;
-    setDrawingPreview(canvas.toDataURL('image/png'));
+
+    abortRecognition();
+    const myGen = ++recognitionGenerationRef.current;
+    const ac = new AbortController();
+    recognitionAbortRef.current = ac;
+    const strokesSnapshot = strokesRef.current.map(s => ({
+      xs: [...s.xs],
+      ys: [...s.ys],
+      ts: [...s.ts],
+    }));
+
     setRecognizing(true);
     setRecognizeStatus('Recognizing...');
     setCandidates([]);
+    setDrawingPreview(null);
+
     try {
-      const results = await recognizeHandwriting(strokesRef.current, canvas.width, canvas.height);
+      const results = await recognizeHandwriting(strokesSnapshot, canvas.width, canvas.height, ac.signal);
+      if (ac.signal.aborted) return;
       if (results.length > 0) {
         const best = results[0].trim().toUpperCase().replace(/\s+/g, '').replace(/[^A-Z0-9]/g, '');
         if (best) {
@@ -115,18 +112,20 @@ const ScribblePadPage = () => {
             .filter((r, i, arr) => r && arr.indexOf(r) === i)
             .slice(0, 4);
           setCandidates(alts);
+          setDrawingPreview(canvas.toDataURL('image/jpeg', 0.82));
         } else {
           setRecognizeStatus('Could not detect — type manually');
         }
       } else {
         setRecognizeStatus('Could not detect — type manually');
       }
-    } catch {
+    } catch (e) {
+      if (e instanceof DOMException && e.name === 'AbortError') return;
       setRecognizeStatus('Recognition failed — type manually');
     } finally {
-      setRecognizing(false);
+      if (myGen === recognitionGenerationRef.current) setRecognizing(false);
     }
-  }, []);
+  }, [abortRecognition]);
 
   const getPos = (e: React.TouchEvent | React.MouseEvent) => {
     const canvas = canvasRef.current;
@@ -142,6 +141,7 @@ const ScribblePadPage = () => {
 
   const startDraw = (e: React.TouchEvent | React.MouseEvent) => {
     e.preventDefault();
+    abortRecognition();
     isDrawing.current = true;
     const pos = getPos(e);
     lastPos.current = pos;
@@ -183,7 +183,7 @@ const ScribblePadPage = () => {
     }
     currentStroke.current = { xs: [], ys: [], ts: [] };
     if (drawTimeout.current) clearTimeout(drawTimeout.current);
-    drawTimeout.current = setTimeout(() => { doRecognition(); }, 800);
+    drawTimeout.current = setTimeout(() => { doRecognition(); }, getHandwritingRecognitionDebounceMs());
   };
 
   const clearCanvas = () => {
@@ -199,6 +199,7 @@ const ScribblePadPage = () => {
     setRecognizeStatus('');
     setCandidates([]);
     if (drawTimeout.current) clearTimeout(drawTimeout.current);
+    abortRecognition();
   };
 
   const adjustQty = (delta: number) => {

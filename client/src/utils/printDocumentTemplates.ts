@@ -1,7 +1,7 @@
 // ── Print document HTML for Billing, Settlement, Weighing ───
 // Same format as client_origin; used with directPrint() + printLogApi.
 
-import { effectiveGstPercent, formatBillingInr, gstOnSubtotal, percentOfAmount, roundMoney2 } from '@/utils/billingMoney';
+import { formatBillingInr, gstComponentRupees, percentOfAmount, roundMoney2 } from '@/utils/billingMoney';
 import { formatAuctionLotIdentifier } from '@/utils/auctionLotIdentifier';
 
 const PRINT_STYLES = `
@@ -36,6 +36,55 @@ function normalizeOptions(options?: DocumentPrintOptions): Required<DocumentPrin
     includeHeader: options?.includeHeader !== false,
     copyLabel: (options?.copyLabel && String(options.copyLabel).trim()) || 'ORIGINAL COPY',
   };
+}
+
+/**
+ * On-screen preview only: paper width + each `.pg` = full ISO portrait sheet height
+ * so short bills show empty white below content (not cut off). Print ignores @media screen.
+ */
+function screenPreviewSheetCSS(pageSize: 'A4' | 'A5'): string {
+  const sheetW = pageSize === 'A5' ? '148mm' : '210mm';
+  const sheetH = pageSize === 'A5' ? '210mm' : '297mm';
+  return `
+    @media screen {
+      html { background: #e8e8ea; }
+      body {
+        max-width: ${sheetW};
+        width: 100%;
+        margin: 12px auto;
+        padding-bottom: 24px;
+        background: transparent !important;
+        box-shadow: none;
+      }
+      /* Full blank sheet per printed page (GST / Non-GST .pg wrapper) */
+      .pg {
+        min-height: ${sheetH};
+        background: #fff;
+        box-shadow: 0 2px 16px rgba(0, 0, 0, 0.12);
+        margin-bottom: 20px;
+        box-sizing: border-box;
+      }
+      .gst-bill-print-copy,
+      .ng-bill-print-copy {
+        margin-bottom: 28px;
+      }
+      .gst-bill-print-copy:last-child,
+      .ng-bill-print-copy:last-child {
+        margin-bottom: 0;
+      }
+      /* Empty-state message still looks like one sheet */
+      body > p:only-child {
+        min-height: ${sheetH};
+        max-width: ${sheetW};
+        margin-left: auto;
+        margin-right: auto;
+        padding: 24px;
+        background: #fff;
+        box-shadow: 0 2px 16px rgba(0, 0, 0, 0.12);
+        box-sizing: border-box;
+      }
+    }
+  `;
 }
 
 // ── Sales Bill (BillingPage) — GST layout + firm header ─────
@@ -90,6 +139,12 @@ export interface BillPrintData {
     discount?: number;
     discountType?: 'PERCENT' | 'AMOUNT';
     manualRoundOff?: number;
+    sgstInputMode?: 'PERCENT' | 'AMOUNT';
+    cgstInputMode?: 'PERCENT' | 'AMOUNT';
+    igstInputMode?: 'PERCENT' | 'AMOUNT';
+    sgstAmountFixed?: number;
+    cgstAmountFixed?: number;
+    igstAmountFixed?: number;
     items: {
       quantity: number;
       weight: number;
@@ -405,6 +460,8 @@ function buildGstBillCSS(pageSize: 'A4' | 'A5'): string {
       padding: 2px 0;
     }
 
+    ${screenPreviewSheetCSS(pageSize)}
+
     @media print {
       body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     }
@@ -557,9 +614,9 @@ function gstBillFooter(
   const cgstR = roundMoney2(group.cgstRate ?? 0);
   const sgstR = roundMoney2(group.sgstRate ?? 0);
   const igstR = roundMoney2(group.igstRate ?? 0);
-  const cgstA = cgstR > 0 ? gstOnSubtotal(sub, cgstR) : 0;
-  const sgstA = sgstR > 0 ? gstOnSubtotal(sub, sgstR) : 0;
-  const igstA = igstR > 0 ? gstOnSubtotal(sub, igstR) : 0;
+  const cgstA = gstComponentRupees(group, 'cgst');
+  const sgstA = gstComponentRupees(group, 'sgst');
+  const igstA = gstComponentRupees(group, 'igst');
   const totalTax = roundMoney2(cgstA + sgstA + igstA);
 
   const bankHtml = `
@@ -817,6 +874,8 @@ function buildNonGstBillCSS(pageSize: 'A4' | 'A5'): string {
       font-size: 8px;
       color: #555;
     }
+
+    ${screenPreviewSheetCSS(pageSize)}
 
     @media print {
       body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
@@ -1422,15 +1481,23 @@ export function generateAuctionCompletionPrintHTML(auction: AuctionCompletionPri
   const timeStr = completedAt.toLocaleTimeString();
   const totalQty = auction.entries.reduce((s, e) => s + (Number(e.quantity) || 0), 0);
   const totalAmount = auction.entries.reduce((s, e) => s + (Number(e.amount) || 0), 0);
-  const highestRate = auction.entries.reduce((max, e) => Math.max(max, Number(e.rate) || 0), 0);
+  const highestRate = auction.entries.reduce((max, e) => {
+    const r = Number(e.rate) || 0;
+    const p = Number(e.presetApplied ?? 0);
+    const display = Math.trunc(r - (Number.isFinite(p) ? p : 0));
+    return Math.max(max, display);
+  }, 0);
   const rows = auction.entries.map((entry) => {
     const preset = Number(entry.presetApplied ?? 0);
     const presetTxt = preset === 0 ? '—' : `${preset > 0 ? '+' : ''}${preset} (${entry.presetType ?? (preset < 0 ? 'LOSS' : 'PROFIT')})`;
+    const r = Number(entry.rate) || 0;
+    const pAdj = Number.isFinite(preset) ? preset : 0;
+    const displayRate = Math.trunc(r - pAdj);
     return `
       <div class="section" style="margin-bottom:6px;padding-bottom:6px">
         <div class="row"><span class="muted">Bid #</span><span class="bold">${entry.bidNumber}</span></div>
         <div class="row"><span class="muted">Buyer</span><span class="bold">${escapeHtml(entry.buyerName)} (${escapeHtml(entry.buyerMark)})</span></div>
-        <div class="row"><span class="muted">Rate</span><span class="bold">₹${entry.rate}</span></div>
+        <div class="row"><span class="muted">Rate</span><span class="bold">₹${displayRate}</span></div>
         <div class="row"><span class="muted">Preset</span><span>${presetTxt}</span></div>
         <div class="row"><span class="muted">Qty</span><span class="bold">${entry.quantity} bags</span></div>
         <div class="row"><span class="muted">Amount</span><span class="bold">₹${entry.amount.toLocaleString()}</span></div>

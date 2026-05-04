@@ -28,6 +28,8 @@ export type SettlementNumericInputProps = {
   integerOnly?: boolean;
   className?: string;
   disabled?: boolean;
+  /** Keep same visual as editable input; blocks edits without disabled styling. */
+  readOnly?: boolean;
   id?: string;
   'aria-label'?: string;
   title?: string;
@@ -80,6 +82,7 @@ export function SettlementNumericInput({
   integerOnly = false,
   className,
   disabled,
+  readOnly,
   id,
   'aria-label': ariaLabel,
   title,
@@ -94,6 +97,7 @@ export function SettlementNumericInput({
   const guardMode = numericGuardModeForSettlement(integerOnly);
 
   const pushDraft = (next: string) => {
+    if (readOnly) return;
     editedSinceFocusRef.current = true;
     setDraft(next);
     onRawChange?.(next);
@@ -110,28 +114,39 @@ export function SettlementNumericInput({
       type="text"
       inputMode={integerOnly ? 'numeric' : 'decimal'}
       disabled={disabled}
+      readOnly={readOnly}
       id={id}
       title={title}
       placeholder={placeholder}
       aria-label={ariaLabel}
       value={display}
-      onKeyDown={e => allowOnlyNumbers(e, guardMode)}
-      onPaste={e =>
+      onKeyDown={e => {
+        if (readOnly) return;
+        allowOnlyNumbers(e, guardMode);
+      }}
+      onPaste={e => {
+        if (readOnly) {
+          e.preventDefault();
+          return;
+        }
         applyNumericPaste(e, guardMode, next => {
           pushDraft(next);
-        })
-      }
+        });
+      }}
       onFocus={() => {
+        if (readOnly) return;
         editedSinceFocusRef.current = false;
         setDraft('');
         onRawChange?.('');
       }}
       onChange={e => {
+        if (readOnly) return;
         const raw = e.target.value;
         const next = integerOnly ? filterUnsignedIntegerString(raw) : filterUnsignedDecimalString(raw);
         pushDraft(next);
       }}
       onBlur={() => {
+        if (readOnly) return;
         const raw = draft ?? '';
         const trimmed = raw.replace(/,/g, '').trim();
         if (!editedSinceFocusRef.current && trimmed === '') {

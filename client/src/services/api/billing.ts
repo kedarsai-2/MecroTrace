@@ -190,6 +190,7 @@ export const billingApi = {
     buyerName?: string;
     dateFrom?: string;
     dateTo?: string;
+    signal?: AbortSignal;
   } = {}): Promise<SalesBillPage> {
     const searchParams = new URLSearchParams();
     searchParams.set('page', String(params.page ?? 0));
@@ -207,7 +208,7 @@ export const billingApi = {
     if (params.dateTo != null && params.dateTo.trim() !== '') {
       searchParams.set('dateTo', params.dateTo);
     }
-    const res = await apiFetch(`${BASE}?${searchParams.toString()}`, { method: 'GET' });
+    const res = await apiFetch(`${BASE}?${searchParams.toString()}`, { method: 'GET', signal: params.signal });
     return handleResponse<SalesBillPage>(res, 'Failed to load sales bills');
   },
 

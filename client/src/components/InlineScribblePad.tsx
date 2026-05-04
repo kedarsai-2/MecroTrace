@@ -1,32 +1,13 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { RotateCcw, Loader2, Sparkles, PenLine } from 'lucide-react';
+import {
+  recognizeHandwriting,
+  getHandwritingRecognitionDebounceMs,
+  type HandwritingStroke,
+} from '@/lib/handwritingRecognition';
 
-interface Stroke {
-  xs: number[];
-  ys: number[];
-  ts: number[];
-}
-
-async function recognizeHandwriting(
-  strokes: Stroke[],
-  canvasWidth: number,
-  canvasHeight: number
-): Promise<string[]> {
-  const ink = strokes.map(s => [s.xs, s.ys, s.ts]);
-  const payload = {
-    options: 'enable_pre_space',
-    requests: [{ writing_guide: { writing_area_width: canvasWidth, writing_area_height: canvasHeight }, ink, language: 'en' }],
-  };
-  const response = await fetch(
-    'https://inputtools.google.com/request?ime=handwriting&app=mobilesearch&cs=1&oe=UTF-8',
-    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }
-  );
-  if (!response.ok) throw new Error('Recognition request failed');
-  const data = await response.json();
-  if (data[0] === 'SUCCESS' && data[1]?.[0]?.[1]) return data[1][0][1] as string[];
-  return [];
-}
+type Stroke = HandwritingStroke;
 
 /** Max length for a single recognized segment (and replace-mode full mark). Auctions append mode composes up to this length per stroke. */
 export const MAX_MARK_LEN = 20;
@@ -70,6 +51,13 @@ const InlineScribblePad = ({
   const strokesRef = useRef<Stroke[]>([]);
   const currentStroke = useRef<Stroke>({ xs: [], ys: [], ts: [] });
   const strokeStartTime = useRef(0);
+  const recognitionAbortRef = useRef<AbortController | null>(null);
+  const recognitionGenerationRef = useRef(0);
+
+  const abortRecognition = useCallback(() => {
+    recognitionAbortRef.current?.abort();
+    recognitionAbortRef.current = null;
+  }, []);
 
   useEffect(() => {
     const resize = () => {
@@ -100,7 +88,8 @@ const InlineScribblePad = ({
     setRecognizeStatus('');
     setCandidates([]);
     if (drawTimeout.current) clearTimeout(drawTimeout.current);
-  }, [resetTrigger]);
+    abortRecognition();
+  }, [resetTrigger, abortRecognition]);
 
   const clearCanvas = useCallback(() => {
     const canvas = canvasRef.current;
@@ -114,7 +103,8 @@ const InlineScribblePad = ({
     setRecognizeStatus('');
     setCandidates([]);
     if (drawTimeout.current) clearTimeout(drawTimeout.current);
-  }, []);
+    abortRecognition();
+  }, [abortRecognition]);
 
   /** Clears ink only; keeps status/candidates so user can pick an alternate in append mode. */
   const clearStrokeInkOnly = useCallback(() => {
@@ -126,16 +116,27 @@ const InlineScribblePad = ({
     strokesRef.current = [];
     currentStroke.current = { xs: [], ys: [], ts: [] };
     if (drawTimeout.current) clearTimeout(drawTimeout.current);
-  }, []);
+    abortRecognition();
+  }, [abortRecognition]);
 
   const doRecognition = useCallback(async () => {
     const canvas = canvasRef.current;
     if (!canvas || strokesRef.current.length === 0) return;
+    abortRecognition();
+    const myGen = ++recognitionGenerationRef.current;
+    const ac = new AbortController();
+    recognitionAbortRef.current = ac;
+    const strokesSnapshot = strokesRef.current.map(s => ({
+      xs: [...s.xs],
+      ys: [...s.ys],
+      ts: [...s.ts],
+    }));
     setRecognizing(true);
     setRecognizeStatus('Recognizing...');
     setCandidates([]);
     try {
-      const results = await recognizeHandwriting(strokesRef.current, canvas.width, canvas.height);
+      const results = await recognizeHandwriting(strokesSnapshot, canvas.width, canvas.height, ac.signal);
+      if (ac.signal.aborted) return;
       if (results.length > 0) {
         const best = results[0].trim().toUpperCase().replace(/\s+/g, '').replace(/[^A-Z0-9]/g, '');
         if (best) {
@@ -155,12 +156,13 @@ const InlineScribblePad = ({
       } else {
         setRecognizeStatus('Could not detect');
       }
-    } catch {
+    } catch (e) {
+      if (e instanceof DOMException && e.name === 'AbortError') return;
       setRecognizeStatus('Recognition failed');
     } finally {
-      setRecognizing(false);
+      if (myGen === recognitionGenerationRef.current) setRecognizing(false);
     }
-  }, [onMarkDetected, appendMode, clearStrokeInkOnly]);
+  }, [onMarkDetected, appendMode, clearStrokeInkOnly, abortRecognition]);
 
   /** Pointer events avoid React’s passive `touch` listeners so `preventDefault` can block page scroll while drawing. */
   const getPos = (e: React.PointerEvent<HTMLCanvasElement>) => {
@@ -178,6 +180,7 @@ const InlineScribblePad = ({
   const startDraw = (e: React.PointerEvent<HTMLCanvasElement>) => {
     if (e.pointerType === 'mouse' && e.button !== 0) return;
     e.preventDefault();
+    abortRecognition();
     isDrawing.current = true;
     e.currentTarget.setPointerCapture(e.pointerId);
     const pos = getPos(e);
@@ -220,7 +223,7 @@ const InlineScribblePad = ({
     }
     currentStroke.current = { xs: [], ys: [], ts: [] };
     if (drawTimeout.current) clearTimeout(drawTimeout.current);
-    drawTimeout.current = setTimeout(() => doRecognition(), 800);
+    drawTimeout.current = setTimeout(() => doRecognition(), getHandwritingRecognitionDebounceMs());
   };
 
   const selectCandidate = (c: string) => {

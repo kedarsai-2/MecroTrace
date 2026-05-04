@@ -115,4 +115,5 @@
     <include file="config/liquibase/changelog/20260425120100_summary_page_authority_rename.xml" relativeToChangelogFile="false"/>
     <include file="config/liquibase/changelog/20260427120000_auction_entry_summary_seller_rate.xml" relativeToChangelogFile="false"/>
     <include file="config/liquibase/changelog/20260501120000_trader_auction_touch_layout_json.xml" relativeToChangelogFile="false"/>
+    <include file="config/liquibase/changelog/20260503120000_auction_fast_path_indexes.xml" relativeToChangelogFile="false"/>
 </databaseChangeLog>

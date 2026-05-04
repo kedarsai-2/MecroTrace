@@ -1,4 +1,19 @@
-import { useState, useEffect, useMemo, useCallback, useRef, useLayoutEffect, Fragment } from 'react';
+import {
+  memo,
+  useState,
+  useEffect,
+  useMemo,
+  useCallback,
+  useRef,
+  useLayoutEffect,
+  Fragment,
+  type CSSProperties,
+  type KeyboardEventHandler,
+  type MouseEventHandler,
+  type MutableRefObject,
+  type RefObject,
+} from 'react';
+import { useWindowVirtualizer, measureElement } from '@tanstack/react-virtual';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   ArrowLeft, Gavel, Plus, Trash2,
@@ -56,13 +71,46 @@ import { generateAuctionCompletionPrintHTML } from '@/utils/printDocumentTemplat
 import { useAuth } from '@/context/AuthContext';
 import {
   DEFAULT_AUCTION_TOUCH_LAYOUT,
+  HERO_DENSITY_TOUCH_PRESETS,
+  MOBILE_TOUCH_LAYOUT_PRESET,
   parseAuctionTouchLayout,
   persistLocalAuctionTouchLayout,
   readLocalAuctionTouchLayout,
   type AuctionTouchHeroLayout,
   type AuctionTouchLayoutConfig,
 } from '@/lib/auctionTouchLayoutConfig';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { auctionTouchLayoutApi } from '@/services/api/auctionTouchLayout';
+
+/** Progressive fetch page size for Sales Pad lot lists (stable sort: `id,asc`). */
+const AUCTION_LOTS_PAGE_SIZE = 90;
+const AUCTION_BUYER_SUGGESTION_LIMIT = 50;
+const AUCTION_BUYER_SUGGESTION_POOL_LIMIT = 250;
+const AUCTION_BUYER_CACHE_LIMIT = 500;
+const AUCTION_BUYER_SEARCH_DEBOUNCE_MS = 120;
+const AUCTION_QUICK_LOT_NAV_LIMIT = 120;
+const AUCTION_LABEL_COLLATOR = new Intl.Collator(undefined, { sensitivity: 'base' });
+const AUCTION_SESSION_CACHE_TTL_MS = 45_000;
+const AUCTION_PERF_STORAGE_KEY = 'merco:auctionPerf';
+
+function isAbortError(e: unknown): boolean {
+  return (
+    (typeof DOMException !== 'undefined' && e instanceof DOMException && e.name === 'AbortError') ||
+    (e instanceof Error && e.name === 'AbortError')
+  );
+}
+
+function auctionPerfEnabled(): boolean {
+  if (typeof window === 'undefined') return false;
+  return window.localStorage.getItem(AUCTION_PERF_STORAGE_KEY) === '1';
+}
+
+function auctionPerfLog(label: string, startedAt: number, meta?: Record<string, unknown>) {
+  if (!auctionPerfEnabled()) return;
+  const durationMs = Math.round((performance.now() - startedAt) * 10) / 10;
+  // eslint-disable-next-line no-console
+  console.info(`[auction-perf] ${label}`, { durationMs, ...(meta ?? {}) });
+}
 
 // ── Types ─────────────────────────────────────────────────
 interface LotInfo {
@@ -124,6 +172,31 @@ interface SaleEntry {
   lastModifiedMs?: number | null;
 }
 
+type DuplicateMarkDialogState = {
+  mark: string;
+  buyerName: string;
+  buyerContactId: string | null;
+  rate: number;
+  qty: number;
+  isScribble: boolean;
+  existingEntry: SaleEntry;
+};
+
+type QtyIncreaseDialogState = {
+  currentTotal: number;
+  lotTotal: number;
+  attemptedQty: number;
+  pendingEntry: Omit<SaleEntry, 'id' | 'bidNumber'>;
+};
+
+type EditBidQtyDialogState = {
+  currentTotal: number;
+  lotTotal: number;
+  attemptedQty: number;
+  pendingBody: AuctionBidUpdateRequest;
+  bidNumericId: number;
+};
+
 // ── In-memory draft only (no localStorage). Session-only; backend draft API not implemented. ──
 interface AuctionDraft {
   selectedLotId: string | null;
@@ -150,6 +223,351 @@ function clearDraft() {
   inMemoryAuctionDraft = null;
 }
 
+function getAuctionSessionCacheKey(lot: Pick<LotInfo, 'lot_id' | 'selfSaleUnitId'>, source: LotSource): string {
+  return `${source}:${source === 'self_sale' ? lot.selfSaleUnitId ?? lot.lot_id : lot.lot_id}`;
+}
+
+function contactMatchesAuctionQuery(contact: Contact, q: string): boolean {
+  if (!q) return true;
+  return Boolean(
+    contact.name?.toLowerCase().startsWith(q) ||
+    (contact.phone ? contact.phone.startsWith(q) : false) ||
+    contact.mark?.toLowerCase().startsWith(q)
+  );
+}
+
+function limitedAuctionContactSuggestions(
+  buyers: Contact[],
+  q: string,
+  lastUsedMs: Record<string, number>
+): Contact[] {
+  const recent: Contact[] = [];
+  const regular: Contact[] = [];
+
+  for (const buyer of buyers) {
+    if (!contactMatchesAuctionQuery(buyer, q)) continue;
+    const usedAt = lastUsedMs[String(buyer.contact_id)] ?? 0;
+    if (usedAt > 0) {
+      recent.push(buyer);
+      continue;
+    }
+    if (regular.length < AUCTION_BUYER_SUGGESTION_POOL_LIMIT) {
+      regular.push(buyer);
+    }
+  }
+
+  recent.sort((a, b) => {
+    const ta = lastUsedMs[String(a.contact_id)] ?? 0;
+    const tb = lastUsedMs[String(b.contact_id)] ?? 0;
+    if (tb !== ta) return tb - ta;
+    return AUCTION_LABEL_COLLATOR.compare(a.name || '', b.name || '');
+  });
+  regular.sort((a, b) => AUCTION_LABEL_COLLATOR.compare(a.name || '', b.name || ''));
+
+  return [...recent, ...regular].slice(0, AUCTION_BUYER_SUGGESTION_LIMIT);
+}
+
+function mergeAuctionContacts(existing: Contact[], incoming: Contact[]): Contact[] {
+  const merged = new Map<string, Contact>();
+  for (const contact of incoming) {
+    merged.set(String(contact.contact_id), contact);
+  }
+  for (const contact of existing) {
+    if (merged.size >= AUCTION_BUYER_CACHE_LIMIT) break;
+    const key = String(contact.contact_id);
+    if (!merged.has(key)) merged.set(key, contact);
+  }
+  return [...merged.values()].slice(0, AUCTION_BUYER_CACHE_LIMIT);
+}
+
+function limitedAuctionTemporaryMarkSuggestions(
+  marks: string[],
+  q: string,
+  lastUsedMs: Record<string, number>
+): string[] {
+  const recent: string[] = [];
+  const regular: string[] = [];
+
+  for (const mark of marks) {
+    if (q && !mark.toLowerCase().startsWith(q)) continue;
+    const usedAt = lastUsedMs[mark] ?? 0;
+    if (usedAt > 0) {
+      recent.push(mark);
+      continue;
+    }
+    if (regular.length < AUCTION_BUYER_SUGGESTION_POOL_LIMIT) {
+      regular.push(mark);
+    }
+  }
+
+  recent.sort((a, b) => {
+    const ta = lastUsedMs[a] ?? 0;
+    const tb = lastUsedMs[b] ?? 0;
+    if (tb !== ta) return tb - ta;
+    return AUCTION_LABEL_COLLATOR.compare(a, b);
+  });
+  regular.sort((a, b) => AUCTION_LABEL_COLLATOR.compare(a, b));
+
+  return [...recent, ...regular].slice(0, AUCTION_BUYER_SUGGESTION_LIMIT);
+}
+
+type AuctionStripScrollHandlers = {
+  onMouseDown: MouseEventHandler<HTMLDivElement>;
+  onKeyDown: KeyboardEventHandler<HTMLDivElement>;
+};
+
+interface AuctionBuyerStripsProps {
+  variant: 'desktop' | 'mobile';
+  contacts: Contact[];
+  temporaryMarks: string[];
+  selectedBuyer: Contact | null;
+  scribbleMark: string;
+  editingBidId: string | null;
+  buyerSearchLoading: boolean;
+  contactScrollRef: RefObject<HTMLDivElement | null>;
+  markScrollRef: RefObject<HTMLDivElement | null>;
+  contactScrollHandlers: AuctionStripScrollHandlers;
+  markScrollHandlers: AuctionStripScrollHandlers;
+  didDragContactRef: MutableRefObject<boolean>;
+  didDragMarkRef: MutableRefObject<boolean>;
+  onBuyerSelect: (buyer: Contact) => void;
+  onTemporaryMarkSelect: (mark: string) => void;
+  /** When true, only the temporary-marks row renders (registered contact chips hidden). */
+  hideRegisteredContactStrip?: boolean;
+}
+
+const AuctionBuyerStrips = memo(function AuctionBuyerStrips({
+  variant,
+  contacts,
+  temporaryMarks,
+  selectedBuyer,
+  scribbleMark,
+  editingBidId,
+  buyerSearchLoading,
+  contactScrollRef,
+  markScrollRef,
+  contactScrollHandlers,
+  markScrollHandlers,
+  didDragContactRef,
+  didDragMarkRef,
+  onBuyerSelect,
+  onTemporaryMarkSelect,
+  hideRegisteredContactStrip = false,
+}: AuctionBuyerStripsProps) {
+  const isDesktopVariant = variant === 'desktop';
+  const regionClassName = isDesktopVariant
+    ? 'w-full max-w-full min-w-0 overflow-x-auto overflow-y-hidden flex flex-nowrap gap-2.5 py-1.5 -mx-1 px-0.5 scroll-smooth touch-[pan-x_pan-y] lg:touch-auto select-none cursor-grab active:cursor-grabbing overscroll-x-contain'
+    : 'flex w-full gap-1.5 overflow-x-auto overflow-y-hidden px-0 py-0 scroll-smooth touch-[pan-x_pan-y] lg:touch-auto select-none cursor-grab active:cursor-grabbing overscroll-x-contain';
+  const contactButtonClassName = isDesktopVariant
+    ? 'flex-shrink-0 px-3 py-2.5 rounded-xl text-left transition-all border border-l-4 border-l-emerald-500 flex items-center gap-1.5 min-h-[44px]'
+    : 'flex-shrink-0 px-3 py-1.5 rounded-md text-left transition-all border border-l-4 border-l-emerald-500 flex items-center gap-1 min-h-[40px]';
+  const markButtonClassName = isDesktopVariant
+    ? 'flex-shrink-0 px-3 py-2.5 rounded-xl text-left transition-all border border-l-4 border-l-violet-500 flex items-center min-h-[44px]'
+    : 'flex-shrink-0 px-3 py-1.5 rounded-md text-left transition-all border border-l-4 border-l-violet-500 flex items-center min-h-[40px]';
+  const contactTextClassName = isDesktopVariant
+    ? 'text-sm sm:text-base font-semibold truncate max-w-[100px] sm:max-w-[120px]'
+    : 'text-[1.07em] font-semibold truncate max-w-[78px] sm:max-w-[90px]';
+  const markTextClassName = isDesktopVariant
+    ? 'text-sm sm:text-base font-semibold truncate max-w-[100px]'
+    : 'text-[1.07em] font-semibold truncate max-w-[72px]';
+  const emptyContactClassName = isDesktopVariant
+    ? 'flex-shrink-0 px-4 py-2.5 rounded-xl border border-l-4 border-l-emerald-500 border-dashed bg-emerald-500/5 text-emerald-700 dark:text-emerald-400 text-sm font-medium'
+    : 'flex-shrink-0 px-3 py-2 rounded-md border border-l-4 border-l-emerald-500 border-dashed bg-emerald-500/5 text-emerald-700 dark:text-emerald-400 text-[1.07em] font-medium';
+  const emptyMarkClassName = isDesktopVariant
+    ? 'flex-shrink-0 px-4 py-2.5 rounded-xl border border-l-4 border-l-violet-400 border-dashed bg-violet-500/5 text-violet-700 dark:text-violet-300 text-sm font-medium'
+    : 'flex-shrink-0 px-3 py-2 rounded-md border border-l-4 border-l-violet-400 border-dashed bg-violet-500/5 text-violet-700 dark:text-violet-300 text-[1.07em] font-medium';
+  const stripSpacingClassName = isDesktopVariant
+    ? 'space-y-3 min-w-0'
+    : 'space-y-1 mb-[0.5rem]';
+  const stripWrapperClassName = isDesktopVariant ? 'min-w-0 w-full max-w-full space-y-1.5' : '';
+  const scrollStyle = {
+    scrollbarWidth: 'thin',
+    WebkitOverflowScrolling: 'touch',
+    overscrollBehaviorX: 'contain',
+  } as const;
+
+  return (
+    <div className={stripSpacingClassName}>
+      {!hideRegisteredContactStrip && (
+        <div className={stripWrapperClassName}>
+          <div
+            ref={contactScrollRef}
+            role="region"
+            aria-label="Registered buyers"
+            tabIndex={0}
+            {...contactScrollHandlers}
+            className={regionClassName}
+            style={scrollStyle}
+          >
+            {contacts.length > 0 ? (
+              contacts.slice(0, 50).map((buyer) => (
+                <button
+                  key={buyer.contact_id}
+                  type="button"
+                  disabled={!!editingBidId}
+                  onClick={(e) => {
+                    if (didDragContactRef.current) {
+                      e.preventDefault();
+                      return;
+                    }
+                    onBuyerSelect(buyer);
+                  }}
+                  className={cn(
+                    contactButtonClassName,
+                    selectedBuyer?.contact_id === buyer.contact_id
+                      ? 'bg-primary text-primary-foreground border-primary shadow-md border-l-primary'
+                      : 'bg-muted/40 border-border/50 hover:bg-muted/60'
+                  )}
+                >
+                  <span className={contactTextClassName}>{buyer.name}</span>
+                  {buyer.mark && (
+                    <span className={isDesktopVariant ? 'text-xs opacity-90 flex-shrink-0' : 'text-[0.93em] opacity-90 flex-shrink-0'}>
+                      ({buyer.mark})
+                    </span>
+                  )}
+                </button>
+              ))
+            ) : buyerSearchLoading ? (
+              <div className={emptyContactClassName}>Searching contacts</div>
+            ) : (
+              <div className={emptyContactClassName}>No matching contact</div>
+            )}
+          </div>
+        </div>
+      )}
+
+      <div className={stripWrapperClassName}>
+        <div
+          ref={markScrollRef}
+          role="region"
+          aria-label="Temporary buyers"
+          tabIndex={0}
+          {...markScrollHandlers}
+          className={regionClassName}
+          style={scrollStyle}
+        >
+          {temporaryMarks.length > 0 ? (
+            temporaryMarks.slice(0, 50).map((mark) => {
+              const isSelected = !selectedBuyer && scribbleMark === mark;
+              return (
+                <button
+                  key={mark}
+                  type="button"
+                  disabled={!!editingBidId}
+                  onClick={(e) => {
+                    if (didDragMarkRef.current) {
+                      e.preventDefault();
+                      return;
+                    }
+                    onTemporaryMarkSelect(mark);
+                  }}
+                  className={cn(
+                    markButtonClassName,
+                    isSelected
+                      ? 'bg-primary text-primary-foreground border-primary shadow-md border-l-primary'
+                      : 'bg-muted/40 border-border/50 hover:bg-muted/60'
+                  )}
+                >
+                  <span className={markTextClassName}>{mark}</span>
+                </button>
+              );
+            })
+          ) : (
+            <div className={emptyMarkClassName}>No temporary marks yet today</div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+});
+
+interface QuickLotNavigationOverlayProps {
+  show: boolean;
+  quickLotNavigation: { items: LotInfo[]; total: number; start: number };
+  lotNumberSearch: string;
+  selectedLot: LotInfo | null;
+  selectedLotSource: LotSource;
+  statusFilter: LotStatus | 'all';
+  onLotNumberSearchChange: (value: string) => void;
+  onSelectLot: (lot: LotInfo) => void;
+}
+
+const QuickLotNavigationOverlay = memo(function QuickLotNavigationOverlay({
+  show,
+  quickLotNavigation,
+  lotNumberSearch,
+  selectedLot,
+  selectedLotSource,
+  statusFilter,
+  onLotNumberSearchChange,
+  onSelectLot,
+}: QuickLotNavigationOverlayProps) {
+  return (
+    <AnimatePresence>
+      {show && (
+        <motion.div
+          initial={{ opacity: 0, height: 0 }}
+          animate={{ opacity: 1, height: 'auto' }}
+          exit={{ opacity: 0, height: 0 }}
+          className="px-4 mb-3 overflow-hidden"
+        >
+          <div className="glass-card rounded-2xl p-3 max-h-60 overflow-y-auto">
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-xs font-semibold text-muted-foreground uppercase">Quick Lot Navigation</p>
+              <div className="relative w-40">
+                <Hash className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-muted-foreground" />
+                <input
+                  placeholder="Lot # or AB-200/SA-122/SA1/22"
+                  value={lotNumberSearch}
+                  onChange={(e) => onLotNumberSearchChange(e.target.value)}
+                  className="w-full h-7 pl-7 pr-2 rounded-lg bg-muted/50 text-foreground text-xs border border-border focus:outline-none focus:border-primary/50"
+                />
+              </div>
+            </div>
+            <div className="space-y-1">
+              {quickLotNavigation.items.map((lot) => {
+                const status = getRowLotStatus(lot, statusFilter);
+                const cfg = STATUS_CONFIG[status];
+                const isActive = selectedLotSource === 'self_sale'
+                  ? selectedLot?.selfSaleUnitId === lot.selfSaleUnitId
+                  : selectedLot?.lot_id === lot.lot_id;
+                return (
+                  <button
+                    key={getLotRenderKey(lot)}
+                    onClick={() => onSelectLot(lot)}
+                    className={cn(
+                      'w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-left text-xs transition-all',
+                      isActive ? 'bg-primary/15 ring-1 ring-primary/30' : 'hover:bg-muted/50'
+                    )}
+                  >
+                    <span className={cn('w-2 h-2 rounded-full flex-shrink-0', cfg.dot)} />
+                    <span className={cn('font-semibold truncate flex-1', isActive ? 'text-primary' : 'text-foreground')}>
+                      {formatLotDisplayName(lot)}
+                    </span>
+                    <span className={cn('px-1.5 py-0.5 rounded text-[9px] font-bold', cfg.bg, cfg.text)}>{cfg.label}</span>
+                  </button>
+                );
+              })}
+              {quickLotNavigation.total > quickLotNavigation.items.length && (
+                <p className="px-2 py-1.5 text-[11px] text-muted-foreground">
+                  {quickLotNavigation.start}-{quickLotNavigation.start + quickLotNavigation.items.length - 1} / {quickLotNavigation.total} shown
+                </p>
+              )}
+            </div>
+          </div>
+        </motion.div>
+      )}
+    </AnimatePresence>
+  );
+});
+
+const HERO_DENSITY_LABEL: Record<AuctionTouchHeroLayout, string> = {
+  compact: 'Compact',
+  balanced: 'Balanced',
+  spacious: 'Spacious',
+  default_tab: 'Default tab',
+};
+
 function touchHeroShell(layout: AuctionTouchHeroLayout) {
   switch (layout) {
     case 'compact':
@@ -169,6 +587,15 @@ function touchHeroShell(layout: AuctionTouchHeroLayout) {
         stripValue: 'text-[11px] font-semibold text-white truncate',
         lotIndex: 'text-[10px] text-white/75',
         hint: 'text-[9px] font-medium uppercase tracking-wide text-white/55',
+        /** Fixed collapsed header (default view — must track density or presets feel broken). */
+        collapsedBarClass: 'gap-1 px-2 pt-[max(0.5rem,env(safe-area-inset-top))] pb-1.5',
+        collapsedSummaryMinH: 'min-h-[2rem]',
+        collapsedBtnClass: 'h-8 w-8',
+        collapsedGlyphClass: 'h-3.5 w-3.5',
+        collapsedSummaryBasePx: 11,
+        collapsedExpandClass:
+          'flex h-8 shrink-0 items-center gap-0.5 self-center rounded-full bg-white/20 px-2 text-[8px] font-semibold uppercase tracking-wide text-white active:bg-white/30 sm:px-2',
+        collapsedExpandChevronClass: 'h-3.5 w-3.5 shrink-0 sm:h-4 sm:w-4',
       };
     case 'spacious':
       return {
@@ -187,6 +614,14 @@ function touchHeroShell(layout: AuctionTouchHeroLayout) {
         stripValue: 'text-sm font-semibold text-white truncate md:text-base',
         lotIndex: 'text-sm text-white/75 md:text-base',
         hint: 'text-[11px] font-medium uppercase tracking-wide text-white/55',
+        collapsedBarClass: 'gap-2 px-3 pt-[max(0.5rem,env(safe-area-inset-top))] pb-3',
+        collapsedSummaryMinH: 'min-h-[2.75rem]',
+        collapsedBtnClass: 'h-10 w-10',
+        collapsedGlyphClass: 'h-5 w-5',
+        collapsedSummaryBasePx: 13,
+        collapsedExpandClass:
+          'flex h-10 shrink-0 items-center gap-0.5 self-center rounded-full bg-white/20 px-2.5 text-[10px] font-semibold uppercase tracking-wide text-white active:bg-white/30 sm:px-3',
+        collapsedExpandChevronClass: 'h-5 w-5 shrink-0 sm:h-5 sm:w-5',
       };
     default:
       return {
@@ -205,6 +640,14 @@ function touchHeroShell(layout: AuctionTouchHeroLayout) {
         stripValue: 'text-xs font-semibold text-white truncate md:text-sm',
         lotIndex: 'text-xs text-white/75 md:text-sm',
         hint: 'text-[10px] font-medium uppercase tracking-wide text-white/55',
+        collapsedBarClass: 'gap-1.5 px-2 pt-[max(0.5rem,env(safe-area-inset-top))] pb-2',
+        collapsedSummaryMinH: 'min-h-[2.25rem]',
+        collapsedBtnClass: 'h-9 w-9',
+        collapsedGlyphClass: 'h-4 w-4',
+        collapsedSummaryBasePx: 12,
+        collapsedExpandClass:
+          'flex h-9 shrink-0 items-center gap-0.5 self-center rounded-full bg-white/20 px-2 text-[9px] font-semibold uppercase tracking-wide text-white active:bg-white/30 sm:px-2.5 sm:text-[10px]',
+        collapsedExpandChevronClass: 'h-4 w-4 shrink-0 sm:h-5 sm:w-5',
       };
   }
 }
@@ -229,23 +672,32 @@ function AuctionTouchLayoutSheet(props: {
             Mobile and tablet widths only (not desktop). Saved to your trader account on the server so every device and session reuse the same layout; this device also keeps a local copy when offline.
           </SheetDescription>
         </SheetHeader>
-        <div className="mt-6 space-y-8 pb-4">
+        <Tabs defaultValue="mobile" className="mt-6 w-full">
+          <TabsList className="grid w-full max-w-md grid-cols-2">
+            <TabsTrigger value="custom">Custom</TabsTrigger>
+            <TabsTrigger value="mobile">Mobile</TabsTrigger>
+          </TabsList>
+          <TabsContent
+            value="custom"
+            forceMount
+            className="mt-6 space-y-8 pb-4 outline-none data-[state=inactive]:hidden"
+          >
           <div className="space-y-3">
             <div className="flex items-center justify-between gap-2">
               <Label>Hero density</Label>
-              <span className="text-xs text-muted-foreground tabular-nums">{layout.heroLayout}</span>
+              <span className="text-xs text-muted-foreground">{HERO_DENSITY_LABEL[layout.heroLayout]}</span>
             </div>
             <div className="flex flex-wrap gap-2">
-              {(['compact', 'balanced', 'spacious'] as const).map((mode) => (
+              {(['compact', 'balanced', 'spacious', 'default_tab'] as const).map((mode) => (
                 <Button
                   key={mode}
                   type="button"
                   variant={layout.heroLayout === mode ? 'default' : 'outline'}
                   size="sm"
-                  className="rounded-lg capitalize"
-                  onClick={() => patch({ heroLayout: mode })}
+                  className={cn('rounded-lg', mode !== 'default_tab' && 'capitalize')}
+                  onClick={() => onLayoutChange({ ...HERO_DENSITY_TOUCH_PRESETS[mode] })}
                 >
-                  {mode}
+                  {HERO_DENSITY_LABEL[mode]}
                 </Button>
               ))}
             </div>
@@ -365,6 +817,37 @@ function AuctionTouchLayoutSheet(props: {
 
           <div className="space-y-3">
             <div className="flex items-center justify-between gap-2">
+              <Label>Preset chip min width</Label>
+              <span className="text-xs text-muted-foreground tabular-nums">{layout.presetChipMinWidthPx}px</span>
+            </div>
+            <Slider
+              value={[layout.presetChipMinWidthPx]}
+              min={64}
+              max={140}
+              step={4}
+              onValueChange={([v]) => patch({ presetChipMinWidthPx: v })}
+            />
+            <p className="text-xs text-muted-foreground">
+              Wider chips reduce accidental taps on the wrong preset when scrolling the row.
+            </p>
+          </div>
+
+          <div className="space-y-3">
+            <div className="flex items-center justify-between gap-2">
+              <Label>Preset chip min height</Label>
+              <span className="text-xs text-muted-foreground tabular-nums">{layout.presetChipMinHeightPx}px</span>
+            </div>
+            <Slider
+              value={[layout.presetChipMinHeightPx]}
+              min={40}
+              max={76}
+              step={2}
+              onValueChange={([v]) => patch({ presetChipMinHeightPx: v })}
+            />
+          </div>
+
+          <div className="space-y-3">
+            <div className="flex items-center justify-between gap-2">
               <Label>Auction table min width</Label>
               <span className="text-xs text-muted-foreground tabular-nums">{layout.gridMinWidthPx}px</span>
             </div>
@@ -427,7 +910,28 @@ function AuctionTouchLayoutSheet(props: {
           >
             Reset layout defaults
           </Button>
-        </div>
+          </TabsContent>
+          <TabsContent value="mobile" className="mt-6 space-y-5 pb-4 outline-none">
+            <p className="text-sm text-muted-foreground leading-relaxed">
+              Applies minimum sizes across numpad, preset chips, scribble area, grid height, and text scale. Hero density is set to compact so the fixed top bar stays tight on small screens.
+            </p>
+            <ul className="list-disc space-y-1 pl-5 text-xs text-muted-foreground">
+              <li>Smallest allowed touch targets and fonts</li>
+              <li>Maximum vertical space for the bid grid</li>
+              <li>Narrowest horizontal table scroll width</li>
+            </ul>
+            <Button
+              type="button"
+              className="w-full"
+              onClick={() => {
+                onLayoutChange({ ...MOBILE_TOUCH_LAYOUT_PRESET });
+                onOpenChange(false);
+              }}
+            >
+              Apply mobile-optimized layout
+            </Button>
+          </TabsContent>
+        </Tabs>
       </SheetContent>
     </Sheet>
   );
@@ -552,6 +1056,15 @@ function formatPresetMarginCell(margin: number): string {
   return m > 0 ? `+${m}` : String(m);
 }
 
+/** Grid “Rate” display: stored bid (`rate`) minus signed preset (500, +10 → 490; 500, −10 → 510). */
+function displayAuctionTableRate(row: { rate: unknown; presetApplied?: unknown }): number {
+  const r = Number(row.rate);
+  const p = Number(row.presetApplied ?? 0);
+  if (!Number.isFinite(r)) return 0;
+  const adj = Number.isFinite(p) ? p : 0;
+  return Math.trunc(r - adj);
+}
+
 /** Pill switch matching Commodity Settings (Deduction / Round-off). */
 function PresetMarginSwitch({
   checked,
@@ -611,7 +1124,7 @@ function sessionEntryToSaleEntry(e: AuctionEntryDTO): SaleEntry {
     extraRate: Number(e.extra_rate ?? 0),
     presetApplied: Number(e.preset_margin ?? 0),
     presetType: (e.preset_type as PresetType) ?? 'PROFIT',
-    // API keeps seller bid and preset separate; UI shows buyer total as bid + preset on the subline
+    // API: bid_rate = seller bid; preset_margin signed; buyer_rate = buyer-facing total when set.
     sellerRate: Number(e.bid_rate) + Number(e.preset_margin ?? 0),
     buyerRate: Number(e.buyer_rate ?? e.bid_rate),
     lastModifiedMs: e.last_modified_ms ?? null,
@@ -625,6 +1138,41 @@ function mapOrderedSessionEntries(entries: AuctionEntryDTO[]): SaleEntry[] {
       if (a.bidNumber !== b.bidNumber) return a.bidNumber - b.bidNumber;
       return a.id.localeCompare(b.id);
     });
+}
+
+/**
+ * Align preset margin switch + pad ring with loaded session bids (`preset_margin` / `preset_type` per entry).
+ * When all bids share one margin, restore that value; if split, prefer first non-zero. Toggle stays off when margin is 0
+ * (cannot distinguish "preset on with ₹0" from off without extra server flag).
+ */
+function derivePresetUiFromSessionEntries(entries: SaleEntry[]): {
+  showPresetMargin: boolean;
+  preset: number;
+  presetType: PresetType;
+} {
+  if (entries.length === 0) {
+    return { showPresetMargin: false, preset: 0, presetType: 'PROFIT' };
+  }
+  const pVals = entries.map((e) => Number(e.presetApplied ?? 0));
+  const tVals = entries.map((e) => (e.presetType ?? 'PROFIT') as PresetType);
+  const allSame =
+    pVals.every((v) => v === pVals[0]) && tVals.every((t) => t === tVals[0]);
+  let preset: number;
+  let presetType: PresetType;
+  if (allSame) {
+    preset = pVals[0];
+    presetType = tVals[0];
+  } else {
+    const nz = entries.find((e) => Number(e.presetApplied ?? 0) !== 0);
+    const pick = nz ?? entries[0];
+    preset = Number(pick.presetApplied ?? 0);
+    presetType = (pick.presetType ?? 'PROFIT') as PresetType;
+  }
+  return {
+    showPresetMargin: preset !== 0,
+    preset,
+    presetType,
+  };
 }
 
 const AUCTION_SCROLL_EPS = 2;
@@ -871,12 +1419,21 @@ function AuctionsGridScrollPanel({
     window.addEventListener('pointercancel', onUp, { passive: true });
   }, [setScrollLeftFromPointerX]);
 
+  /** Desktop column is `h-auto`; `flex-1` here collapses scrollport height to 0. Mobile fixed dock needs `flex-1`. */
+  const growInFlexParent = !scrollPageIntoViewOnAutoScroll;
+
   return (
-    <div className="relative">
+    <div
+      className={cn(
+        'relative flex min-h-0 min-w-0 flex-col',
+        growInFlexParent ? 'flex-1 basis-0' : 'w-full flex-none'
+      )}
+    >
       <div
         ref={outerRef}
         className={cn(
           'auctions-grid-scroll-panel lot-fields-x-scroll isolate min-h-0 overflow-y-auto overflow-x-auto overscroll-contain touch-auto pb-5',
+          growInFlexParent && 'flex-1 basis-0',
           className
         )}
         style={{
@@ -960,6 +1517,773 @@ function AuctionsGridScrollPanel({
   );
 }
 
+interface AuctionEntriesGridProps {
+  entries: SaleEntry[];
+  isDesktop: boolean;
+  showPresetMargin: boolean;
+  touchLayout: AuctionTouchLayoutConfig;
+  editingBidId: string | null;
+  showTokenInput: string | null;
+  canEdit: boolean;
+  autoScrollKey: number;
+  gridSectionRef: RefObject<HTMLDivElement | null>;
+  auctionGridMobileScrollStyle?: CSSProperties;
+  onStartEditBid: (entry: SaleEntry) => void;
+  onToggleTokenInput: (entryId: string) => void;
+  onSetTokenAdvanceAmount: (entryId: string, amount: number) => void;
+  onRequestDeleteBid: (entry: SaleEntry) => void;
+}
+
+const AuctionEntriesGrid = memo(function AuctionEntriesGrid({
+  entries,
+  isDesktop,
+  showPresetMargin,
+  touchLayout,
+  editingBidId,
+  showTokenInput,
+  canEdit,
+  autoScrollKey,
+  gridSectionRef,
+  auctionGridMobileScrollStyle,
+  onStartEditBid,
+  onToggleTokenInput,
+  onSetTokenAdvanceAmount,
+  onRequestDeleteBid,
+}: AuctionEntriesGridProps) {
+  return (
+    <motion.div
+      initial={isDesktop ? { opacity: 0, y: 10 } : { opacity: 0 }}
+      animate={isDesktop ? { opacity: 1, y: 0 } : { opacity: 1 }}
+      transition={{ delay: isDesktop ? 0.2 : 0.1 }}
+      style={!isDesktop ? { minHeight: 0 } : undefined}
+      className={cn(
+        'w-full min-w-0',
+        !isDesktop && 'flex h-full min-h-0 max-h-full flex-1 flex-col overflow-hidden basis-0'
+      )}
+    >
+      {isDesktop && (
+        <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+          Auction Grid · {entries.length} entries
+        </p>
+      )}
+
+      {entries.length === 0 ? (
+        <div className={cn('glass-card rounded-2xl text-center', isDesktop ? 'p-8' : 'p-4')}>
+          <Gavel className="w-10 h-10 text-muted-foreground/30 mx-auto mb-3" />
+          <p className={cn('text-muted-foreground', isDesktop ? 'text-sm' : 'text-base')}>No bids yet. Start the auction!</p>
+        </div>
+      ) : (
+        <div
+          className={cn(
+            'glass-card rounded-2xl min-h-0',
+            isDesktop
+              ? 'overflow-hidden h-auto flex min-h-0 flex-col'
+              : '!py-0 !px-1 rounded-xl sm:rounded-2xl flex h-full min-h-0 max-h-full flex-1 flex-col overflow-hidden basis-0'
+          )}
+        >
+          <AuctionsGridScrollPanel
+            scrollPageIntoViewOnAutoScroll={isDesktop}
+            className={cn(
+              isDesktop
+                ? entries.length > 5
+                  ? 'max-h-[min(60vh,28rem)] lg:max-h-[min(55vh,26rem)]'
+                  : 'max-h-[min(65vh,32rem)] lg:max-h-[min(60vh,30rem)]'
+                : 'min-h-0 max-h-full flex-1 basis-0 pb-10'
+            )}
+            style={auctionGridMobileScrollStyle}
+            contentLayoutKey={entries.length}
+            autoScrollToBottomKey={autoScrollKey}
+            gridSectionRef={gridSectionRef}
+          >
+            <table
+              className={cn(
+                'w-[42rem] md:w-full table-fixed border-collapse',
+                isDesktop ? 'text-sm sm:text-base' : 'text-base sm:text-lg',
+                showPresetMargin ? (isDesktop ? 'min-w-[480px]' : '') : isDesktop ? 'min-w-[420px]' : ''
+              )}
+              style={
+                !isDesktop
+                  ? {
+                      minWidth: Math.max(touchLayout.gridMinWidthPx, showPresetMargin ? 440 : 400),
+                      fontSize: `${0.875 * touchLayout.textScale}rem`,
+                    }
+                  : showPresetMargin
+                    ? { minWidth: 480 }
+                    : { minWidth: 420 }
+              }
+            >
+              <thead className={cn('sticky top-0', isDesktop ? 'z-[3]' : 'z-[42]')}>
+                <tr className="bg-[linear-gradient(90deg,#4B7CF3_0%,#5B8CFF_45%,#7B61FF_100%)] border-b border-white/25 shadow-[0_8px_20px_-12px_rgba(91,140,255,0.85)] transition-shadow hover:shadow-[0_14px_30px_-12px_rgba(123,97,255,0.9)]">
+                  <th
+                    className={cn(
+                      'border-r border-white/25 text-white uppercase tracking-wider last:border-r-0',
+                      isDesktop ? 'px-3 py-[14px] text-left text-xs font-semibold' : 'px-1 py-1.5 text-left text-[1.07em] font-bold'
+                    )}
+                  >
+                    Mark / Buyer
+                  </th>
+                  <th
+                    className={cn(
+                      'border-r border-white/25 text-white uppercase tracking-wider last:border-r-0',
+                      isDesktop ? 'px-3 py-[14px] text-center text-xs font-semibold' : 'px-1 py-1.5 text-center text-[1.07em] font-bold'
+                    )}
+                  >
+                    Rate
+                  </th>
+                  {showPresetMargin && (
+                    <th
+                      className={cn(
+                        'border-r border-white/25 text-white uppercase tracking-wider last:border-r-0',
+                        isDesktop ? 'px-3 py-[14px] text-center text-xs font-semibold' : 'px-1 py-1.5 text-center text-[1.07em] font-bold'
+                      )}
+                    >
+                      Preset
+                    </th>
+                  )}
+                  <th
+                    className={cn(
+                      'border-r border-white/25 text-white uppercase tracking-wider last:border-r-0',
+                      isDesktop ? 'px-3 py-[14px] text-center text-xs font-semibold' : 'px-1 py-1.5 text-center text-[1.07em] font-bold'
+                    )}
+                  >
+                    Qty
+                  </th>
+                  <th
+                    className={cn(
+                      'text-white uppercase tracking-wider last:border-r-0',
+                      isDesktop ? 'px-3 py-[14px] text-right text-xs font-semibold' : 'px-1 py-1.5 text-center text-[1.07em] font-bold'
+                    )}
+                  >
+                    Action
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {entries.map((entry, i) => (
+                  <Fragment key={entry.id}>
+                    <motion.tr
+                      data-auction-entry-row="true"
+                      data-bid-number={entry.bidNumber}
+                      initial={{ opacity: 0, x: -15 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      transition={{ delay: i * 0.05 }}
+                      onClick={() => {
+                        if (!isDesktop && canEdit && !editingBidId) {
+                          onStartEditBid(entry);
+                        }
+                      }}
+                      className={cn(
+                        'border-b border-border/30 hover:bg-muted/20 transition-colors',
+                        !isDesktop && 'scroll-mt-14',
+                        !isDesktop && canEdit && !editingBidId && 'cursor-pointer',
+                        entry.isSelfSale && 'border-l-4 border-l-amber-500',
+                        entry.isScribble && 'border-l-4 border-l-violet-500',
+                        editingBidId === entry.id && 'bg-primary/5 ring-1 ring-inset ring-primary/35'
+                      )}
+                    >
+                      <td className={cn('px-3 py-[12px]', isDesktop ? '' : 'px-1 py-1.5')}>
+                        <div className={cn('flex items-center flex-wrap', isDesktop ? 'gap-1.5' : 'gap-1')}>
+                          <span
+                            className={cn('font-medium text-foreground truncate max-w-[120px]', isDesktop ? 'text-base' : 'text-[1.15em]')}
+                            title={entry.buyerName}
+                          >
+                            {normalizeScribbleBuyerName(entry.buyerName, entry.isScribble)}
+                          </span>
+                          {entry.isSelfSale && (
+                            <span className={cn('px-1 py-0.5 rounded bg-amber-500/15 text-amber-600 dark:text-amber-400 font-bold', isDesktop ? 'text-[8px]' : 'text-[12px]')}>
+                              SELF
+                            </span>
+                          )}
+                          {editingBidId === entry.id && (
+                            <span className={cn('px-1 py-0.5 rounded bg-primary/20 text-primary font-bold', isDesktop ? 'text-[8px]' : 'text-[12px]')}>
+                              EDITING
+                            </span>
+                          )}
+                        </div>
+                      </td>
+                      <td className={cn('align-middle text-center font-semibold text-foreground', isDesktop ? 'px-3 py-[12px] text-base' : 'px-1 py-1.5 text-[1.15em] font-bold')}>
+                        <div>₹{displayAuctionTableRate(entry)}</div>
+                      </td>
+                      {showPresetMargin && (
+                        <td
+                          className={cn(
+                            'align-middle text-center font-medium tabular-nums',
+                            isDesktop ? 'px-3 py-[12px] text-base' : 'px-1 py-1.5 text-[1.15em] font-bold',
+                            entry.presetApplied > 0 && 'text-success',
+                            entry.presetApplied < 0 && 'text-destructive'
+                          )}
+                        >
+                          {formatPresetMarginCell(entry.presetApplied)}
+                        </td>
+                      )}
+                      <td className={cn('align-middle text-center text-muted-foreground', isDesktop ? 'px-3 py-[12px] text-base' : 'px-1 py-1.5 text-[1.15em] font-bold')}>
+                        {entry.quantity}
+                      </td>
+                      <td className={cn(isDesktop ? 'px-3 py-[12px] text-right' : 'px-1 py-1.5 text-center')}>
+                        <div
+                          className={cn('flex items-center', isDesktop ? 'justify-end gap-1.5' : 'justify-center gap-1')}
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <button
+                            type="button"
+                            disabled={!!editingBidId}
+                            onClick={() => onToggleTokenInput(entry.id)}
+                            className={cn(
+                              'rounded-md transition-colors disabled:opacity-40',
+                              isDesktop ? 'p-1.5' : 'p-2.5',
+                              entry.tokenAdvance > 0 ? 'bg-success/15 text-success' : 'bg-muted/50 text-muted-foreground hover:text-foreground'
+                            )}
+                            title="Token advance"
+                          >
+                            <Banknote className={cn(isDesktop ? 'h-4 w-4' : 'h-[22px] w-[22px]')} />
+                          </button>
+                          {isDesktop && (
+                            <button
+                              onClick={() => onRequestDeleteBid(entry)}
+                              type="button"
+                              disabled={!!editingBidId}
+                              className="rounded-md bg-destructive/10 text-destructive hover:bg-destructive/20 disabled:opacity-40 p-1.5"
+                              title="Delete bid"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </button>
+                          )}
+                          {isDesktop && canEdit && (
+                            <button
+                              type="button"
+                              disabled={!!editingBidId}
+                              onClick={() => onStartEditBid(entry)}
+                              className="p-1.5 rounded-md bg-muted/60 text-foreground hover:bg-muted disabled:opacity-40"
+                              title="Edit bid"
+                            >
+                              <Pencil className={cn(isDesktop ? 'w-4 h-4' : 'w-3.5 h-3.5')} />
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </motion.tr>
+                    <AnimatePresence>
+                      {showTokenInput === entry.id && !editingBidId && (
+                        <motion.tr
+                          data-auction-token-panel={entry.id}
+                          initial={{ opacity: 0 }}
+                          animate={{ opacity: 1 }}
+                          exit={{ opacity: 0 }}
+                          transition={{ duration: 0.15 }}
+                          className="border-b border-border/30 bg-muted/10"
+                        >
+                          <td colSpan={showPresetMargin ? 5 : 4} className={cn('px-3 py-[12px]', isDesktop ? '' : 'px-1 py-1.5')}>
+                            <div className={cn('flex min-w-0 items-center', isDesktop ? 'gap-2' : 'w-full gap-1.5')}>
+                              <span className={cn('shrink-0 text-muted-foreground whitespace-nowrap', isDesktop ? 'text-[10px]' : 'text-sm')}>
+                                Token ₹
+                              </span>
+                              <Input
+                                type="number"
+                                defaultValue={entry.tokenAdvance || ''}
+                                placeholder="0"
+                                className={cn(
+                                  'text-center',
+                                  isDesktop
+                                    ? 'h-8 flex-1 rounded-lg text-xs'
+                                    : 'h-11 min-h-11 w-full min-w-0 flex-1 rounded-md border-2 border-input px-2 py-0 text-sm leading-tight focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-0'
+                                )}
+                                onBlur={(e) => onSetTokenAdvanceAmount(entry.id, parseInt(e.target.value) || 0)}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter') {
+                                    onSetTokenAdvanceAmount(entry.id, parseInt((e.target as HTMLInputElement).value) || 0);
+                                  }
+                                }}
+                              />
+                              {entry.tokenAdvance > 0 && (
+                                <span className={cn('shrink-0 text-success font-semibold', isDesktop ? 'text-[10px]' : 'text-sm')}>
+                                  ✓ ₹{entry.tokenAdvance}
+                                </span>
+                              )}
+                            </div>
+                          </td>
+                        </motion.tr>
+                      )}
+                    </AnimatePresence>
+                  </Fragment>
+                ))}
+              </tbody>
+            </table>
+            {!isDesktop && <div className="pointer-events-none h-6 shrink-0 md:h-0" aria-hidden />}
+          </AuctionsGridScrollPanel>
+        </div>
+      )}
+    </motion.div>
+  );
+});
+
+interface AuctionDesktopBidControlsProps {
+  rate: string;
+  qty: string;
+  editingBidId: string | null;
+  editingEntry: SaleEntry | null;
+  editBidDraftActive: boolean;
+  activeNumpadField: 'rate' | 'qty' | 'mark';
+  useVirtualKeyboardGuard: boolean;
+  mobileKeyboardEnabled: boolean;
+  rateInputRef: RefObject<HTMLInputElement | null>;
+  qtyInputRef: RefObject<HTMLInputElement | null>;
+  addDisabled: boolean;
+  updateDisabled: boolean;
+  showSelfSaleButton: boolean;
+  selfSaleDisabled: boolean;
+  onRateChange: (value: string) => void;
+  onQtyChange: (value: string) => void;
+  onRateFocus: (e: React.FocusEvent<HTMLInputElement>) => void;
+  onQtyFocus: (e: React.FocusEvent<HTMLInputElement>) => void;
+  onNumericBlur: () => void;
+  onAddBid: () => void;
+  onUpdateBid: () => void;
+  onCancelEdit: () => void;
+  onSelfSale: () => void;
+}
+
+const AuctionDesktopBidControls = memo(function AuctionDesktopBidControls({
+  rate,
+  qty,
+  editingBidId,
+  editingEntry,
+  editBidDraftActive,
+  activeNumpadField,
+  useVirtualKeyboardGuard,
+  mobileKeyboardEnabled,
+  rateInputRef,
+  qtyInputRef,
+  addDisabled,
+  updateDisabled,
+  showSelfSaleButton,
+  selfSaleDisabled,
+  onRateChange,
+  onQtyChange,
+  onRateFocus,
+  onQtyFocus,
+  onNumericBlur,
+  onAddBid,
+  onUpdateBid,
+  onCancelEdit,
+  onSelfSale,
+}: AuctionDesktopBidControlsProps) {
+  const readOnlyNumeric = useVirtualKeyboardGuard && !mobileKeyboardEnabled;
+  const inputMode = readOnlyNumeric ? 'none' : 'numeric';
+
+  return (
+    <div className="space-y-2">
+      <div className="grid grid-cols-2 gap-4">
+        <div className="flex flex-col items-center gap-0.5">
+          <label className="text-[9px] font-semibold text-muted-foreground uppercase mb-0.5 block text-center w-full">Rate (₹)</label>
+          <Input
+            ref={rateInputRef}
+            type="number"
+            value={rate}
+            onChange={(e) => onRateChange(e.target.value)}
+            onFocus={onRateFocus}
+            onBlur={onNumericBlur}
+            readOnly={readOnlyNumeric}
+            inputMode={inputMode}
+            placeholder="0"
+            className={cn(
+              'h-14 w-full max-w-[8.75rem] min-w-[7rem] shrink-0 rounded-xl px-2 text-center font-bold text-lg bg-muted/20 border-2 border-primary/25 focus-visible:ring-0 focus-visible:ring-offset-0',
+              activeNumpadField === 'rate' && 'ring-2 ring-primary border-primary/55'
+            )}
+          />
+        </div>
+        <div className="flex flex-col items-center gap-0.5">
+          <label className="text-[9px] font-semibold text-muted-foreground uppercase mb-0.5 block text-center w-full">Qty (Bags)</label>
+          <Input
+            ref={qtyInputRef}
+            type="number"
+            value={qty}
+            onChange={(e) => onQtyChange(e.target.value)}
+            onFocus={onQtyFocus}
+            onBlur={onNumericBlur}
+            readOnly={readOnlyNumeric}
+            inputMode={inputMode}
+            placeholder="0"
+            className={cn(
+              'h-14 w-full max-w-[8.75rem] min-w-[7rem] shrink-0 rounded-xl px-2 text-center font-bold text-lg bg-muted/20 border-2 border-primary/25 focus-visible:ring-0 focus-visible:ring-offset-0',
+              activeNumpadField === 'qty' && 'ring-2 ring-primary border-primary/55'
+            )}
+          />
+        </div>
+      </div>
+      <div className="flex gap-2">
+        {editingBidId && editBidDraftActive ? (
+          <>
+            <Button
+              onClick={onUpdateBid}
+              disabled={!editingEntry || updateDisabled}
+              className="flex-1 h-11 rounded-xl bg-gradient-to-r from-violet-500 to-fuchsia-500 text-white font-semibold shadow-md shadow-violet-500/20"
+            >
+              <Pencil className="w-4 h-4 mr-1" /> Update Bid
+            </Button>
+            <Button
+              onClick={onCancelEdit}
+              variant="outline"
+              className="h-11 rounded-xl px-4 border-border/50 text-foreground hover:bg-muted/40"
+            >
+              Cancel
+            </Button>
+          </>
+        ) : (
+          <>
+            <Button
+              onClick={onAddBid}
+              disabled={addDisabled}
+              className="flex-1 h-11 rounded-xl bg-gradient-to-r from-violet-500 to-fuchsia-500 text-white font-semibold shadow-md shadow-violet-500/20"
+            >
+              <Plus className="w-4 h-4 mr-1" /> Add Bid
+            </Button>
+            {showSelfSaleButton && (
+              <Button
+                onClick={onSelfSale}
+                disabled={selfSaleDisabled}
+                variant="outline"
+                className="h-11 rounded-xl px-4 border-amber-400/50 text-amber-600 dark:text-amber-400 hover:bg-amber-500/10"
+              >
+                Self Sale
+              </Button>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  );
+});
+
+interface AuctionMobileBidTopRowProps {
+  rate: string;
+  qty: string;
+  scribbleMark: string;
+  remaining: number;
+  editingBidId: string | null;
+  editingActive: boolean;
+  isMdViewport: boolean;
+  completeLoading: boolean;
+  canDelete: boolean;
+  activeNumpadField: 'rate' | 'qty' | 'mark';
+  mobileKeyboardEnabled: boolean;
+  rateInputRef: RefObject<HTMLInputElement | null>;
+  qtyInputRef: RefObject<HTMLInputElement | null>;
+  markInputRef: RefObject<HTMLInputElement | null>;
+  dataSkipRouteAutofocus?: string;
+  onRateChange: (value: string) => void;
+  onQtyChange: (value: string) => void;
+  onMarkChange: (value: string, caretPos: number | null) => void;
+  onRateFocus: (e: React.FocusEvent<HTMLInputElement>) => void;
+  onQtyFocus: (e: React.FocusEvent<HTMLInputElement>) => void;
+  onMarkFocus: () => void;
+  onNumericBlur: () => void;
+  onMarkPointerStart: () => void;
+  onMarkSelect: (selectionStart: number | null) => void;
+  onDeleteEditingBid: () => void;
+}
+
+const AuctionMobileBidTopRow = memo(function AuctionMobileBidTopRow({
+  rate,
+  qty,
+  scribbleMark,
+  remaining,
+  editingBidId,
+  editingActive,
+  isMdViewport,
+  completeLoading,
+  canDelete,
+  activeNumpadField,
+  mobileKeyboardEnabled,
+  rateInputRef,
+  qtyInputRef,
+  markInputRef,
+  dataSkipRouteAutofocus,
+  onRateChange,
+  onQtyChange,
+  onMarkChange,
+  onRateFocus,
+  onQtyFocus,
+  onMarkFocus,
+  onNumericBlur,
+  onMarkPointerStart,
+  onMarkSelect,
+  onDeleteEditingBid,
+}: AuctionMobileBidTopRowProps) {
+  return (
+    <div
+      className={cn(
+        'mb-0.5 w-full min-w-0 items-end',
+        isMdViewport ? 'flex gap-4' : 'grid grid-cols-3 gap-2'
+      )}
+    >
+      <div className={cn('flex min-w-0 flex-col items-center gap-0.5', isMdViewport && 'flex-1')}>
+        <label htmlFor="sales-pad-rate-mobile" className="text-[0.93em] font-semibold text-muted-foreground uppercase tracking-wide mb-0 block w-full truncate text-center leading-tight">
+          Rate ₹
+        </label>
+        <Input
+          id="sales-pad-rate-mobile"
+          ref={rateInputRef}
+          type="number"
+          value={rate}
+          onChange={(e) => onRateChange(e.target.value)}
+          onFocus={onRateFocus}
+          onBlur={onNumericBlur}
+          readOnly={!mobileKeyboardEnabled}
+          inputMode={!mobileKeyboardEnabled ? 'none' : 'numeric'}
+          placeholder="0"
+          aria-label="Bid rate in rupees"
+          className={cn(
+            'h-14 w-full rounded-md border-2 border-primary/45 bg-muted/25 text-center font-bold leading-none focus-visible:ring-0 focus-visible:ring-offset-0',
+            isMdViewport ? 'min-w-[7rem] max-w-[9.75rem] shrink-0 px-2 text-[1.07em]' : 'min-w-0 max-w-full shrink px-1 text-[0.95em]',
+            activeNumpadField === 'rate' && 'border-primary ring-2 ring-primary'
+          )}
+        />
+      </div>
+      <div className={cn('flex min-w-0 flex-col items-center', isMdViewport ? 'min-w-0 flex-[1.15] gap-0.5' : 'gap-1')}>
+        <label htmlFor="sales-pad-mark-mobile" className="text-[0.93em] font-semibold text-muted-foreground uppercase tracking-wide mb-0 block w-full truncate text-center leading-tight">
+          Mark
+        </label>
+        <Input
+          id="sales-pad-mark-mobile"
+          ref={markInputRef}
+          data-skip-route-autofocus={dataSkipRouteAutofocus}
+          type="text"
+          autoComplete="off"
+          value={scribbleMark}
+          readOnly={!!editingBidId}
+          onMouseDown={onMarkPointerStart}
+          onTouchStart={onMarkPointerStart}
+          onChange={(e) => onMarkChange(e.target.value, e.target.selectionStart)}
+          onSelect={(e) => onMarkSelect(e.currentTarget.selectionStart)}
+          inputMode="none"
+          onFocus={onMarkFocus}
+          placeholder="Search…"
+          aria-label="Search mark or name"
+          className={cn(
+            'h-14 w-full rounded-md border-2 border-violet-500/45 bg-muted/25 py-1 text-center font-medium leading-none focus-visible:ring-0 focus-visible:ring-offset-0',
+            isMdViewport ? 'min-w-[8rem] max-w-[12.5rem] shrink-0 px-2 text-[1.07em]' : 'min-w-0 max-w-full shrink truncate px-1 text-[0.95em]',
+            activeNumpadField === 'mark' && 'border-violet-600 ring-2 ring-violet-500/55'
+          )}
+        />
+      </div>
+      <div className={cn('min-w-0', isMdViewport && 'flex-[1.35]')}>
+        <div
+          className={cn(
+            'grid w-full min-w-0 grid-cols-[minmax(0,1fr)_auto] grid-rows-[auto_auto]',
+            isMdViewport ? 'gap-x-3 gap-y-0.5' : 'gap-x-1.5 gap-y-0.5'
+          )}
+        >
+          <span className="col-start-1 row-start-1 justify-self-center text-center text-[0.93em] font-semibold uppercase tracking-wide text-muted-foreground leading-tight">
+            Qty
+          </span>
+          <Input
+            id="sales-pad-qty-mobile"
+            ref={qtyInputRef}
+            type="number"
+            value={qty}
+            onChange={(e) => onQtyChange(e.target.value)}
+            onFocus={onQtyFocus}
+            onBlur={onNumericBlur}
+            readOnly={!mobileKeyboardEnabled}
+            inputMode={!mobileKeyboardEnabled ? 'none' : 'numeric'}
+            placeholder="0"
+            aria-label={`Quantity in bags, ${remaining} bags remaining in lot`}
+            className={cn(
+              'col-start-1 row-start-2 rounded-md border-2 border-primary/45 bg-muted/25 text-center font-bold leading-none focus-visible:ring-0 focus-visible:ring-offset-0',
+              isMdViewport ? 'h-14 w-full min-w-[7rem] max-w-[9.75rem] shrink-0 justify-self-center px-2 text-[1.07em]' : 'h-14 w-full min-w-0 justify-self-stretch px-1 text-[0.95em]',
+              activeNumpadField === 'qty' && 'border-primary ring-2 ring-primary'
+            )}
+          />
+          <div className={cn('col-start-2 row-start-2 flex h-14 shrink-0 items-center self-end', isMdViewport ? 'gap-3' : 'gap-1')}>
+            <span
+              className={cn('font-black tabular-nums leading-none text-foreground', isMdViewport ? 'min-w-[2ch] text-right text-[1.15em]' : 'text-[0.95em]')}
+              title={`${remaining} bags remaining in lot`}
+              aria-hidden
+            >
+              /{remaining}
+            </span>
+            {editingActive && (
+              <button
+                type="button"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={onDeleteEditingBid}
+                disabled={completeLoading || !canDelete}
+                className={cn(
+                  'flex shrink-0 items-center justify-center rounded-md border-2 border-destructive/40 bg-destructive/10 text-destructive hover:bg-destructive/20 disabled:pointer-events-none disabled:opacity-40',
+                  isMdViewport ? 'h-14 min-w-[4.25rem] px-2' : 'h-12 min-w-[2.5rem] px-1'
+                )}
+                aria-label="Delete bid"
+                title="Delete bid"
+              >
+                <Trash2 className={cn(isMdViewport ? 'h-5 w-5' : 'h-[18px] w-[18px]')} strokeWidth={2.25} />
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+});
+
+interface DuplicateMarkDialogProps {
+  dialog: DuplicateMarkDialogState | null;
+  onClose: () => void;
+  onDifferentMark: () => void;
+  onMergeOrKeepSeparate: () => void;
+}
+
+const AuctionDuplicateMarkDialog = memo(function AuctionDuplicateMarkDialog({
+  dialog,
+  onClose,
+  onDifferentMark,
+  onMergeOrKeepSeparate,
+}: DuplicateMarkDialogProps) {
+  return (
+    <AnimatePresence>
+      {dialog && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 backdrop-blur-sm px-6"
+          onClick={onClose}
+        >
+          <motion.div
+            initial={{ scale: 0.9, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            exit={{ scale: 0.9, opacity: 0 }}
+            className="w-full max-w-sm bg-card rounded-2xl p-5 shadow-2xl border border-border/50"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-amber-500/20 to-orange-500/20 border border-amber-500/20 flex items-center justify-center mx-auto mb-3">
+              <AlertTriangle className="w-7 h-7 text-amber-500" />
+            </div>
+            <h3 className="text-lg font-bold text-center text-foreground mb-1">Reusing Mark "{dialog.mark}"?</h3>
+            <p className="text-sm text-center text-muted-foreground mb-4">
+              This mark already exists in this lot (Bid #{dialog.existingEntry.bidNumber}).
+              {dialog.existingEntry.rate === dialog.rate
+                ? ' Same rate — bids will be merged.'
+                : ' Different rate — bids will be kept separate.'}
+            </p>
+            <div className="flex gap-3">
+              <Button onClick={onDifferentMark} variant="outline" className="flex-1 h-12 rounded-xl">
+                Different Mark
+              </Button>
+              <Button
+                onClick={onMergeOrKeepSeparate}
+                className="flex-1 h-12 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 text-white"
+              >
+                {dialog.existingEntry.rate === dialog.rate ? 'Merge' : 'Keep Separate'}
+              </Button>
+            </div>
+          </motion.div>
+        </motion.div>
+      )}
+    </AnimatePresence>
+  );
+});
+
+interface QtyIncreaseDialogProps {
+  dialog: QtyIncreaseDialogState | null;
+  onClose: () => void;
+  onConfirm: () => void;
+}
+
+const AuctionQtyIncreaseDialog = memo(function AuctionQtyIncreaseDialog({
+  dialog,
+  onClose,
+  onConfirm,
+}: QtyIncreaseDialogProps) {
+  return (
+    <AnimatePresence>
+      {dialog && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 backdrop-blur-sm px-6"
+          onClick={onClose}
+        >
+          <motion.div
+            initial={{ scale: 0.9, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            exit={{ scale: 0.9, opacity: 0 }}
+            className="w-full max-w-sm bg-card rounded-2xl p-5 shadow-2xl border border-border/50"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-blue-500/20 to-violet-500/20 border border-blue-500/20 flex items-center justify-center mx-auto mb-3">
+              <Plus className="w-7 h-7 text-primary" />
+            </div>
+            <h3 className="text-lg font-bold text-center text-foreground mb-1">Increase Lot Quantity?</h3>
+            <p className="text-sm text-center text-muted-foreground mb-4">
+              Lot has <strong>{dialog.lotTotal}</strong> bags, <strong>{dialog.currentTotal}</strong> already sold.
+              Adding <strong>{dialog.attemptedQty}</strong> bags exceeds the limit.
+              <br />New total will be: <strong>{dialog.currentTotal + dialog.attemptedQty}</strong> bags*
+            </p>
+            <div className="flex gap-3">
+              <Button onClick={onClose} variant="outline" className="flex-1 h-12 rounded-xl">Cancel</Button>
+              <Button onClick={onConfirm} className="flex-1 h-12 rounded-xl bg-gradient-to-r from-blue-500 to-violet-500 text-white">
+                Increase & Add
+              </Button>
+            </div>
+          </motion.div>
+        </motion.div>
+      )}
+    </AnimatePresence>
+  );
+});
+
+interface EditBidQtyIncreaseDialogProps {
+  dialog: EditBidQtyDialogState | null;
+  onClose: () => void;
+  onConfirm: () => void;
+}
+
+const AuctionEditBidQtyIncreaseDialog = memo(function AuctionEditBidQtyIncreaseDialog({
+  dialog,
+  onClose,
+  onConfirm,
+}: EditBidQtyIncreaseDialogProps) {
+  return (
+    <AnimatePresence>
+      {dialog && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 backdrop-blur-sm px-6"
+          onClick={onClose}
+        >
+          <motion.div
+            initial={{ scale: 0.9, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            exit={{ scale: 0.9, opacity: 0 }}
+            className="w-full max-w-sm bg-card rounded-2xl p-5 shadow-2xl border border-border/50"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-blue-500/20 to-violet-500/20 border border-blue-500/20 flex items-center justify-center mx-auto mb-3">
+              <Pencil className="w-7 h-7 text-primary" />
+            </div>
+            <h3 className="text-lg font-bold text-center text-foreground mb-1">Increase Lot Quantity?</h3>
+            <p className="text-sm text-center text-muted-foreground mb-4">
+              Lot has <strong>{dialog.lotTotal}</strong> bags.
+              Other bids use <strong>{dialog.currentTotal}</strong> bags.
+              This bid at <strong>{dialog.attemptedQty}</strong> bags would bring the total sold to{' '}
+              <strong>{dialog.currentTotal + dialog.attemptedQty}</strong> bags.
+            </p>
+            <div className="flex gap-3">
+              <Button onClick={onClose} variant="outline" className="flex-1 h-12 rounded-xl">Cancel</Button>
+              <Button onClick={onConfirm} className="flex-1 h-12 rounded-xl bg-gradient-to-r from-blue-500 to-violet-500 text-white">
+                Allow & Update
+              </Button>
+            </div>
+          </motion.div>
+        </motion.div>
+      )}
+    </AnimatePresence>
+  );
+});
+
 const AuctionsPage = () => {
   const navigate = useNavigate();
   const isDesktop = useDesktopMode();
@@ -967,10 +2291,9 @@ const AuctionsPage = () => {
   const { canAccessModule, can } = usePermissions();
   const canUsePreset = trader?.preset_enabled !== false;
   const canView = canAccessModule('Auctions / Sales');
-  if (!canView) {
-    return <ForbiddenPage moduleName="Auctions" />;
-  }
   const [buyers, setBuyers] = useState<Contact[]>([]);
+  const [buyerSearchLoading, setBuyerSearchLoading] = useState(false);
+  const buyerSearchGenRef = useRef(0);
   /** Distinct scribble marks for current trader calendar day (from API); not tied to current lot only. */
   const [temporaryBuyerMarks, setTemporaryBuyerMarks] = useState<string[]>([]);
   const [entries, setEntries] = useState<SaleEntry[]>([]);
@@ -979,6 +2302,12 @@ const AuctionsPage = () => {
   const [scribbleMark, setScribbleMark] = useState('');
   const [preset, setPreset] = useState(0);
   const [presetType, setPresetType] = useState<PresetType>('PROFIT');
+  /** Per-lot UI: must not carry over when user picks another lot or returns to selector after save/complete. */
+  const resetAuctionPresetUi = useCallback(() => {
+    setShowPresetMargin(false);
+    setPreset(0);
+    setPresetType('PROFIT');
+  }, []);
   const [showTokenInput, setShowTokenInput] = useState<string | null>(null);
   const [scribblePadResetTrigger, setScribblePadResetTrigger] = useState(0);
   /** Last segment appended from the inline scribble pad (for correcting via candidate chip in append mode). */
@@ -1010,21 +2339,37 @@ const AuctionsPage = () => {
   const [lotNavMode, setLotNavMode] = useState<'all' | 'vehicle' | 'seller' | 'buyer' | 'lot_number'>('all');
   const [lotNumberSearch, setLotNumberSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<LotStatus | 'all'>('all');
+  const [lotsFetchingMore, setLotsFetchingMore] = useState(false);
+  const [regularLotsLoadComplete, setRegularLotsLoadComplete] = useState(false);
+  const [regularLotsTotal, setRegularLotsTotal] = useState<number | null>(null);
+  const [selfSaleFetchingMore, setSelfSaleFetchingMore] = useState(false);
+  const [selfSaleLotsLoadComplete, setSelfSaleLotsLoadComplete] = useState(false);
+  const [selfSaleLotsTotal, setSelfSaleLotsTotal] = useState<number | null>(null);
+  const loadLotsGenRef = useRef(0);
+  const loadSelfSaleGenRef = useRef(0);
+  const loadLotsAbortRef = useRef<AbortController | null>(null);
+  const loadSelfSaleAbortRef = useRef<AbortController | null>(null);
   const [showLotList, setShowLotList] = useState(false);
+  const sessionCacheRef = useRef(new Map<string, { session: AuctionSessionDTO; cachedAt: number }>());
+  const sessionInflightRef = useRef(new Map<string, Promise<AuctionSessionDTO>>());
+  const selectedSessionKeyRef = useRef<string | null>(null);
+  const selectLotGenRef = useRef(0);
   /** Mobile/tablet: collapse gradient hero to maximize auction grid vertical space. */
-  const [mobileAuctionHeroCollapsed, setMobileAuctionHeroCollapsed] = useState(false);
+  const [mobileAuctionHeroCollapsed, setMobileAuctionHeroCollapsed] = useState(true);
   /** Matches fixed collapsed hero + spacer — sticky auction block / thead sit below this offset. */
   const auctionCollapsedBarHeight = 'calc(max(0.5rem, env(safe-area-inset-top, 0px)) + 2.75rem + 0.5rem)';
-  /** Expanded mobile hero height — ResizeObserver so sticky grid section pins below hero when scrolling. */
-  const expandedHeroMeasureRef = useRef<HTMLDivElement>(null);
-  const [expandedHeroHeightPx, setExpandedHeroHeightPx] = useState(0);
 
   const [touchLayoutSheetOpen, setTouchLayoutSheetOpen] = useState(false);
   const touchLayoutSaveTimerRef = useRef<number | null>(null);
   const touchLayoutLatestForSaveRef = useRef<AuctionTouchLayoutConfig>(readLocalAuctionTouchLayout());
+  /** User changed layout this session — don't overwrite with late-arriving GET /api layout. */
+  const skipServerTouchLayoutOverlayRef = useRef(false);
   const [touchLayout, setTouchLayout] = useState<AuctionTouchLayoutConfig>(() => readLocalAuctionTouchLayout());
+  /** Filled in useLayoutEffect; used after layout sheet commits so padding catches new dock height immediately. */
+  const measureMobileDockChromeRef = useRef<() => void>(() => {});
 
   const commitTouchLayout = useCallback((next: AuctionTouchLayoutConfig) => {
+    skipServerTouchLayoutOverlayRef.current = true;
     setTouchLayout(next);
     persistLocalAuctionTouchLayout(next);
     touchLayoutLatestForSaveRef.current = next;
@@ -1037,6 +2382,13 @@ const AuctionsPage = () => {
         toast.error('Could not sync Sales Pad layout to server; stored on this device only.');
       });
     }, 750);
+    queueMicrotask(() => {
+      measureMobileDockChromeRef.current();
+      requestAnimationFrame(() => {
+        measureMobileDockChromeRef.current();
+        requestAnimationFrame(() => measureMobileDockChromeRef.current());
+      });
+    });
   }, []);
 
   useEffect(() => {
@@ -1046,6 +2398,7 @@ const AuctionsPage = () => {
         const raw = await auctionTouchLayoutApi.get();
         if (cancelled) return;
         if (raw != null && raw.trim()) {
+          if (skipServerTouchLayoutOverlayRef.current) return;
           const parsed = parseAuctionTouchLayout(raw);
           setTouchLayout(parsed);
           persistLocalAuctionTouchLayout(parsed);
@@ -1086,20 +2439,15 @@ const AuctionsPage = () => {
   }, []);
 
   // Duplicate mark dialog
-  const [duplicateMarkDialog, setDuplicateMarkDialog] = useState<{
-    mark: string; buyerName: string; buyerContactId: string | null;
-    rate: number; qty: number; isScribble: boolean;
-    existingEntry: SaleEntry;
-  } | null>(null);
+  const [duplicateMarkDialog, setDuplicateMarkDialog] = useState<DuplicateMarkDialogState | null>(null);
 
   // Quantity increase confirmation
-  const [qtyIncreaseDialog, setQtyIncreaseDialog] = useState<{
-    currentTotal: number; lotTotal: number; attemptedQty: number;
-    pendingEntry: Omit<SaleEntry, 'id' | 'bidNumber'>;
-  } | null>(null);
+  const [qtyIncreaseDialog, setQtyIncreaseDialog] = useState<QtyIncreaseDialogState | null>(null);
 
-  // Preset options from Settings (dynamic only; no local fallback)
-  const [presetOptions, setPresetOptions] = useState<{ label: string; value: number }[]>([]);
+  /** First entry always value 0; remainder from Settings (no duplicate 0 from API). */
+  const [presetOptions, setPresetOptions] = useState<{ label: string; value: number }[]>([
+    { label: '0', value: 0 },
+  ]);
 
   // API loading / 409 retry
   const [lotsLoading, setLotsLoading] = useState(true);
@@ -1127,11 +2475,7 @@ const AuctionsPage = () => {
     lastModifiedMs: number | null;
   } | null>(null);
   const [editBidRetryAllowIncrease, setEditBidRetryAllowIncrease] = useState(false);
-  const [editBidQtyDialog, setEditBidQtyDialog] = useState<{
-    currentTotal: number; lotTotal: number; attemptedQty: number;
-    pendingBody: AuctionBidUpdateRequest;
-    bidNumericId: number;
-  } | null>(null);
+  const [editBidQtyDialog, setEditBidQtyDialog] = useState<EditBidQtyDialogState | null>(null);
 
   type EditBidFormSnapshot = {
     selectedBuyer: Contact | null;
@@ -1156,21 +2500,43 @@ const AuctionsPage = () => {
   const isTouchLayout = !isDesktop;
 
   const mobileTouchHero = useMemo(() => touchHeroShell(touchLayout.heroLayout), [touchLayout.heroLayout]);
-  const auctionGridMobileMaxHeight = useMemo(() => {
-    if (isDesktop) return undefined as string | undefined;
-    return mobileAuctionHeroCollapsed
-      ? (isMdViewport
-        ? `min(${touchLayout.gridMaxVhCollapsedMd}vh, 34rem)`
-        : `min(${touchLayout.gridMaxVhCollapsed}vh, 30rem)`)
-      : `min(${touchLayout.gridMaxVhExpanded}vh, 18rem)`;
-  }, [
-    isDesktop,
-    isMdViewport,
-    mobileAuctionHeroCollapsed,
-    touchLayout.gridMaxVhCollapsed,
-    touchLayout.gridMaxVhCollapsedMd,
-    touchLayout.gridMaxVhExpanded,
-  ]);
+
+  /** Full fixed Sales Pad chrome (buyer strips → inputs → preset → scribble/numpad). */
+  const mobileDockMeasureRef = useRef<HTMLDivElement>(null);
+  const [mobileDockHeightPx, setMobileDockHeightPx] = useState(420);
+
+  /** Measured fixed dock + small slack for max-height / scroll (not full viewport tail — that inflated padding). */
+  const MOBILE_DOCK_LAYOUT_SLACK_PX = 12;
+  const mobileDockContentReservePx = useMemo(
+    () => (isDesktop ? 0 : Math.max(mobileDockHeightPx + MOBILE_DOCK_LAYOUT_SLACK_PX, 296)),
+    [isDesktop, mobileDockHeightPx]
+  );
+
+  /** Mobile/tablet: scroll-padding inside grid only (height comes from flex flex-1 min-h-0 chain). */
+  const auctionGridMobileScrollStyle = useMemo((): CSSProperties | undefined => {
+    if (isDesktop) return undefined;
+    return {
+      scrollPaddingTop: '3.5rem',
+      overscrollBehaviorY: 'contain',
+      WebkitOverflowScrolling: 'touch',
+    };
+  }, [isDesktop]);
+
+  /**
+   * Collapsed hero is fixed — table min-height:auto can still grow the grid to ~full viewport.
+   * Hard max-height keeps the glass card above the fixed dock (buyer chips + inputs + pad).
+   */
+  const auctionGridMobileSectionStyle = useMemo((): CSSProperties | undefined => {
+    if (isDesktop) return undefined;
+    const dockPx = mobileDockContentReservePx;
+    if (mobileAuctionHeroCollapsed) {
+      return {
+        minHeight: 0,
+        maxHeight: `calc(100dvh - ${auctionCollapsedBarHeight} - ${dockPx}px)`,
+      };
+    }
+    return { minHeight: 0, maxHeight: '100%' };
+  }, [isDesktop, mobileAuctionHeroCollapsed, mobileDockContentReservePx]);
 
   const heroTitleFontRem = useMemo(() => {
     const ts = touchLayout.textScale;
@@ -1219,6 +2585,21 @@ const AuctionsPage = () => {
     }),
     [touchLayout.numpadKeyHeight, touchLayout.numpadSecondaryRowHeight, touchLayout.numpadKeyFontPx]
   );
+
+  const presetChipButtonStyle = useMemo((): CSSProperties => {
+    const h = touchLayout.presetChipMinHeightPx;
+    const fontPx = Math.min(18, Math.max(12, Math.round(h * 0.31)));
+    return {
+      minWidth: touchLayout.presetChipMinWidthPx,
+      minHeight: h,
+      fontSize: fontPx,
+    };
+  }, [touchLayout.presetChipMinWidthPx, touchLayout.presetChipMinHeightPx]);
+
+  const presetChipIconSquareStyle = useMemo((): CSSProperties => {
+    const s = touchLayout.presetChipMinHeightPx;
+    return { minWidth: s, minHeight: s };
+  }, [touchLayout.presetChipMinHeightPx]);
 
   // Skip initial draft restore flag
   const draftRestored = useRef(false);
@@ -1276,41 +2657,197 @@ const AuctionsPage = () => {
     };
   }, []);
 
+  const contactStripScrollHandlers = useMemo(
+    () => makeScrollHandlers(contactScrollRef, didDragContactRef),
+    [makeScrollHandlers]
+  );
+
+  const markStripScrollHandlers = useMemo(
+    () => makeScrollHandlers(markScrollRef, didDragMarkRef),
+    [makeScrollHandlers]
+  );
+
+  const selectAuctionBuyer = useCallback((buyer: Contact) => {
+    hapticSelection();
+    hideNativeKeyboard();
+    setSelectedBuyer(buyer);
+    setContactLastUsedMs((p) => ({ ...p, [String(buyer.contact_id)]: Date.now() }));
+    lastScribbleSegmentRef.current = '';
+    setScribbleMark((buyer.mark || buyer.name.charAt(0) || '').toString());
+    setScribblePadResetTrigger((t) => t + 1);
+  }, []);
+
+  const selectTemporaryBuyerMark = useCallback((mark: string) => {
+    hapticSelection();
+    hideNativeKeyboard();
+    setSelectedBuyer(null);
+    setTempMarkLastUsedMs((p) => ({ ...p, [mark]: Date.now() }));
+    lastScribbleSegmentRef.current = '';
+    setScribbleMark(mark);
+    setScribblePadResetTrigger((t) => t + 1);
+  }, []);
+
   const loadLots = useCallback(async (opts?: { q?: string; status?: string }) => {
+    const myGen = ++loadLotsGenRef.current;
+    loadLotsAbortRef.current?.abort();
+    const ac = new AbortController();
+    loadLotsAbortRef.current = ac;
+    const { signal } = ac;
+
     setLotsLoading(true);
+    setLotsFetchingMore(false);
+    setRegularLotsLoadComplete(false);
+    setRegularLotsTotal(null);
+    setAvailableLots([]);
+
+    const applyIfCurrent = (fn: () => void) => {
+      if (loadLotsGenRef.current === myGen) fn();
+    };
+
+    const merged = new Map<string, LotInfo>();
+    let lastArr: LotInfo[] = [];
+
     try {
-      const list = await auctionApi.listLots({
-        page: 0,
-        size: 500,
-        q: opts?.q || undefined,
-        status: opts?.status || undefined,
-      });
-      const lots: LotInfo[] = list.map(lotSummaryToLotInfo);
-      setAvailableLots(lots);
-      return lots;
+      let page = 0;
+      let reportedTotal = 0;
+      for (;;) {
+        const { items, totalElements } = await auctionApi.listLotsPage(
+          {
+            page,
+            size: AUCTION_LOTS_PAGE_SIZE,
+            sort: 'id,asc',
+            q: opts?.q || undefined,
+            status: opts?.status || undefined,
+          },
+          { signal }
+        );
+
+        if (signal.aborted || loadLotsGenRef.current !== myGen) {
+          return lastArr;
+        }
+
+        if (page === 0) {
+          reportedTotal = totalElements;
+          applyIfCurrent(() => setRegularLotsTotal(totalElements));
+        }
+
+        for (const dto of items) {
+          const info = lotSummaryToLotInfo(dto);
+          merged.set(info.lot_id, info);
+        }
+        lastArr = [...merged.values()].sort((a, b) => Number(a.lot_id) - Number(b.lot_id));
+        applyIfCurrent(() => setAvailableLots(lastArr));
+
+        if (page === 0) {
+          applyIfCurrent(() => setLotsLoading(false));
+        }
+
+        const noMore =
+          items.length === 0 ||
+          items.length < AUCTION_LOTS_PAGE_SIZE ||
+          merged.size >= reportedTotal;
+        if (noMore) break;
+
+        page += 1;
+        applyIfCurrent(() => setLotsFetchingMore(true));
+      }
+
+      applyIfCurrent(() => setRegularLotsLoadComplete(true));
+      return lastArr;
     } catch (e) {
+      if (isAbortError(e) || loadLotsGenRef.current !== myGen) {
+        return lastArr;
+      }
       toast.error(e instanceof Error ? e.message : 'Failed to load lots');
-      setAvailableLots([]);
+      applyIfCurrent(() => {
+        setAvailableLots([]);
+        setRegularLotsLoadComplete(true);
+      });
       return [];
     } finally {
-      setLotsLoading(false);
+      applyIfCurrent(() => {
+        setLotsLoading(false);
+        setLotsFetchingMore(false);
+      });
     }
   }, []);
 
   const loadSelfSaleLots = useCallback(async (opts?: { q?: string }) => {
+    const myGen = ++loadSelfSaleGenRef.current;
+    loadSelfSaleAbortRef.current?.abort();
+    const ac = new AbortController();
+    loadSelfSaleAbortRef.current = ac;
+    const { signal } = ac;
+
+    setSelfSaleFetchingMore(false);
+    setSelfSaleLotsLoadComplete(false);
+    setSelfSaleLotsTotal(null);
+    setSelfSaleLots([]);
+
+    const applyIfCurrent = (fn: () => void) => {
+      if (loadSelfSaleGenRef.current === myGen) fn();
+    };
+
+    const merged = new Map<string, LotInfo>();
+    let lastArr: LotInfo[] = [];
+
     try {
-      const list = await auctionApi.listSelfSaleUnits({
-        page: 0,
-        size: 500,
-        q: opts?.q || undefined,
-      });
-      const lots: LotInfo[] = list.map(selfSaleUnitToLotInfo);
-      setSelfSaleLots(lots);
-      return lots;
+      let page = 0;
+      let reportedTotal = 0;
+      for (;;) {
+        const { items, totalElements } = await auctionApi.listSelfSaleUnitsPage(
+          {
+            page,
+            size: AUCTION_LOTS_PAGE_SIZE,
+            sort: 'id,asc',
+            q: opts?.q || undefined,
+          },
+          { signal }
+        );
+
+        if (signal.aborted || loadSelfSaleGenRef.current !== myGen) {
+          return lastArr;
+        }
+
+        if (page === 0) {
+          reportedTotal = totalElements;
+          applyIfCurrent(() => setSelfSaleLotsTotal(totalElements));
+        }
+
+        for (const dto of items) {
+          const info = selfSaleUnitToLotInfo(dto);
+          const key = info.selfSaleUnitId ?? `lot-${info.lot_id}`;
+          merged.set(String(key), info);
+        }
+        lastArr = [...merged.values()].sort(
+          (a, b) => Number(a.selfSaleUnitId ?? 0) - Number(b.selfSaleUnitId ?? 0)
+        );
+        applyIfCurrent(() => setSelfSaleLots(lastArr));
+
+        const noMore =
+          items.length === 0 ||
+          items.length < AUCTION_LOTS_PAGE_SIZE ||
+          merged.size >= reportedTotal;
+        if (noMore) break;
+
+        page += 1;
+        applyIfCurrent(() => setSelfSaleFetchingMore(true));
+      }
+
+      applyIfCurrent(() => setSelfSaleLotsLoadComplete(true));
+      return lastArr;
     } catch (e) {
+      if (isAbortError(e) || loadSelfSaleGenRef.current !== myGen) {
+        return lastArr;
+      }
       toast.error(e instanceof Error ? e.message : 'Failed to load self-sale lots');
-      setSelfSaleLots([]);
+      applyIfCurrent(() => {
+        setSelfSaleLots([]);
+        setSelfSaleLotsLoadComplete(true);
+      });
       return [];
+    } finally {
+      applyIfCurrent(() => setSelfSaleFetchingMore(false));
     }
   }, []);
 
@@ -1325,26 +2862,56 @@ const AuctionsPage = () => {
 
   // Load buyers, lots, and preset settings from API
   useEffect(() => {
-    contactApi.list({ scope: 'participants' }).then(setBuyers);
+    if (!canView) return;
+    contactApi
+      .searchParticipants('', { limit: AUCTION_BUYER_SUGGESTION_LIMIT })
+      .then((contacts) => setBuyers(contacts))
+      .catch(() => setBuyers([]));
     loadTemporaryBuyerMarks();
     loadLots();
     loadSelfSaleLots();
     presetMarksApi
       .list()
       .then((list) => {
-        if (list && list.length > 0) {
-          setPresetOptions(
-            list.map((p) => ({
-              label: p.predefined_mark ?? String(p.extra_amount),
-              value: Number(p.extra_amount),
-            }))
-          );
-        } else {
-          setPresetOptions([]);
-        }
+        const DEFAULT = { label: '0', value: 0 };
+        const fromApi = (list ?? []).map((p) => ({
+          label: p.predefined_mark ?? String(p.extra_amount),
+          value: Number(p.extra_amount),
+        }));
+        const rest = fromApi.filter((o) => o.value !== 0 && Number.isFinite(o.value));
+        setPresetOptions([DEFAULT, ...rest]);
       })
-      .catch(() => { setPresetOptions([]); });
-  }, [loadTemporaryBuyerMarks, loadLots, loadSelfSaleLots]);
+      .catch(() => {
+        setPresetOptions([{ label: '0', value: 0 }]);
+      });
+  }, [canView, loadTemporaryBuyerMarks, loadLots, loadSelfSaleLots]);
+
+  useEffect(() => {
+    if (!canView) return;
+    const query = (scribbleMark || '').trim();
+    const myGen = ++buyerSearchGenRef.current;
+    const timer = window.setTimeout(() => {
+      const startedAt = performance.now();
+      setBuyerSearchLoading(true);
+      contactApi
+        .searchParticipants(query, { limit: AUCTION_BUYER_SUGGESTION_LIMIT })
+        .then((contacts) => {
+          if (buyerSearchGenRef.current !== myGen) return;
+          setBuyers((prev) => mergeAuctionContacts(prev, contacts));
+          auctionPerfLog('contacts:search', startedAt, { queryLength: query.length, count: contacts.length });
+        })
+        .catch(() => {
+          // Existing local suggestions stay usable; foreground bid flow should not be blocked by search.
+        })
+        .finally(() => {
+          if (buyerSearchGenRef.current === myGen) setBuyerSearchLoading(false);
+        });
+    }, AUCTION_BUYER_SEARCH_DEBOUNCE_MS);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [canView, scribbleMark]);
 
   useEffect(() => {
     if (canUsePreset) return;
@@ -1357,9 +2924,12 @@ const AuctionsPage = () => {
     if (draftRestored.current || availableLots.length === 0) return;
     const draft = loadDraft();
     if (!draft || !draft.selectedLotId) return;
-    draftRestored.current = true;
     const lot = availableLots.find(l => l.lot_id === draft.selectedLotId);
-    if (!lot) return;
+    if (!lot) {
+      if (!regularLotsLoadComplete) return;
+      return;
+    }
+    draftRestored.current = true;
     setSelectedLot(lot);
     setShowLotSelector(false);
     setRate(draft.rate || '');
@@ -1379,7 +2949,7 @@ const AuctionsPage = () => {
       .catch(() => { /* entries stay empty from draft if API fails */ })
       .finally(() => setSessionLoading(false));
     toast.info('Draft restored from previous session');
-  }, [availableLots, loadTemporaryBuyerMarks]);
+  }, [availableLots, loadTemporaryBuyerMarks, regularLotsLoadComplete]);
 
   // ── Auto-save draft on state change ─────────────────────
   useEffect(() => {
@@ -1398,6 +2968,7 @@ const AuctionsPage = () => {
 
   // Filter lots (lot identifier format e.g. AB-200/SA-122/SA1/22 also searchable)
   const filteredLots = useMemo(() => {
+    if (!showLotSelector) return [];
     let result = statusFilter === 'self_sale' ? selfSaleLots : availableLots;
     if (lotSearchQuery) {
       const q = lotSearchQuery.toLowerCase();
@@ -1422,7 +2993,7 @@ const AuctionsPage = () => {
       result = result.filter(l => getLotStatus(l.lot_id, l.bag_count, l.status) === statusFilter);
     }
     return result;
-  }, [availableLots, selfSaleLots, lotSearchQuery, lotNumberSearch, statusFilter]);
+  }, [availableLots, selfSaleLots, lotSearchQuery, lotNumberSearch, statusFilter, showLotSelector]);
 
   const selectorLots = useMemo(
     () => (statusFilter === 'self_sale' ? selfSaleLots : availableLots),
@@ -1466,37 +3037,54 @@ const AuctionsPage = () => {
     return map;
   }, [filteredLots]);
 
+  const isLotSelectorGroupedNav =
+    lotNavMode === 'vehicle' ||
+    lotNavMode === 'seller' ||
+    (lotNavMode === 'buyer' && statusFilter !== 'self_sale');
+
+  const flatLotsForVirtual = useMemo(() => {
+    if (!showLotSelector || isLotSelectorGroupedNav) return [];
+    return filteredLots;
+  }, [showLotSelector, isLotSelectorGroupedNav, filteredLots]);
+
+  const lotRowVirtualizer = useWindowVirtualizer({
+    count: flatLotsForVirtual.length,
+    estimateSize: () => 96,
+    overscan: 8,
+    measureElement,
+    getItemKey: index => getLotRenderKey(flatLotsForVirtual[index]!),
+    enabled: flatLotsForVirtual.length > 0,
+  });
+
+  const regularLotsCountLabel = useMemo(() => {
+    if (regularLotsTotal != null && !regularLotsLoadComplete) {
+      return `${availableLots.length} / ${regularLotsTotal}`;
+    }
+    return String(availableLots.length);
+  }, [regularLotsTotal, regularLotsLoadComplete, availableLots.length]);
+
+  const selfSaleLotsCountLabel = useMemo(() => {
+    if (selfSaleLotsTotal != null && !selfSaleLotsLoadComplete) {
+      return `${selfSaleLots.length} / ${selfSaleLotsTotal}`;
+    }
+    return String(selfSaleLots.length);
+  }, [selfSaleLotsTotal, selfSaleLotsLoadComplete, selfSaleLots.length]);
+
+  const selectorLotsCountLabel = useMemo(
+    () => (statusFilter === 'self_sale' ? selfSaleLotsCountLabel : regularLotsCountLabel),
+    [statusFilter, selfSaleLotsCountLabel, regularLotsCountLabel]
+  );
+
   // Row 1: Contacts from contact module — filter by scribble pad search (name/mark/phone)
   const filteredContacts = useMemo(() => {
     const q = (scribbleMark || '').trim().toLowerCase();
-    const list = buyers;
-    const filtered = !q
-      ? list
-      : list.filter(
-          b =>
-            b.name?.toLowerCase().startsWith(q) ||
-            (b.phone && b.phone.startsWith(q)) ||
-            (b.mark && b.mark.toLowerCase().startsWith(q))
-        );
-    return [...filtered].sort((a, b) => {
-      const ta = contactLastUsedMs[String(a.contact_id)] ?? 0;
-      const tb = contactLastUsedMs[String(b.contact_id)] ?? 0;
-      if (tb !== ta) return tb - ta;
-      return (a.name || '').localeCompare(b.name || '', undefined, { sensitivity: 'base' });
-    });
+    return limitedAuctionContactSuggestions(buyers, q, contactLastUsedMs);
   }, [buyers, scribbleMark, contactLastUsedMs]);
 
   // Row 2: Temporary (scribble) marks for today — server-scoped; filter by search box
   const filteredTemporaryMarks = useMemo(() => {
     const q = (scribbleMark || '').trim().toLowerCase();
-    const list = temporaryBuyerMarks;
-    const filtered = !q ? list : list.filter(m => m.toLowerCase().startsWith(q));
-    return [...filtered].sort((a, b) => {
-      const ta = tempMarkLastUsedMs[a] ?? 0;
-      const tb = tempMarkLastUsedMs[b] ?? 0;
-      if (tb !== ta) return tb - ta;
-      return a.localeCompare(b, undefined, { sensitivity: 'base' });
-    });
+    return limitedAuctionTemporaryMarkSuggestions(temporaryBuyerMarks, q, tempMarkLastUsedMs);
   }, [temporaryBuyerMarks, scribbleMark, tempMarkLastUsedMs]);
 
   const clampInsideClosingParen = useCallback((value: string, proposedPos: number, allowManualExit = false) => {
@@ -1583,10 +3171,74 @@ const AuctionsPage = () => {
     hapticSelection();
   }, [editingBidId]);
 
+  const handleRateInputChange = useCallback((value: string) => {
+    setRate(value);
+    if (value.trim() !== '') {
+      userClearedRateRef.current = false;
+    }
+    if (editingBidId) setEditBidDraft((d) => (d ? { ...d, rate: value } : d));
+  }, [editingBidId]);
+
+  const handleQtyInputChange = useCallback((value: string) => {
+    setQty(value);
+    if (editingBidId) setEditBidDraft((d) => (d ? { ...d, qty: value } : d));
+  }, [editingBidId]);
+
+  const handleRateInputFocus = useCallback((e: React.FocusEvent<HTMLInputElement>) => {
+    if (preferRateForFirstBidFormFocus) setPreferRateForFirstBidFormFocus(false);
+    setActiveNumpadField('rate');
+    if (isTouchLayout && !mobileKeyboardEnabled) {
+      e.currentTarget.blur();
+      hideNativeKeyboard();
+    }
+  }, [isTouchLayout, mobileKeyboardEnabled, preferRateForFirstBidFormFocus]);
+
+  const handleQtyInputFocus = useCallback((e: React.FocusEvent<HTMLInputElement>) => {
+    setActiveNumpadField('qty');
+    if (isTouchLayout && !mobileKeyboardEnabled) {
+      e.currentTarget.blur();
+      hideNativeKeyboard();
+    }
+  }, [isTouchLayout, mobileKeyboardEnabled]);
+
+  const handleNumericInputBlur = useCallback(() => {
+    if (isTouchLayout) setMobileKeyboardEnabled(false);
+  }, [isTouchLayout]);
+
+  const handleMobileMarkInputChange = useCallback((rawValue: string, caretPos: number | null) => {
+    if (editingBidId) return;
+    lastScribbleSegmentRef.current = '';
+    const v = rawValue.toUpperCase().slice(0, MAX_MARK_LEN);
+    setScribbleMark(v);
+    const clampedPos = clampInsideClosingParen(v, caretPos ?? v.length);
+    markInsertPosRef.current = clampedPos;
+    pendingMarkCaretPosRef.current = clampedPos;
+    setSelectedBuyer(null);
+  }, [editingBidId, clampInsideClosingParen]);
+
+  const handleMobileMarkInputSelect = useCallback((selectionStart: number | null) => {
+    const rawPos = selectionStart ?? scribbleMark.length;
+    const allowManualExit = manualMarkSelectionRef.current;
+    manualMarkSelectionRef.current = false;
+    const clampedPos = clampInsideClosingParen(scribbleMark, rawPos, allowManualExit);
+    markInsertPosRef.current = clampedPos;
+    pendingMarkCaretPosRef.current = clampedPos !== rawPos ? clampedPos : null;
+  }, [clampInsideClosingParen, scribbleMark]);
+
+  const handleMobileMarkFocus = useCallback(() => {
+    setActiveNumpadField('mark');
+    hideNativeKeyboard();
+  }, []);
+
+  const handleMarkPointerStart = useCallback(() => {
+    manualMarkSelectionRef.current = true;
+  }, []);
+
   const totalSold = useMemo(() => entries.reduce((s, e) => s + e.quantity, 0), [entries]);
   const remaining = selectedLot ? selectedLot.bag_count - totalSold : 0;
   const highestBid = useMemo(() => Math.max(0, ...entries.map(e => e.rate)), [entries]);
   const isSelfSaleReauction = selectedLotSource === 'self_sale';
+  const canEditAuctionBids = can('Auctions / Sales', 'Edit');
   const previousSelfSaleEntries = selfSaleContext?.previous_entries ?? [];
   const previousBidRate = useMemo(() => {
     if (entries.length === 0) return 0;
@@ -1622,26 +3274,91 @@ const AuctionsPage = () => {
     return () => window.clearTimeout(t);
   }, [showTokenInput, isDesktop]);
 
-  /**
-   * When preset is on, the rate field shows buyer total (bid + preset); this returns seller bid for API / grid `rate`.
-   * When preset is off, the field is the seller bid.
-   */
+  /** Rate field is always seller bid (`bid_rate` / grid Rate column); preset is separate. */
   const getBidRateFromInput = useCallback((rawRate: string) => {
     const parsed = parseInt(rawRate, 10);
     if (!Number.isFinite(parsed)) return 0;
-    return showPresetMargin ? Math.max(0, parsed - preset) : parsed;
-  }, [showPresetMargin, preset]);
+    return Math.max(0, parsed);
+  }, []);
 
   const editingEntry = useMemo(() => {
     if (!editingBidId) return null;
     return entries.find(e => e.id === editingBidId) ?? null;
   }, [editingBidId, entries]);
 
-  const applyAuctionSession = useCallback((session: AuctionSessionDTO) => {
+  const rememberAuctionSession = useCallback((lot: Pick<LotInfo, 'lot_id' | 'selfSaleUnitId'>, source: LotSource, session: AuctionSessionDTO) => {
+    sessionCacheRef.current.set(getAuctionSessionCacheKey(lot, source), { session, cachedAt: Date.now() });
+  }, []);
+
+  const getCachedAuctionSession = useCallback((lot: Pick<LotInfo, 'lot_id' | 'selfSaleUnitId'>, source: LotSource) => {
+    const key = getAuctionSessionCacheKey(lot, source);
+    const hit = sessionCacheRef.current.get(key);
+    if (!hit) return null;
+    if (Date.now() - hit.cachedAt > AUCTION_SESSION_CACHE_TTL_MS) {
+      sessionCacheRef.current.delete(key);
+      return null;
+    }
+    return hit.session;
+  }, []);
+
+  const fetchAuctionSessionForLot = useCallback((
+    lot: Pick<LotInfo, 'lot_id' | 'selfSaleUnitId'>,
+    source: LotSource,
+    opts?: { force?: boolean; reason?: string }
+  ) => {
+    const key = getAuctionSessionCacheKey(lot, source);
+    if (!opts?.force) {
+      const cached = getCachedAuctionSession(lot, source);
+      if (cached) return Promise.resolve(cached);
+    }
+    const inflight = sessionInflightRef.current.get(key);
+    if (inflight) return inflight;
+
+    const startedAt = performance.now();
+    const request = source === 'self_sale'
+      ? auctionApi.getOrStartSelfSaleSession(lot.selfSaleUnitId ?? lot.lot_id)
+      : auctionApi.getOrStartSession(lot.lot_id);
+
+    const tracked = request
+      .then((session) => {
+        rememberAuctionSession(lot, source, session);
+        auctionPerfLog(`session:${opts?.reason ?? 'load'}`, startedAt, { key, source });
+        return session;
+      })
+      .finally(() => {
+        sessionInflightRef.current.delete(key);
+      });
+
+    sessionInflightRef.current.set(key, tracked);
+    return tracked;
+  }, [getCachedAuctionSession, rememberAuctionSession]);
+
+  const prefetchCurrentAuctionSessionForLot = useCallback(async (
+    lot: Pick<LotInfo, 'lot_id' | 'selfSaleUnitId'>,
+    source: LotSource
+  ) => {
+    const cached = getCachedAuctionSession(lot, source);
+    if (cached) return;
+
+    const startedAt = performance.now();
+    const session = source === 'self_sale'
+      ? await auctionApi.getCurrentSelfSaleSession(lot.selfSaleUnitId ?? lot.lot_id)
+      : await auctionApi.getCurrentSession(lot.lot_id);
+    if (!session) return;
+
+    rememberAuctionSession(lot, source, session);
+    auctionPerfLog('session:prefetch-current', startedAt, {
+      key: getAuctionSessionCacheKey(lot, source),
+      source,
+    });
+  }, [getCachedAuctionSession, rememberAuctionSession]);
+
+  const applyAuctionSessionForLot = useCallback((session: AuctionSessionDTO, lotContext: LotInfo | null, sourceContext: LotSource) => {
     setEntries(mapOrderedSessionEntries(session.entries));
     setSelfSaleContext(session.self_sale_context ?? null);
-    const lotId = selectedLot?.lot_id;
-    const selfSaleUnitId = selectedLot?.selfSaleUnitId;
+    if (lotContext) rememberAuctionSession(lotContext, sourceContext, session);
+    const lotId = lotContext?.lot_id;
+    const selfSaleUnitId = lotContext?.selfSaleUnitId;
     if (session.lot && lotId) {
       const sl = session.lot as LotSummaryDTO & { vehicleMark?: string };
       const vm = pickVehicleMarkFromDto(sl);
@@ -1710,19 +3427,21 @@ const AuctionsPage = () => {
         )
       );
     }
-  }, [selectedLot?.lot_id, selectedLot?.selfSaleUnitId]);
+  }, [rememberAuctionSession]);
+
+  const applyAuctionSession = useCallback((session: AuctionSessionDTO) => {
+    applyAuctionSessionForLot(session, selectedLot, selectedLotSource);
+  }, [applyAuctionSessionForLot, selectedLot, selectedLotSource]);
 
   const refetchAuctionSession = useCallback(async () => {
     if (!selectedLot) return;
     try {
-      const session = selectedLotSource === 'self_sale'
-        ? await auctionApi.getOrStartSelfSaleSession(selectedLot.selfSaleUnitId ?? selectedLot.lot_id)
-        : await auctionApi.getOrStartSession(selectedLot.lot_id);
-      applyAuctionSession(session);
+      const session = await fetchAuctionSessionForLot(selectedLot, selectedLotSource, { force: true, reason: 'refresh' });
+      applyAuctionSessionForLot(session, selectedLot, selectedLotSource);
     } catch {
       toast.error('Failed to refresh session');
     }
-  }, [selectedLot, selectedLotSource, applyAuctionSession]);
+  }, [selectedLot, selectedLotSource, fetchAuctionSessionForLot, applyAuctionSessionForLot]);
 
   const addBidForCurrentSelection = useCallback(async (body: AuctionBidCreateRequest) => {
     if (!selectedLot) throw new Error('No lot selected');
@@ -1822,6 +3541,58 @@ const AuctionsPage = () => {
     );
   }, [selectedLot, selectedLotSource, navigationLots]);
 
+  const prefetchAdjacentLotSessions = useCallback((lot: LotInfo, source: LotSource) => {
+    const list = source === 'self_sale' ? selfSaleLots : availableLots;
+    const idx = list.findIndex(l =>
+      source === 'self_sale'
+        ? l.selfSaleUnitId === lot.selfSaleUnitId
+        : l.lot_id === lot.lot_id
+    );
+    if (idx < 0) return;
+    [idx - 1, idx + 1].forEach(i => {
+      const next = list[i];
+      if (!next) return;
+      if (!next.status || next.status === 'available') return;
+      void prefetchCurrentAuctionSessionForLot(next, source).catch(() => {
+        // Prefetch is opportunistic; foreground navigation will surface errors.
+      });
+    });
+  }, [availableLots, selfSaleLots, prefetchCurrentAuctionSessionForLot]);
+
+  const quickLotNavigation = useMemo(() => {
+    if (!showLotList) return { items: [], total: 0, start: 0 };
+    const q = lotNumberSearch.trim().toLowerCase();
+    if (q) {
+      const matches = navigationLots.filter(l =>
+        l.lot_name.toLowerCase().includes(q) ||
+        l.lot_id.toLowerCase().includes(q) ||
+        formatLotDisplayName(l).toLowerCase().includes(q)
+      );
+      return {
+        items: matches.slice(0, AUCTION_QUICK_LOT_NAV_LIMIT),
+        total: matches.length,
+        start: matches.length > 0 ? 1 : 0,
+      };
+    }
+
+    if (navigationLots.length <= AUCTION_QUICK_LOT_NAV_LIMIT) {
+      return {
+        items: navigationLots,
+        total: navigationLots.length,
+        start: navigationLots.length > 0 ? 1 : 0,
+      };
+    }
+
+    const center = currentLotIndex >= 0 ? currentLotIndex : 0;
+    const half = Math.floor(AUCTION_QUICK_LOT_NAV_LIMIT / 2);
+    const startIndex = Math.max(0, Math.min(center - half, navigationLots.length - AUCTION_QUICK_LOT_NAV_LIMIT));
+    return {
+      items: navigationLots.slice(startIndex, startIndex + AUCTION_QUICK_LOT_NAV_LIMIT),
+      total: navigationLots.length,
+      start: startIndex + 1,
+    };
+  }, [currentLotIndex, lotNumberSearch, navigationLots, showLotList]);
+
   const navigateToLot = (direction: 'prev' | 'next') => {
     if (currentLotIndex === -1) return;
     const newIndex = direction === 'prev' ? currentLotIndex - 1 : currentLotIndex + 1;
@@ -1832,34 +3603,70 @@ const AuctionsPage = () => {
   const canGoPrev = currentLotIndex > 0;
   const canGoNext = currentLotIndex >= 0 && currentLotIndex < navigationLots.length - 1;
 
-  /** Mobile expanded hero height → sticky offset for auction grid below gradient header. */
   useLayoutEffect(() => {
-    if (isDesktop || mobileAuctionHeroCollapsed) {
-      setExpandedHeroHeightPx(0);
-      return;
-    }
-    const el = expandedHeroMeasureRef.current;
+    if (isDesktop) return;
+    const el = mobileDockMeasureRef.current;
     if (!el) return;
-    const measure = () => {
-      const h = Math.round(el.offsetHeight || el.getBoundingClientRect().height);
-      setExpandedHeroHeightPx(h);
+
+    const measureDockChrome = () => {
+      const dockEl = mobileDockMeasureRef.current;
+      if (!dockEl) return;
+      const rect = dockEl.getBoundingClientRect();
+      const ih = window.innerHeight;
+      const vv = window.visualViewport;
+      const rectH = Math.max(1, Math.ceil(rect.height));
+      /** When dock is flush to bottom, this should match rect height; if much larger, layout metrics are wrong — ignore. */
+      const layoutTail = Math.ceil(ih - rect.top);
+      const visualTail = vv ? Math.ceil(vv.offsetTop + vv.height - rect.top) : layoutTail;
+      const agreesWithBox = (t: number) => t > 0 && t <= rectH + 40 && t >= rectH - 12;
+      let core = rectH;
+      if (agreesWithBox(layoutTail)) core = Math.max(core, layoutTail);
+      if (agreesWithBox(visualTail)) core = Math.max(core, visualTail);
+      const cap = Math.ceil(ih * 0.78);
+      const h = Math.min(cap, core + 12);
+      setMobileDockHeightPx((prev) => (h > 0 ? h : prev));
     };
-    measure();
-    const ro = new ResizeObserver(measure);
+
+    measureMobileDockChromeRef.current = measureDockChrome;
+
+    measureDockChrome();
+    const ro = new ResizeObserver(() => measureDockChrome());
     ro.observe(el);
-    return () => ro.disconnect();
-  }, [isDesktop, mobileAuctionHeroCollapsed, selectedLot?.lot_id]);
+
+    const vv = window.visualViewport;
+    vv?.addEventListener('resize', measureDockChrome);
+    vv?.addEventListener('scroll', measureDockChrome);
+    window.addEventListener('resize', measureDockChrome);
+
+    let raf1 = 0;
+    let raf2 = 0;
+    raf1 = window.requestAnimationFrame(() => {
+      measureDockChrome();
+      raf2 = window.requestAnimationFrame(measureDockChrome);
+    });
+
+    return () => {
+      measureMobileDockChromeRef.current = () => {};
+      ro.disconnect();
+      vv?.removeEventListener('resize', measureDockChrome);
+      vv?.removeEventListener('scroll', measureDockChrome);
+      window.removeEventListener('resize', measureDockChrome);
+      cancelAnimationFrame(raf1);
+      cancelAnimationFrame(raf2);
+    };
+  }, [isDesktop, touchLayout, canUsePreset, showPresetMargin, isMdViewport, editingBidId]);
 
   // Status counts for lot selector
   const statusCounts = useMemo(() => {
     const counts = { available: 0, sold: 0, partial: 0, pending: 0, self_sale: 0 };
+    if (!showLotSelector) return counts;
     availableLots.forEach(l => {
       const s = getLotStatus(l.lot_id, l.bag_count, l.status);
       counts[s]++;
     });
     counts.self_sale = selfSaleLots.length;
     return counts;
-  }, [availableLots, selfSaleLots]);
+  }, [availableLots, selfSaleLots, showLotSelector]);
 
   /** Buyer-facing total = seller bid + signed preset margin (stored on entries / API). */
   const calcSellerRate = useCallback((bidRate: number, presetVal: number) => {
@@ -1927,7 +3734,13 @@ const AuctionsPage = () => {
     };
     try {
       pendingBidAutoScrollRef.current = true;
+      const startedAt = performance.now();
       const session = await addBidForCurrentSelection(body);
+      auctionPerfLog('bid:add', startedAt, {
+        source: selectedLotSource,
+        lotId: selectedLot.lot_id,
+        entries: session.entries?.length ?? 0,
+      });
       applyAuctionSession(session);
       void loadTemporaryBuyerMarks();
       hapticNotification(NotificationType.Success);
@@ -1955,7 +3768,7 @@ const AuctionsPage = () => {
         toast.error(err instanceof Error ? err.message : 'Failed to add bid');
       }
     }
-  }, [selectedLot, addBidRetryAllowIncrease, loadTemporaryBuyerMarks, addBidForCurrentSelection, applyAuctionSession]);
+  }, [selectedLot, selectedLotSource, addBidRetryAllowIncrease, loadTemporaryBuyerMarks, addBidForCurrentSelection, applyAuctionSession]);
 
   const confirmQtyIncrease = async () => {
     if (!qtyIncreaseDialog || !selectedLot) return;
@@ -2022,7 +3835,7 @@ const AuctionsPage = () => {
         presetApplied: mergeEffectivePreset,
         presetType,
         sellerRate: calcSellerRate(newRate, mergeEffectivePreset),
-        buyerRate: newRate,
+        buyerRate: calcSellerRate(newRate, mergeEffectivePreset),
       });
       toast.info(`Kept as separate bid (different rate)`);
     }
@@ -2054,7 +3867,7 @@ const AuctionsPage = () => {
       presetApplied: effectivePreset,
       presetType,
       sellerRate: calcSellerRate(entryRate, effectivePreset),
-      buyerRate: entryRate,
+      buyerRate: calcSellerRate(entryRate, effectivePreset),
     });
   };
 
@@ -2077,7 +3890,7 @@ const AuctionsPage = () => {
       presetApplied: effectivePreset,
       presetType,
       sellerRate: calcSellerRate(currentRate, effectivePreset),
-      buyerRate: currentRate,
+      buyerRate: calcSellerRate(currentRate, effectivePreset),
     });
     setShowScribble(false);
     lastScribbleSegmentRef.current = '';
@@ -2104,7 +3917,7 @@ const AuctionsPage = () => {
       presetApplied: effectivePreset,
       presetType,
       sellerRate: calcSellerRate(entryRate, effectivePreset),
-      buyerRate: entryRate,
+      buyerRate: calcSellerRate(entryRate, effectivePreset),
     });
     lastScribbleSegmentRef.current = '';
     setScribbleMark('');
@@ -2137,7 +3950,7 @@ const AuctionsPage = () => {
         presetApplied: effectivePreset,
         presetType,
         sellerRate: calcSellerRate(entryRate, effectivePreset),
-        buyerRate: entryRate,
+        buyerRate: calcSellerRate(entryRate, effectivePreset),
       });
       setSelectedBuyer(null);
     } else if (scribbleMark.trim()) {
@@ -2155,7 +3968,7 @@ const AuctionsPage = () => {
         presetApplied: effectivePreset,
         presetType,
         sellerRate: calcSellerRate(entryRate, effectivePreset),
-        buyerRate: entryRate,
+        buyerRate: calcSellerRate(entryRate, effectivePreset),
       });
     } else return;
 
@@ -2289,6 +4102,7 @@ const AuctionsPage = () => {
       setSelectedLotSource('regular');
       setSelfSaleContext(null);
       setEntries([]);
+      resetAuctionPresetUi();
       void loadTemporaryBuyerMarks();
       loadLots();
       loadSelfSaleLots();
@@ -2310,6 +4124,7 @@ const AuctionsPage = () => {
     loadTemporaryBuyerMarks,
     loadLots,
     loadSelfSaleLots,
+    resetAuctionPresetUi,
   ]);
 
   const handleSaveAndCompleteAuction = useCallback(() => {
@@ -2336,7 +4151,8 @@ const AuctionsPage = () => {
         completedAt: completedAuction.completedAt,
         entries: completedAuction.entries,
       }), { mode: "system" });
-      ok ? toast.success('Auction completion print opened') : toast.error('Printer not connected.');
+      if (ok) toast.success('Auction completion print opened');
+      else toast.error('Printer not connected.');
     })();
   }, [showPrint, completedAuction]);
 
@@ -2385,6 +4201,19 @@ const AuctionsPage = () => {
       toast.error(e instanceof Error ? e.message : 'Failed to update token advance');
     }
   }, [selectedLot, editingBidId, can, applyAuctionSession, updateBidForCurrentSelection]);
+
+  const toggleAuctionTokenInput = useCallback((entryId: string) => {
+    setShowTokenInput(prev => prev === entryId ? null : entryId);
+  }, []);
+
+  const requestDeleteBid = useCallback((entry: SaleEntry) => {
+    setPendingDeleteBid({ id: entry.id, label: `${entry.buyerName} (${entry.buyerMark})` });
+  }, []);
+
+  const requestDeleteEditingBid = useCallback(() => {
+    if (!editingEntry) return;
+    setPendingDeleteBid({ id: editingEntry.id, label: `${editingEntry.buyerName} (${editingEntry.buyerMark})` });
+  }, [editingEntry]);
 
   const cancelEditBid = useCallback(() => {
     const snap = editBidFormSnapshotRef.current;
@@ -2435,10 +4264,7 @@ const AuctionsPage = () => {
     setEditBidQtyDialog(null);
     setEditingBidId(entry.id);
     setEditBidRetryAllowIncrease(false);
-    const displayRateForInput =
-      entry.presetApplied !== 0
-        ? Math.trunc(entry.rate + entry.presetApplied)
-        : Math.trunc(entry.rate);
+    const displayRateForInput = Math.trunc(entry.rate);
     setEditBidDraft({
       rate: String(displayRateForInput),
       qty: String(entry.quantity),
@@ -2493,9 +4319,7 @@ const AuctionsPage = () => {
       toast.error('Enter valid rate and quantity (at least 1).');
       return;
     }
-    const baseBid = showPresetMargin
-      ? Math.max(0, rateDisplay - editBidDraft.preset)
-      : rateDisplay;
+    const baseBid = Math.max(0, rateDisplay);
     if (baseBid < 1) {
       toast.error('Enter valid rate and quantity (at least 1).');
       return;
@@ -2570,7 +4394,6 @@ const AuctionsPage = () => {
     applyAuctionSession,
     refetchAuctionSession,
     cancelEditBid,
-    showPresetMargin,
   ]);
 
   const confirmEditBidQtyIncrease = useCallback(async () => {
@@ -2608,14 +4431,6 @@ const AuctionsPage = () => {
 
   const applyPreset = (value: number) => {
     const next = preset === value ? 0 : value;
-    const currentInput = parseInt(rate, 10);
-    let newRateStr: string | null = null;
-    if (showPresetMargin && Number.isFinite(currentInput) && currentInput > 0) {
-      const baseRate = currentInput - preset;
-      const nextDisplay = baseRate + next;
-      newRateStr = String(Math.max(0, nextDisplay));
-      setRate(newRateStr);
-    }
     setPreset(next);
     if (next !== 0) setPresetType(value >= 0 ? 'PROFIT' : 'LOSS');
 
@@ -2626,7 +4441,6 @@ const AuctionsPage = () => {
           ...d,
           preset: next,
           presetType: next < 0 ? 'LOSS' : 'PROFIT',
-          ...(newRateStr !== null ? { rate: newRateStr } : {}),
         };
       });
     }
@@ -2642,36 +4456,23 @@ const AuctionsPage = () => {
     if (userClearedRateRef.current) return;
     if (rate.trim() !== '') return;
     if (previousBidRate <= 0) return;
-    const displayRate = showPresetMargin ? previousBidRate + preset : previousBidRate;
-    setRate(String(displayRate));
-  }, [editingBidId, previousBidRate, rate, showPresetMargin, preset]);
+    setRate(String(previousBidRate));
+  }, [editingBidId, previousBidRate, rate]);
 
   const handleShowPresetMarginChange = useCallback((checked: boolean) => {
-    const currentInput = parseInt(rate, 10);
-    if (Number.isFinite(currentInput) && currentInput > 0) {
-      // Field shows seller bid when preset off, buyer total (bid + preset) when preset on.
-      const nextDisplay = checked ? currentInput + preset : currentInput - preset;
-      const s = String(Math.max(0, nextDisplay));
-      setRate(s);
-      if (editingBidId) {
-        setEditBidDraft((d) => (d ? { ...d, rate: s } : d));
-      }
-      userClearedRateRef.current = false;
-    } else if (!editingBidId) {
-      if (checked) {
+    // Do not rewrite rate when toggling preset — field stays seller bid; preset is separate.
+    if (!editingBidId) {
+      const currentInput = parseInt(rate, 10);
+      if (!Number.isFinite(currentInput) || currentInput <= 0) {
         if (previousBidRate > 0) {
-          setRate(String(previousBidRate + preset));
+          setRate(String(previousBidRate));
           userClearedRateRef.current = false;
         } else {
           setRate('');
         }
-      } else if (previousBidRate > 0) {
-        setRate(String(previousBidRate));
-        userClearedRateRef.current = false;
-      } else {
-        setRate('');
       }
     }
+
     setShowPresetMargin(checked);
     if (editingBidId) {
       setEditBidDraft((d) => {
@@ -2704,37 +4505,73 @@ const AuctionsPage = () => {
     setQty('');
     setLotNumberSearch('');
     userClearedRateRef.current = false;
+    resetAuctionPresetUi();
     // Available lots have no bids yet — user must enter a rate, so focus Rate first.
     // Sold/partial/pending lots already have bids and the rate auto-fills from the
     // last bid, so focus Mark instead (existing behaviour).
     setPreferRateForFirstBidFormFocus(lot.status === 'available' || !lot.status);
-    setSessionLoading(true);
-    const loadSession = source === 'self_sale'
-      ? auctionApi.getOrStartSelfSaleSession(lot.selfSaleUnitId ?? lot.lot_id)
-      : auctionApi.getOrStartSession(lot.lot_id);
-    loadSession
+    const sessionKey = getAuctionSessionCacheKey(lot, source);
+    const myGen = ++selectLotGenRef.current;
+    selectedSessionKeyRef.current = sessionKey;
+    const applyLoadedSession = (session: AuctionSessionDTO) => {
+      if (selectedSessionKeyRef.current !== sessionKey || selectLotGenRef.current !== myGen) return;
+      const info = lotSummaryToLotInfo(session.lot);
+      // Keep seller/vehicle/commodity from list lot if session.lot has empty (backend may omit in some paths)
+      setSelectedLot({
+        ...info,
+        selfSaleUnitId: source === 'self_sale' ? lot.selfSaleUnitId ?? null : null,
+        status: source === 'self_sale' ? 'self_sale' : info.status,
+        seller_name: info.seller_name || lot.seller_name || '',
+        seller_mark: info.seller_mark || lot.seller_mark || '',
+        vehicle_mark: info.vehicle_mark || lot.vehicle_mark,
+        vehicle_number: info.vehicle_number || lot.vehicle_number || '',
+        vehicle_total_qty: info.vehicle_total_qty ?? lot.vehicle_total_qty,
+        seller_total_qty: info.seller_total_qty ?? lot.seller_total_qty,
+        commodity_name: info.commodity_name || lot.commodity_name || '',
+      });
+      const mapped = mapOrderedSessionEntries(session.entries ?? []);
+      setEntries(mapped);
+      const presetUi = derivePresetUiFromSessionEntries(mapped);
+      setShowPresetMargin(presetUi.showPresetMargin);
+      setPreset(presetUi.preset);
+      setPresetType(presetUi.presetType);
+      setSelfSaleContext(session.self_sale_context ?? null);
+      rememberAuctionSession(lot, source, session);
+      void loadTemporaryBuyerMarks();
+      prefetchAdjacentLotSessions(lot, source);
+    };
+
+    const cached = getCachedAuctionSession(lot, source);
+    if (cached) {
+      applyLoadedSession(cached);
+      setSessionLoading(false);
+    } else {
+      setSessionLoading(true);
+    }
+
+    fetchAuctionSessionForLot(lot, source, { force: Boolean(cached), reason: cached ? 'refresh-after-cache' : 'select' })
       .then((session: AuctionSessionDTO) => {
-        const info = lotSummaryToLotInfo(session.lot);
-        // Keep seller/vehicle/commodity from list lot if session.lot has empty (backend may omit in some paths)
-        setSelectedLot({
-          ...info,
-          selfSaleUnitId: source === 'self_sale' ? lot.selfSaleUnitId ?? null : null,
-          status: source === 'self_sale' ? 'self_sale' : info.status,
-          seller_name: info.seller_name || lot.seller_name || '',
-          seller_mark: info.seller_mark || lot.seller_mark || '',
-          vehicle_mark: info.vehicle_mark || lot.vehicle_mark,
-          vehicle_number: info.vehicle_number || lot.vehicle_number || '',
-          vehicle_total_qty: info.vehicle_total_qty ?? lot.vehicle_total_qty,
-          seller_total_qty: info.seller_total_qty ?? lot.seller_total_qty,
-          commodity_name: info.commodity_name || lot.commodity_name || '',
-        });
-        setEntries(mapOrderedSessionEntries(session.entries));
-        setSelfSaleContext(session.self_sale_context ?? null);
-        void loadTemporaryBuyerMarks();
+        applyLoadedSession(session);
       })
-      .catch(() => toast.error('Failed to load session'))
-      .finally(() => setSessionLoading(false));
-  }, [loadTemporaryBuyerMarks, statusFilter]);
+      .catch(() => {
+        if (selectedSessionKeyRef.current === sessionKey && selectLotGenRef.current === myGen) {
+          toast.error('Failed to load session');
+        }
+      })
+      .finally(() => {
+        if (selectedSessionKeyRef.current === sessionKey && selectLotGenRef.current === myGen) {
+          setSessionLoading(false);
+        }
+      });
+  }, [
+    loadTemporaryBuyerMarks,
+    statusFilter,
+    resetAuctionPresetUi,
+    getCachedAuctionSession,
+    fetchAuctionSessionForLot,
+    rememberAuctionSession,
+    prefetchAdjacentLotSessions,
+  ]);
 
   const goBackToSelector = () => {
     // Don't clear entries — they're auto-saved
@@ -2743,6 +4580,10 @@ const AuctionsPage = () => {
     loadLots();
     loadSelfSaleLots();
   };
+
+  if (!canView) {
+    return <ForbiddenPage moduleName="Auctions" />;
+  }
 
   // ═══ AUCTION PRINT PREVIEW ═══
   if (showPrint && completedAuction) {
@@ -2800,7 +4641,7 @@ const AuctionsPage = () => {
               <p className="font-bold text-foreground mb-1">BIDS ({completedAuction.entries.length})</p>
               {completedAuction.entries.map((entry, idx) => (
                 <div key={`${entry.bidNumber}-${idx}`} className="flex justify-between text-[10px]">
-                  <span className="text-foreground">#{entry.bidNumber} {entry.buyerMark} · {entry.quantity} @ ₹{entry.rate}</span>
+                  <span className="text-foreground">#{entry.bidNumber} {entry.buyerMark} · {entry.quantity} @ ₹{displayAuctionTableRate(entry)}</span>
                   <span className="font-bold text-foreground">₹{entry.amount.toLocaleString()}</span>
                 </div>
               ))}
@@ -2829,7 +4670,8 @@ const AuctionsPage = () => {
                   completedAt: completedAuction.completedAt,
                   entries: completedAuction.entries,
                 }), { mode: "system" });
-                ok ? toast.success('Auction details sent to printer!') : toast.error('Printer not connected.');
+                if (ok) toast.success('Auction details sent to printer!');
+                else toast.error('Printer not connected.');
               }}
               className="flex-1 h-12 rounded-xl bg-gradient-to-r from-blue-500 to-violet-500 text-white font-bold shadow-lg"
             >
@@ -2842,6 +4684,7 @@ const AuctionsPage = () => {
                 setShowLotSelector(true);
                 setSelectedLot(null);
                 setEntries([]);
+                resetAuctionPresetUi();
                 loadLots();
               }}
               variant="outline"
@@ -2917,7 +4760,7 @@ const AuctionsPage = () => {
                 <h2 className="text-lg font-bold text-foreground flex items-center gap-2">
                   <Gavel className="w-5 h-5 text-blue-500" /> Sales Pad — Lot Selection
                 </h2>
-                <p className="text-sm text-muted-foreground">{selectorLots.length} lots available · Select a lot to begin auction</p>
+                <p className="text-sm text-muted-foreground">{selectorLotsCountLabel} lots available · Select a lot to begin auction</p>
               </div>
               <div className="flex gap-3">
                 <div className="relative w-56">
@@ -2943,7 +4786,7 @@ const AuctionsPage = () => {
             <div className="grid grid-cols-4 gap-4">
               <div className="glass-card rounded-2xl p-4 border-l-4 border-l-blue-500">
                 <p className="text-[10px] text-muted-foreground uppercase font-semibold">Total Lots</p>
-                <p className="text-2xl font-black text-foreground">{selectorLots.length}</p>
+                <p className="text-2xl font-black text-foreground tabular-nums">{selectorLotsCountLabel}</p>
               </div>
               <div className="glass-card rounded-2xl p-4 border-l-4 border-l-emerald-500">
                 <p className="text-[10px] text-muted-foreground uppercase font-semibold">Total Bags</p>
@@ -2969,18 +4812,30 @@ const AuctionsPage = () => {
                 statusFilter === 'all'
                   ? 'bg-foreground text-background shadow-md'
                   : 'bg-muted/40 text-muted-foreground')}>
-              All ({availableLots.length})
+              All ({regularLotsCountLabel})
             </button>
-            {(Object.entries(STATUS_CONFIG) as [LotStatus, typeof STATUS_CONFIG['available']][]).map(([key, cfg]) => (
+            {(Object.entries(STATUS_CONFIG) as [LotStatus, typeof STATUS_CONFIG['available']][]).map(([key, cfg]) => {
+              const countLabel =
+                key === 'self_sale'
+                  ? selfSaleLotsLoadComplete
+                    ? String(statusCounts[key])
+                    : selfSaleLotsTotal != null
+                      ? `${selfSaleLots.length} / ${selfSaleLotsTotal}`
+                      : '—'
+                  : regularLotsLoadComplete
+                    ? String(statusCounts[key])
+                    : '—';
+              return (
               <button key={key} onClick={() => setStatusFilter(key)}
                 className={cn("flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap transition-all",
                   statusFilter === key
                     ? `${cfg.bg} ${cfg.text} shadow-md ring-1 ring-current/20`
                     : 'bg-muted/40 text-muted-foreground')}>
                 <span className={cn("w-2 h-2 rounded-full", cfg.dot)} />
-                {cfg.label} ({statusCounts[key]})
+                {cfg.label} ({countLabel})
               </button>
-            ))}
+            );
+            })}
           </div>
         </div>
 
@@ -3011,6 +4866,10 @@ const AuctionsPage = () => {
           {lotsLoading ? (
             <div className="glass-card rounded-2xl p-8 text-center">
               <p className="text-sm text-muted-foreground font-medium">Loading lots…</p>
+            </div>
+          ) : statusFilter === 'self_sale' && !selfSaleLotsLoadComplete && selfSaleLots.length === 0 ? (
+            <div className="glass-card rounded-2xl p-8 text-center">
+              <p className="text-sm text-muted-foreground font-medium">Loading self-sale lots…</p>
             </div>
           ) : selectorLots.length === 0 ? (
             <div className="glass-card rounded-2xl p-8 text-center">
@@ -3138,9 +4997,28 @@ const AuctionsPage = () => {
               });
             })()
           ) : (
-            filteredLots.map(lot => (
-              <LotRow key={getLotRenderKey(lot)} lot={lot} onSelect={selectLot} statusFilter={statusFilter} />
-            ))
+            <>
+              <div className="relative w-full" style={{ height: lotRowVirtualizer.getTotalSize() }}>
+                {lotRowVirtualizer.getVirtualItems().map(vi => {
+                  const lot = flatLotsForVirtual[vi.index];
+                  if (!lot) return null;
+                  return (
+                    <div
+                      key={vi.key}
+                      data-index={vi.index}
+                      ref={lotRowVirtualizer.measureElement}
+                      className="absolute left-0 top-0 w-full pb-2"
+                      style={{ transform: `translateY(${vi.start}px)` }}
+                    >
+                      <LotRow lot={lot} onSelect={selectLot} statusFilter={statusFilter} />
+                    </div>
+                  );
+                })}
+              </div>
+              {(lotsFetchingMore || selfSaleFetchingMore) && (
+                <p className="py-2 text-center text-xs text-muted-foreground">Loading more lots…</p>
+              )}
+            </>
           )}
         </div>
         {isDesktop && <BottomNav />}
@@ -3150,15 +5028,25 @@ const AuctionsPage = () => {
 
   // ═══ SALES PAD (AUCTION) SCREEN ═══
   return (
-    <div className={cn(
-      "min-h-[100dvh] bg-gradient-to-b from-background via-background to-blue-50/30 dark:to-blue-950/10 lg:pb-6",
-      isDesktop ? "pb-28" : "pb-[42rem] md:pb-[48rem]"
-    )}>
+    <div
+      className={cn(
+        "bg-gradient-to-b from-background via-background to-blue-50/30 dark:to-blue-950/10 lg:pb-6",
+        isDesktop
+          ? "min-h-[100dvh] pb-28"
+          : "box-border flex h-[100dvh] max-h-[100dvh] flex-col overflow-hidden"
+      )}
+      style={!isDesktop ? { paddingBottom: mobileDockContentReservePx } : undefined}
+    >
       {/* Mobile Header — tap empty area to collapse hero and free space for auction grid */}
       {!isDesktop && (
         mobileAuctionHeroCollapsed ? (
           <>
-            <div className="fixed inset-x-0 top-0 z-[45] flex w-full items-center gap-1.5 border-b border-white/20 bg-gradient-to-br from-blue-400 via-blue-500 to-violet-500 px-2 pt-[max(0.5rem,env(safe-area-inset-top))] pb-2 shadow-[0_6px_16px_-8px_rgba(59,130,246,0.55)]">
+            <div
+              className={cn(
+                'fixed inset-x-0 top-0 z-[45] flex w-full items-center border-b border-white/20 bg-gradient-to-br from-blue-400 via-blue-500 to-violet-500 shadow-[0_6px_16px_-8px_rgba(59,130,246,0.55)]',
+                mobileTouchHero.collapsedBarClass
+              )}
+            >
               <button
                 type="button"
                 data-auction-hero-interactive
@@ -3168,20 +5056,28 @@ const AuctionsPage = () => {
                   goBackToSelector();
                 }}
                 aria-label="Back to lot list"
-                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white/20 backdrop-blur active:bg-white/30"
+                className={cn(
+                  'flex shrink-0 items-center justify-center rounded-full bg-white/20 backdrop-blur active:bg-white/30',
+                  mobileTouchHero.collapsedBtnClass
+                )}
               >
-                <ArrowLeft className="h-4 w-4 text-white" strokeWidth={2.5} />
+                <ArrowLeft className={cn(mobileTouchHero.collapsedGlyphClass, 'text-white')} strokeWidth={2.5} />
               </button>
 
               <div
-                className="flex min-h-[2.25rem] min-w-0 flex-1 items-center overflow-x-auto overscroll-x-contain py-0.5 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+                className={cn(
+                  'flex min-w-0 flex-1 items-center overflow-x-auto overscroll-x-contain py-0.5 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden',
+                  mobileTouchHero.collapsedSummaryMinH
+                )}
                 role="region"
                 aria-label="Lot summary"
               >
                 {selectedLot ? (
                   <p
                     className="whitespace-nowrap pr-1 text-left font-semibold leading-snug tracking-tight text-white"
-                    style={{ fontSize: `${Math.round(12 * touchLayout.textScale)}px` }}
+                    style={{
+                      fontSize: `${Math.round(mobileTouchHero.collapsedSummaryBasePx * touchLayout.textScale)}px`,
+                    }}
                   >
                     {(isSelfSaleReauction ? (trader?.business_name || 'Trader') : selectedLot.seller_name) || '—'}
                     <span className="mx-1 text-white/45 md:mx-1.5">|</span>
@@ -3192,7 +5088,14 @@ const AuctionsPage = () => {
                     <span className="tabular-nums">{totalSold}/{remaining}</span>
                   </p>
                 ) : (
-                  <span className="truncate text-sm font-bold text-white">Sales Pad</span>
+                  <span
+                    className="truncate font-bold text-white"
+                    style={{
+                      fontSize: `${Math.round(mobileTouchHero.collapsedSummaryBasePx * touchLayout.textScale * 1.05)}px`,
+                    }}
+                  >
+                    Sales Pad
+                  </span>
                 )}
               </div>
 
@@ -3205,9 +5108,12 @@ const AuctionsPage = () => {
                   setTouchLayoutSheetOpen(true);
                 }}
                 aria-label="Sales Pad layout settings"
-                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white/20 backdrop-blur active:bg-white/30"
+                className={cn(
+                  'flex shrink-0 items-center justify-center rounded-full bg-white/20 backdrop-blur active:bg-white/30',
+                  mobileTouchHero.collapsedBtnClass
+                )}
               >
-                <Settings2 className="h-4 w-4 text-white" strokeWidth={2.5} />
+                <Settings2 className={cn(mobileTouchHero.collapsedGlyphClass, 'text-white')} strokeWidth={2.5} />
               </button>
 
               <button
@@ -3216,11 +5122,11 @@ const AuctionsPage = () => {
                   hapticSelection();
                   setMobileAuctionHeroCollapsed(false);
                 }}
-                className="flex h-9 shrink-0 items-center gap-0.5 self-center rounded-full bg-white/20 px-2 text-[9px] font-semibold uppercase tracking-wide text-white active:bg-white/30 sm:px-2.5 sm:text-[10px]"
+                className={cn(mobileTouchHero.collapsedExpandClass, 'active:bg-white/30')}
                 aria-expanded={false}
                 aria-label="Expand Sales Pad header"
               >
-                <ChevronDown className="h-4 w-4 shrink-0 sm:h-5 sm:w-5" strokeWidth={2.5} />
+                <ChevronDown className={cn(mobileTouchHero.collapsedExpandChevronClass, 'shrink-0 text-white')} strokeWidth={2.5} />
                 <span>Expand</span>
               </button>
             </div>
@@ -3233,7 +5139,6 @@ const AuctionsPage = () => {
           </>
         ) : (
           <div
-            ref={expandedHeroMeasureRef}
             className={cn(
               'sticky top-0 z-[38] cursor-pointer shrink-0 bg-gradient-to-br from-blue-400 via-blue-500 to-violet-500 relative overflow-hidden shadow-[0_8px_24px_-12px_rgba(59,130,246,0.35)]',
               mobileTouchHero.expandedClass
@@ -3373,6 +5278,12 @@ const AuctionsPage = () => {
         )
       )}
 
+      <div
+        className={cn(
+          !isDesktop && 'flex min-h-0 flex-1 flex-col overflow-hidden min-w-0',
+          isDesktop && 'contents'
+        )}
+      >
       {/* Desktop Toolbar */}
       {isDesktop && (
         <div className="px-8 py-5">
@@ -3461,7 +5372,7 @@ const AuctionsPage = () => {
                   <div key={`${entry.bidNumber}-${entry.buyerMark}`} className="grid grid-cols-[1.2fr_1fr_0.8fr_0.8fr] gap-2 px-3 py-2 border-t border-border/30 text-sm">
                     <span className="truncate text-foreground">{entry.buyerName || 'Buyer'}</span>
                     <span className="truncate text-muted-foreground">{entry.buyerMark}</span>
-                    <span className="font-medium text-foreground">₹{entry.rate}</span>
+                    <span className="font-medium text-foreground">₹{displayAuctionTableRate(entry)}</span>
                     <span className="font-medium text-foreground">{entry.quantity}</span>
                   </div>
                 ))
@@ -3472,50 +5383,21 @@ const AuctionsPage = () => {
       )}
 
       {/* ═══ LOT LIST OVERLAY ═══ */}
-      <AnimatePresence>
-        {showLotList && (
-          <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }}
-            className="px-4 mb-3 overflow-hidden">
-            <div className="glass-card rounded-2xl p-3 max-h-60 overflow-y-auto">
-              <div className="flex items-center justify-between mb-2">
-                <p className="text-xs font-semibold text-muted-foreground uppercase">Quick Lot Navigation</p>
-                <div className="relative w-40">
-                  <Hash className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-muted-foreground" />
-                  <input placeholder="Lot # or AB-200/SA-122/SA1/22" value={lotNumberSearch} onChange={e => setLotNumberSearch(e.target.value)}
-                    className="w-full h-7 pl-7 pr-2 rounded-lg bg-muted/50 text-foreground text-xs border border-border focus:outline-none focus:border-primary/50" />
-                </div>
-              </div>
-              <div className="space-y-1">
-                {(lotNumberSearch
-                  ? navigationLots.filter(l =>
-                    l.lot_name.toLowerCase().includes(lotNumberSearch.toLowerCase()) ||
-                    l.lot_id.toLowerCase().includes(lotNumberSearch.toLowerCase()) ||
-                    formatLotDisplayName(l).toLowerCase().includes(lotNumberSearch.toLowerCase())
-                  )
-                  : navigationLots
-                ).map(lot => {
-                  const status = getRowLotStatus(lot, statusFilter);
-                  const cfg = STATUS_CONFIG[status];
-                  const isActive = selectedLotSource === 'self_sale'
-                    ? selectedLot?.selfSaleUnitId === lot.selfSaleUnitId
-                    : selectedLot?.lot_id === lot.lot_id;
-                  return (
-                    <button key={getLotRenderKey(lot)} onClick={() => selectLot(lot)}
-                      className={cn("w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-left text-xs transition-all",
-                        isActive ? 'bg-primary/15 ring-1 ring-primary/30' : 'hover:bg-muted/50')}>
-                      <span className={cn("w-2 h-2 rounded-full flex-shrink-0", cfg.dot)} />
-                      <span className={cn("font-semibold truncate flex-1", isActive ? 'text-primary' : 'text-foreground')}>{formatLotDisplayName(lot)}</span>
-                      <span className={cn("px-1.5 py-0.5 rounded text-[9px] font-bold", cfg.bg, cfg.text)}>{cfg.label}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      <QuickLotNavigationOverlay
+        show={showLotList}
+        quickLotNavigation={quickLotNavigation}
+        lotNumberSearch={lotNumberSearch}
+        selectedLot={selectedLot}
+        selectedLotSource={selectedLotSource}
+        statusFilter={statusFilter}
+        onLotNumberSearchChange={setLotNumberSearch}
+        onSelectLot={selectLot}
+      />
 
-      <div className={cn('flex flex-col h-auto min-h-0', isDesktop ? 'mt-4 gap-3 px-4' : 'mt-3 gap-2 px-0')}>
+      <div className={cn(
+        'flex flex-col min-h-0',
+        isDesktop ? 'mt-4 gap-3 px-4 h-auto' : 'mt-3 gap-2 px-0 flex-1 overflow-hidden'
+      )}>
         {/* REQ-AUC-003: Preset margin (preset labels A/B/C; green = profit, red = negative). Toggle to show/hide. */}
         {isDesktop && canUsePreset && (
           <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="glass-card rounded-2xl p-3">
@@ -3607,121 +5489,30 @@ const AuctionsPage = () => {
                       }}
                       onFocus={() => setActiveNumpadField('mark')}
                       placeholder="Or type mark / name to search…"
-                      className="h-11 rounded-xl text-sm sm:text-base font-medium bg-muted/20 border-violet-400/20"
+                      className="h-11 rounded-xl text-sm sm:text-base font-medium bg-muted/20 border-violet-400/20 focus-visible:ring-0 focus-visible:ring-offset-0"
                     />
                   </div>
                 ) : null}
-                {/* Two rows always visible. Scroll: touch (smooth left/right), mouse-drag, arrow keys. */}
+                {/* Scroll: touch (smooth left/right), mouse-drag, arrow keys. Registered contact row off — set hideRegisteredContactStrip false to restore. */}
                 {isDesktop && (
-                  <div className="space-y-3 min-w-0">
-                    {/* Row 1: Registered buyers — contacts — green. */}
-                    <div className="min-w-0 w-full max-w-full space-y-1.5">
-                      <div
-                        ref={contactScrollRef}
-                        role="region"
-                        aria-label="Registered buyers"
-                        tabIndex={0}
-                        {...makeScrollHandlers(contactScrollRef, didDragContactRef)}
-                        className="w-full max-w-full min-w-0 overflow-x-auto overflow-y-hidden flex flex-nowrap gap-2.5 py-1.5 -mx-1 px-0.5 scroll-smooth touch-[pan-x_pan-y] lg:touch-auto select-none cursor-grab active:cursor-grabbing overscroll-x-contain"
-                        style={{
-                          scrollbarWidth: 'thin',
-                          WebkitOverflowScrolling: 'touch',
-                          overscrollBehaviorX: 'contain',
-                        }}
-                      >
-                        {filteredContacts.length > 0 ? (
-                          filteredContacts.slice(0, 50).map((b) => (
-                            <button
-                              key={b.contact_id}
-                              type="button"
-                              disabled={!!editingBidId}
-                              onClick={(e) => {
-                                if (didDragContactRef.current) {
-                                  e.preventDefault();
-                                  return;
-                                }
-                                hapticSelection();
-                                hideNativeKeyboard();
-                                setSelectedBuyer(b);
-                                setContactLastUsedMs((p) => ({ ...p, [String(b.contact_id)]: Date.now() }));
-                                lastScribbleSegmentRef.current = '';
-                                setScribbleMark((b.mark || b.name.charAt(0) || '').toString());
-                                setScribblePadResetTrigger((t) => t + 1);
-                              }}
-                              className={cn(
-                                'flex-shrink-0 px-3 py-2.5 rounded-xl text-left transition-all border border-l-4 border-l-emerald-500 flex items-center gap-1.5 min-h-[44px]',
-                                selectedBuyer?.contact_id === b.contact_id
-                                  ? 'bg-primary text-primary-foreground border-primary shadow-md border-l-primary'
-                                  : 'bg-muted/40 border-border/50 hover:bg-muted/60'
-                              )}
-                            >
-                              <span className="text-sm sm:text-base font-semibold truncate max-w-[100px] sm:max-w-[120px]">{b.name}</span>
-                              {b.mark && <span className="text-xs opacity-90 flex-shrink-0">({b.mark})</span>}
-                            </button>
-                          ))
-                        ) : (
-                          <div className="flex-shrink-0 px-4 py-2.5 rounded-xl border border-l-4 border-l-emerald-500 border-dashed bg-emerald-500/5 text-emerald-700 dark:text-emerald-400 text-sm font-medium">
-                            No matching contact
-                          </div>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* Row 2: Temporary buyers (scribble / quick-add), today — violet accent. */}
-                    <div className="min-w-0 w-full max-w-full space-y-1.5">
-                      <div
-                        ref={markScrollRef}
-                        role="region"
-                        aria-label="Temporary buyers"
-                        tabIndex={0}
-                        {...makeScrollHandlers(markScrollRef, didDragMarkRef)}
-                        className="w-full max-w-full min-w-0 overflow-x-auto overflow-y-hidden flex flex-nowrap gap-2.5 py-1.5 -mx-1 px-0.5 scroll-smooth touch-[pan-x_pan-y] lg:touch-auto select-none cursor-grab active:cursor-grabbing overscroll-x-contain"
-                        style={{
-                          scrollbarWidth: 'thin',
-                          WebkitOverflowScrolling: 'touch',
-                          overscrollBehaviorX: 'contain',
-                        }}
-                      >
-                        {filteredTemporaryMarks.length > 0 ? (
-                          filteredTemporaryMarks.slice(0, 50).map((mark) => {
-                            const isSelected = !selectedBuyer && scribbleMark === mark;
-                            return (
-                              <button
-                                key={mark}
-                                type="button"
-                                disabled={!!editingBidId}
-                                onClick={(e) => {
-                                  if (didDragMarkRef.current) {
-                                    e.preventDefault();
-                                    return;
-                                  }
-                                  hapticSelection();
-                                  hideNativeKeyboard();
-                                  setSelectedBuyer(null);
-                                  setTempMarkLastUsedMs((p) => ({ ...p, [mark]: Date.now() }));
-                                  lastScribbleSegmentRef.current = '';
-                                  setScribbleMark(mark);
-                                  setScribblePadResetTrigger((t) => t + 1);
-                                }}
-                                className={cn(
-                                  'flex-shrink-0 px-3 py-2.5 rounded-xl text-left transition-all border border-l-4 border-l-violet-500 flex items-center min-h-[44px]',
-                                  isSelected
-                                    ? 'bg-primary text-primary-foreground border-primary shadow-md border-l-primary'
-                                    : 'bg-muted/40 border-border/50 hover:bg-muted/60'
-                                )}
-                              >
-                                <span className="text-sm sm:text-base font-semibold truncate max-w-[100px]">{mark}</span>
-                              </button>
-                            );
-                          })
-                        ) : (
-                          <div className="flex-shrink-0 px-4 py-2.5 rounded-xl border border-l-4 border-l-violet-400 border-dashed bg-violet-500/5 text-violet-700 dark:text-violet-300 text-sm font-medium">
-                            No temporary marks yet today
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </div>
+                  <AuctionBuyerStrips
+                    variant="desktop"
+                    hideRegisteredContactStrip
+                    contacts={filteredContacts}
+                    temporaryMarks={filteredTemporaryMarks}
+                    selectedBuyer={selectedBuyer}
+                    scribbleMark={scribbleMark}
+                    editingBidId={editingBidId}
+                    buyerSearchLoading={buyerSearchLoading}
+                    contactScrollRef={contactScrollRef}
+                    markScrollRef={markScrollRef}
+                    contactScrollHandlers={contactStripScrollHandlers}
+                    markScrollHandlers={markStripScrollHandlers}
+                    didDragContactRef={didDragContactRef}
+                    didDragMarkRef={didDragMarkRef}
+                    onBuyerSelect={selectAuctionBuyer}
+                    onTemporaryMarkSelect={selectTemporaryBuyerMark}
+                  />
                 )}
                 {(scribbleMark || selectedBuyer) && (
                   <div className="flex items-center gap-2 flex-wrap">
@@ -3768,105 +5559,32 @@ const AuctionsPage = () => {
                 )}
               </div>
 
-              <div className={cn("space-y-2", !isDesktop && "hidden")}>
-                <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <label className="text-[9px] font-semibold text-muted-foreground uppercase mb-0.5 block">Rate (₹)</label>
-                    <Input
-                      ref={rateInputRef}
-                      type="number"
-                      value={rate}
-                      onChange={(e) => {
-                        const v = e.target.value;
-                        setRate(v);
-                        if (v.trim() !== '') {
-                          userClearedRateRef.current = false;
-                        }
-                        if (editingBidId) setEditBidDraft((d) => (d ? { ...d, rate: v } : d));
-                      }}
-                      onFocus={(e) => {
-                        if (preferRateForFirstBidFormFocus) setPreferRateForFirstBidFormFocus(false);
-                        setActiveNumpadField('rate');
-                        if (isTouchLayout && !mobileKeyboardEnabled) {
-                          e.currentTarget.blur();
-                          hideNativeKeyboard();
-                        }
-                      }}
-                      onBlur={() => { if (isTouchLayout) setMobileKeyboardEnabled(false); }}
-                      readOnly={isTouchLayout && !mobileKeyboardEnabled}
-                      inputMode={isTouchLayout && !mobileKeyboardEnabled ? 'none' : 'numeric'}
-                      placeholder="0"
-                      className={cn(
-                        "h-11 rounded-xl text-center font-bold text-lg bg-muted/20 border-primary/20",
-                        activeNumpadField === 'rate' && "ring-2 ring-primary border-primary/50"
-                      )} />
-                  </div>
-                  <div>
-                    <label className="text-[9px] font-semibold text-muted-foreground uppercase mb-0.5 block">Qty (Bags)</label>
-                    <Input
-                      ref={qtyInputRef}
-                      type="number"
-                      value={qty}
-                      onChange={(e) => {
-                        const v = e.target.value;
-                        setQty(v);
-                        if (editingBidId) setEditBidDraft((d) => (d ? { ...d, qty: v } : d));
-                      }}
-                      onFocus={(e) => {
-                        setActiveNumpadField('qty');
-                        if (isTouchLayout && !mobileKeyboardEnabled) {
-                          e.currentTarget.blur();
-                          hideNativeKeyboard();
-                        }
-                      }}
-                      onBlur={() => { if (isTouchLayout) setMobileKeyboardEnabled(false); }}
-                      readOnly={isTouchLayout && !mobileKeyboardEnabled}
-                      inputMode={isTouchLayout && !mobileKeyboardEnabled ? 'none' : 'numeric'}
-                      placeholder="0"
-                      className={cn(
-                        "h-11 rounded-xl text-center font-bold text-lg bg-muted/20 border-primary/20",
-                        activeNumpadField === 'qty' && "ring-2 ring-primary border-primary/50"
-                      )} />
-                  </div>
-                </div>
-                {isDesktop && (
-                  <div className="flex gap-2">
-                    {editingBidId && editBidDraft ? (
-                      <>
-                        <Button
-                          onClick={() => { if (editingEntry) void saveEditBid(editingEntry); }}
-                          disabled={!editingEntry || !rate || !qty || parseInt(qty) <= 0 || parseInt(rate) <= 0}
-                          className="flex-1 h-11 rounded-xl bg-gradient-to-r from-violet-500 to-fuchsia-500 text-white font-semibold shadow-md shadow-violet-500/20"
-                        >
-                          <Pencil className="w-4 h-4 mr-1" /> Update Bid
-                        </Button>
-                        <Button
-                          onClick={cancelEditBid}
-                          variant="outline"
-                          className="h-11 rounded-xl px-4 border-border/50 text-foreground hover:bg-muted/40"
-                        >
-                          Cancel
-                        </Button>
-                      </>
-                    ) : (
-                      <>
-                        <Button
-                          onClick={handleUnifiedAdd}
-                          disabled={(!scribbleMark.trim() && !selectedBuyer) || !rate || !qty || parseInt(qty) <= 0 || parseInt(rate) <= 0}
-                          className="flex-1 h-11 rounded-xl bg-gradient-to-r from-violet-500 to-fuchsia-500 text-white font-semibold shadow-md shadow-violet-500/20"
-                        >
-                          <Plus className="w-4 h-4 mr-1" /> Add Bid
-                        </Button>
-                        {!isSelfSaleReauction && (
-                          <Button onClick={handleSelfSale} disabled={remaining <= 0}
-                            variant="outline" className="h-11 rounded-xl px-4 border-amber-400/50 text-amber-600 dark:text-amber-400 hover:bg-amber-500/10">
-                            Self Sale
-                          </Button>
-                        )}
-                      </>
-                    )}
-                  </div>
-                )}
+              <div className={cn(!isDesktop && "hidden")}>
+                <AuctionDesktopBidControls
+                  rate={rate}
+                  qty={qty}
+                  editingBidId={editingBidId}
+                  editingEntry={editingEntry}
+                  editBidDraftActive={!!editBidDraft}
+                  activeNumpadField={activeNumpadField}
+                  useVirtualKeyboardGuard={isTouchLayout}
+                  mobileKeyboardEnabled={mobileKeyboardEnabled}
+                  rateInputRef={rateInputRef}
+                  qtyInputRef={qtyInputRef}
+                  addDisabled={(!scribbleMark.trim() && !selectedBuyer) || !rate || !qty || parseInt(qty) <= 0 || parseInt(rate) <= 0}
+                  updateDisabled={!rate || !qty || parseInt(qty) <= 0 || parseInt(rate) <= 0}
+                  showSelfSaleButton={!isSelfSaleReauction}
+                  selfSaleDisabled={remaining <= 0}
+                  onRateChange={handleRateInputChange}
+                  onQtyChange={handleQtyInputChange}
+                  onRateFocus={handleRateInputFocus}
+                  onQtyFocus={handleQtyInputFocus}
+                  onNumericBlur={handleNumericInputBlur}
+                  onAddBid={handleUnifiedAdd}
+                  onUpdateBid={() => { if (editingEntry) void saveEditBid(editingEntry); }}
+                  onCancelEdit={cancelEditBid}
+                  onSelfSale={handleSelfSale}
+                />
               </div>
             </div>
           </motion.div>
@@ -3875,323 +5593,27 @@ const AuctionsPage = () => {
         {/* Auction Grid — entries list */}
         <div
           ref={auctionGridSectionRef}
-          className={cn(!isDesktop && 'w-full min-w-0')}
-          style={
-            !isDesktop
-              ? {
-                  position: 'sticky',
-                  top: mobileAuctionHeroCollapsed
-                    ? auctionCollapsedBarHeight
-                    : `${expandedHeroHeightPx}px`,
-                  zIndex: mobileAuctionHeroCollapsed ? 40 : 36,
-                }
-              : undefined
-          }
+          className={cn(
+            !isDesktop && 'flex min-h-0 min-w-0 w-full flex-1 flex-col overflow-hidden'
+          )}
+          style={auctionGridMobileSectionStyle}
         >
-          {/* Mobile: no y-transform — transform ancestors break sticky thead inside scroll panel */}
-          <motion.div
-            initial={isDesktop ? { opacity: 0, y: 10 } : { opacity: 0 }}
-            animate={isDesktop ? { opacity: 1, y: 0 } : { opacity: 1 }}
-            transition={{ delay: isDesktop ? 0.2 : 0.1 }}
-            className="w-full min-w-0"
-          >
-          {isDesktop && (
-            <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-              Auction Grid · {entries.length} entries
-            </p>
-          )}
-
-          {entries.length === 0 ? (
-            <div className={cn('glass-card rounded-2xl text-center', isDesktop ? 'p-8' : 'p-4')}>
-              <Gavel className="w-10 h-10 text-muted-foreground/30 mx-auto mb-3" />
-              <p className={cn('text-muted-foreground', isDesktop ? 'text-sm' : 'text-base')}>No bids yet. Start the auction!</p>
-            </div>
-          ) : (
-            <div
-              className={cn(
-                'glass-card rounded-2xl h-auto min-h-0',
-                /* Mobile: overflow-visible so sticky thead inside inner scrollport is not trapped by glass-card overflow:hidden */
-                isDesktop ? 'overflow-hidden' : '!py-0 !px-1 rounded-xl sm:rounded-2xl !overflow-visible'
-              )}
-            >
-              <AuctionsGridScrollPanel
-                scrollPageIntoViewOnAutoScroll={isDesktop}
-                className={cn(
-                  isDesktop
-                    ? entries.length > 5
-                      ? 'max-h-[min(60vh,28rem)] lg:max-h-[min(55vh,26rem)]'
-                      : 'max-h-[min(65vh,32rem)] lg:max-h-[min(60vh,30rem)]'
-                    : cn('scroll-pt-[3.25rem]', '!pb-[max(14rem,36svh)]')
-                )}
-                style={!isDesktop && auctionGridMobileMaxHeight ? { maxHeight: auctionGridMobileMaxHeight } : undefined}
-                contentLayoutKey={entries.length}
-                autoScrollToBottomKey={autoScrollKey}
-                gridSectionRef={auctionGridSectionRef}
-              >
-                <table
-                  className={cn(
-                    'w-[42rem] md:w-full table-fixed border-collapse',
-                    isDesktop ? 'text-sm sm:text-base' : 'text-base sm:text-lg',
-                    showPresetMargin ? (isDesktop ? 'min-w-[480px]' : '') : isDesktop ? 'min-w-[420px]' : ''
-                  )}
-                  style={
-                    !isDesktop
-                      ? {
-                          minWidth: Math.max(
-                            touchLayout.gridMinWidthPx,
-                            showPresetMargin ? 440 : 400
-                          ),
-                          fontSize: `${0.875 * touchLayout.textScale}rem`,
-                        }
-                      : showPresetMargin
-                        ? { minWidth: 480 }
-                        : { minWidth: 420 }
-                  }
-                >
-                  <thead
-                    className={cn(
-                      'sticky top-0',
-                      isDesktop ? 'z-[3]' : 'z-[42]'
-                    )}
-                  >
-                    <tr className="bg-[linear-gradient(90deg,#4B7CF3_0%,#5B8CFF_45%,#7B61FF_100%)] border-b border-white/25 shadow-[0_8px_20px_-12px_rgba(91,140,255,0.85)] transition-shadow hover:shadow-[0_14px_30px_-12px_rgba(123,97,255,0.9)]">
-                      <th
-                        className={cn(
-                          'border-r border-white/25 text-white uppercase tracking-wider last:border-r-0',
-                          isDesktop
-                            ? 'px-3 py-[14px] text-left text-xs font-semibold'
-                            : 'px-1 py-1.5 text-left text-[1.07em] font-bold'
-                        )}
-                      >
-                        Mark / Buyer
-                      </th>
-                      <th
-                        className={cn(
-                          'border-r border-white/25 text-white uppercase tracking-wider last:border-r-0',
-                          isDesktop
-                            ? 'px-3 py-[14px] text-center text-xs font-semibold'
-                            : 'px-1 py-1.5 text-center text-[1.07em] font-bold'
-                        )}
-                      >
-                        Rate
-                      </th>
-                      {showPresetMargin && (
-                        <th
-                          className={cn(
-                            'border-r border-white/25 text-white uppercase tracking-wider last:border-r-0',
-                            isDesktop
-                              ? 'px-3 py-[14px] text-center text-xs font-semibold'
-                              : 'px-1 py-1.5 text-center text-[1.07em] font-bold'
-                          )}
-                        >
-                          Preset
-                        </th>
-                      )}
-                      <th
-                        className={cn(
-                          'border-r border-white/25 text-white uppercase tracking-wider last:border-r-0',
-                          isDesktop
-                            ? 'px-3 py-[14px] text-center text-xs font-semibold'
-                            : 'px-1 py-1.5 text-center text-[1.07em] font-bold'
-                        )}
-                      >
-                        Qty
-                      </th>
-                      <th
-                        className={cn(
-                          'text-white uppercase tracking-wider last:border-r-0',
-                          isDesktop
-                            ? 'px-3 py-[14px] text-right text-xs font-semibold'
-                            : 'px-1 py-1.5 text-center text-[1.07em] font-bold'
-                        )}
-                      >
-                        Action
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {entries.map((entry, i) => (
-                      <Fragment key={entry.id}>
-                        <motion.tr
-                          data-auction-entry-row="true"
-                          data-bid-number={entry.bidNumber}
-                          initial={{ opacity: 0, x: -15 }}
-                          animate={{ opacity: 1, x: 0 }}
-                          transition={{ delay: i * 0.05 }}
-                          onClick={() => {
-                            if (!isDesktop && can('Auctions / Sales', 'Edit') && !editingBidId) {
-                              startEditBid(entry);
-                            }
-                          }}
-                          className={cn(
-                            "border-b border-border/30 hover:bg-muted/20 transition-colors",
-                            !isDesktop && "scroll-mt-[3.25rem]",
-                            !isDesktop && can('Auctions / Sales', 'Edit') && !editingBidId && "cursor-pointer",
-                            entry.isSelfSale && "border-l-4 border-l-amber-500",
-                            entry.isScribble && "border-l-4 border-l-violet-500",
-                            editingBidId === entry.id && "bg-primary/5 ring-1 ring-inset ring-primary/35"
-                          )}
-                        >
-                          <td className={cn('px-3 py-[12px]', isDesktop ? '' : 'px-1 py-1.5')}>
-                            <div className={cn('flex items-center flex-wrap', isDesktop ? 'gap-1.5' : 'gap-1')}>
-                              <span
-                                className={cn(
-                                  'font-medium text-foreground truncate max-w-[120px]',
-                                  isDesktop ? 'text-base' : 'text-[1.15em]'
-                                )}
-                                title={entry.buyerName}
-                              >
-                                {normalizeScribbleBuyerName(entry.buyerName, entry.isScribble)}
-                              </span>
-                              {entry.isSelfSale && (
-                                <span
-                                  className={cn(
-                                    'px-1 py-0.5 rounded bg-amber-500/15 text-amber-600 dark:text-amber-400 font-bold',
-                                    isDesktop ? 'text-[8px]' : 'text-[12px]'
-                                  )}
-                                >
-                                  SELF
-                                </span>
-                              )}
-                              {editingBidId === entry.id && (
-                                <span
-                                  className={cn('px-1 py-0.5 rounded bg-primary/20 text-primary font-bold', isDesktop ? 'text-[8px]' : 'text-[12px]')}
-                                >
-                                  EDITING
-                                </span>
-                              )}
-                            </div>
-                          </td>
-                          <td
-                            className={cn(
-                              'align-middle text-center font-semibold text-foreground',
-                              isDesktop ? 'px-3 py-[12px] text-base' : 'px-1 py-1.5 text-[1.15em] font-bold'
-                            )}
-                          >
-                            <div>₹{entry.rate}</div>
-                          </td>
-                          {showPresetMargin && (
-                            <td
-                              className={cn(
-                                'align-middle text-center font-medium tabular-nums',
-                                isDesktop ? 'px-3 py-[12px] text-base' : 'px-1 py-1.5 text-[1.15em] font-bold',
-                                entry.presetApplied > 0 && 'text-success',
-                                entry.presetApplied < 0 && 'text-destructive'
-                              )}
-                            >
-                              {formatPresetMarginCell(entry.presetApplied)}
-                            </td>
-                          )}
-                          <td
-                            className={cn(
-                              'align-middle text-center text-muted-foreground',
-                              isDesktop ? 'px-3 py-[12px] text-base' : 'px-1 py-1.5 text-[1.15em] font-bold'
-                            )}
-                          >
-                            {entry.quantity}
-                          </td>
-                          <td className={cn(isDesktop ? 'px-3 py-[12px] text-right' : 'px-1 py-1.5 text-center')}>
-                            <div
-                              className={cn(
-                                'flex items-center',
-                                isDesktop ? 'justify-end gap-1.5' : 'justify-center gap-1'
-                              )}
-                              onClick={(e) => e.stopPropagation()}
-                            >
-                              <button
-                                type="button"
-                                disabled={!!editingBidId}
-                                onClick={() => setShowTokenInput(showTokenInput === entry.id ? null : entry.id)}
-                                className={cn(
-                                  'rounded-md transition-colors disabled:opacity-40',
-                                  isDesktop ? 'p-1.5' : 'p-2.5',
-                                  entry.tokenAdvance > 0 ? 'bg-success/15 text-success' : 'bg-muted/50 text-muted-foreground hover:text-foreground'
-                                )}
-                                title="Token advance"
-                              >
-                                <Banknote className={cn(isDesktop ? 'h-4 w-4' : 'h-[22px] w-[22px]')} />
-                              </button>
-                              {isDesktop && (
-                                <button
-                                  onClick={() => setPendingDeleteBid({ id: entry.id, label: `${entry.buyerName} (${entry.buyerMark})` })}
-                                  type="button"
-                                  disabled={!!editingBidId}
-                                  className={cn(
-                                    'rounded-md bg-destructive/10 text-destructive hover:bg-destructive/20 disabled:opacity-40',
-                                    'p-1.5'
-                                  )}
-                                  title="Delete bid"
-                                >
-                                  <Trash2 className="h-4 w-4" />
-                                </button>
-                              )}
-                              {isDesktop && can('Auctions / Sales', 'Edit') && (
-                                <button
-                                  type="button"
-                                  disabled={!!editingBidId}
-                                  onClick={() => startEditBid(entry)}
-                                  className="p-1.5 rounded-md bg-muted/60 text-foreground hover:bg-muted disabled:opacity-40"
-                                  title="Edit bid"
-                                >
-                                  <Pencil className={cn(isDesktop ? "w-4 h-4" : "w-3.5 h-3.5")} />
-                                </button>
-                              )}
-                            </div>
-                          </td>
-                        </motion.tr>
-                        <AnimatePresence>
-                          {showTokenInput === entry.id && !editingBidId && (
-                            <motion.tr
-                              data-auction-token-panel={entry.id}
-                              initial={{ opacity: 0 }}
-                              animate={{ opacity: 1 }}
-                              exit={{ opacity: 0 }}
-                              transition={{ duration: 0.15 }}
-                              className="border-b border-border/30 bg-muted/10"
-                            >
-                              <td colSpan={showPresetMargin ? 5 : 4} className={cn('px-3 py-[12px]', isDesktop ? '' : 'px-1 py-1.5')}>
-                                <div className={cn('flex min-w-0 items-center', isDesktop ? 'gap-2' : 'w-full gap-1.5')}>
-                                  <span
-                                    className={cn(
-                                      'shrink-0 text-muted-foreground whitespace-nowrap',
-                                      isDesktop ? 'text-[10px]' : 'text-sm'
-                                    )}
-                                  >
-                                    Token ₹
-                                  </span>
-                                  <Input
-                                    type="number"
-                                    defaultValue={entry.tokenAdvance || ""}
-                                    placeholder="0"
-                                    className={cn(
-                                      'text-center',
-                                      isDesktop
-                                        ? 'h-8 flex-1 rounded-lg text-xs'
-                                        : 'h-11 min-h-11 w-full min-w-0 flex-1 rounded-md border-2 border-input px-2 py-0 text-sm leading-tight focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-0'
-                                    )}
-                                    onBlur={e => setTokenAdvanceAmount(entry.id, parseInt(e.target.value) || 0)}
-                                    onKeyDown={e => { if (e.key === "Enter") setTokenAdvanceAmount(entry.id, parseInt((e.target as HTMLInputElement).value) || 0); }}
-                                  />
-                                  {entry.tokenAdvance > 0 && (
-                                    <span className={cn('shrink-0 text-success font-semibold', isDesktop ? 'text-[10px]' : 'text-sm')}>
-                                      ✓ ₹{entry.tokenAdvance}
-                                    </span>
-                                  )}
-                                </div>
-                              </td>
-                            </motion.tr>
-                          )}
-                        </AnimatePresence>
-                      </Fragment>
-                    ))}
-                  </tbody>
-                </table>
-                {/* Extra vertical slack so last tbody rows can scroll fully below sticky thead (not visually under gradient header). */}
-                {!isDesktop && <div className="pointer-events-none h-16 shrink-0 md:h-0" aria-hidden />}
-              </AuctionsGridScrollPanel>
-            </div>
-          )}
-          </motion.div>
+          <AuctionEntriesGrid
+            entries={entries}
+            isDesktop={isDesktop}
+            showPresetMargin={showPresetMargin}
+            touchLayout={touchLayout}
+            editingBidId={editingBidId}
+            showTokenInput={showTokenInput}
+            canEdit={canEditAuctionBids}
+            autoScrollKey={autoScrollKey}
+            gridSectionRef={auctionGridSectionRef}
+            auctionGridMobileScrollStyle={auctionGridMobileScrollStyle}
+            onStartEditBid={startEditBid}
+            onToggleTokenInput={toggleAuctionTokenInput}
+            onSetTokenAdvanceAmount={setTokenAdvanceAmount}
+            onRequestDeleteBid={requestDeleteBid}
+          />
         </div>
 
         {/* Remaining indicator (desktop only; mobile/tablet use lot header strip for bags) */}
@@ -4268,246 +5690,70 @@ const AuctionsPage = () => {
         {/* Preset margin for mobile: now in fixed dock below rate/qty. */}
       </div>
 
+      </div>
+
       {/* Mobile/Tablet Dock: compact layout, preset below rate/qty. */}
       {!isDesktop && (
         <div
-          className="fixed inset-x-0 bottom-0 z-40 border-t border-border/50 bg-background/95 backdrop-blur-xl px-1 pt-1.5 pb-[max(0.5rem,env(safe-area-inset-bottom))] sm:px-2"
+          ref={mobileDockMeasureRef}
+          className="fixed inset-x-0 bottom-0 z-50 border-t border-border/60 bg-background px-1 pt-1.5 pb-[max(0.5rem,env(safe-area-inset-bottom))] shadow-[0_-12px_32px_-16px_rgba(0,0,0,0.12)] dark:shadow-[0_-12px_32px_-16px_rgba(0,0,0,0.45)] sm:px-2"
           style={{ fontSize: `${14 * touchLayout.textScale}px` }}
         >
-          <div className="space-y-1 mb-1">
-            <div>
-              <div
-                ref={contactScrollRef}
-                role="region"
-                aria-label="Registered buyers"
-                tabIndex={0}
-                {...makeScrollHandlers(contactScrollRef, didDragContactRef)}
-                className="flex w-full gap-1.5 overflow-x-auto overflow-y-hidden px-0 py-0 scroll-smooth touch-[pan-x_pan-y] lg:touch-auto select-none cursor-grab active:cursor-grabbing overscroll-x-contain"
-                style={{ scrollbarWidth: 'thin', WebkitOverflowScrolling: 'touch', overscrollBehaviorX: 'contain' }}
-              >
-                {filteredContacts.length > 0 ? (
-                  filteredContacts.slice(0, 50).map((b) => (
-                    <button
-                      key={b.contact_id}
-                      type="button"
-                      disabled={!!editingBidId}
-                      onClick={(e) => {
-                        if (didDragContactRef.current) { e.preventDefault(); return; }
-                        hapticSelection();
-                        hideNativeKeyboard();
-                        setSelectedBuyer(b);
-                        setContactLastUsedMs((p) => ({ ...p, [String(b.contact_id)]: Date.now() }));
-                        lastScribbleSegmentRef.current = '';
-                        setScribbleMark((b.mark || b.name.charAt(0) || '').toString());
-                        setScribblePadResetTrigger((t) => t + 1);
-                      }}
-                        className={cn(
-                        'flex-shrink-0 px-3 py-1.5 rounded-md text-left transition-all border border-l-4 border-l-emerald-500 flex items-center gap-1 min-h-[40px]',
-                        selectedBuyer?.contact_id === b.contact_id
-                          ? 'bg-primary text-primary-foreground border-primary shadow-md border-l-primary'
-                          : 'bg-muted/40 border-border/50 hover:bg-muted/60'
-                      )}
-                    >
-                      <span className="text-[1.07em] font-semibold truncate max-w-[78px] sm:max-w-[90px]">{b.name}</span>
-                      {b.mark && <span className="text-[0.93em] opacity-90 flex-shrink-0">({b.mark})</span>}
-                    </button>
-                  ))
-                ) : (
-                  <div className="flex-shrink-0 px-3 py-2 rounded-md border border-l-4 border-l-emerald-500 border-dashed bg-emerald-500/5 text-emerald-700 dark:text-emerald-400 text-[1.07em] font-medium">
-                    No matching contact
-                  </div>
-                )}
-              </div>
-            </div>
-            <div>
-              <div
-                ref={markScrollRef}
-                role="region"
-                aria-label="Temporary buyers"
-                tabIndex={0}
-                {...makeScrollHandlers(markScrollRef, didDragMarkRef)}
-                className="flex w-full gap-1.5 overflow-x-auto overflow-y-hidden px-0 py-0 scroll-smooth touch-[pan-x_pan-y] lg:touch-auto select-none cursor-grab active:cursor-grabbing overscroll-x-contain"
-                style={{ scrollbarWidth: 'thin', WebkitOverflowScrolling: 'touch', overscrollBehaviorX: 'contain' }}
-              >
-                {filteredTemporaryMarks.length > 0 ? (
-                  filteredTemporaryMarks.slice(0, 50).map((mark) => {
-                    const isSelected = !selectedBuyer && scribbleMark === mark;
-                    return (
-                      <button
-                        key={mark}
-                        type="button"
-                        disabled={!!editingBidId}
-                        onClick={(e) => {
-                          if (didDragMarkRef.current) { e.preventDefault(); return; }
-                          hapticSelection();
-                          hideNativeKeyboard();
-                          setSelectedBuyer(null);
-                          setTempMarkLastUsedMs((p) => ({ ...p, [mark]: Date.now() }));
-                          lastScribbleSegmentRef.current = '';
-                          setScribbleMark(mark);
-                          setScribblePadResetTrigger((t) => t + 1);
-                        }}
-                        className={cn(
-                          'flex-shrink-0 px-3 py-1.5 rounded-md text-left transition-all border border-l-4 border-l-violet-500 flex items-center min-h-[40px]',
-                          isSelected ? 'bg-primary text-primary-foreground border-primary shadow-md border-l-primary' : 'bg-muted/40 border-border/50 hover:bg-muted/60'
-                        )}
-                      >
-                        <span className="text-[1.07em] font-semibold truncate max-w-[72px]">{mark}</span>
-                      </button>
-                    );
-                  })
-                ) : (
-                  <div className="flex-shrink-0 px-3 py-2 rounded-md border border-l-4 border-l-violet-400 border-dashed bg-violet-500/5 text-violet-700 dark:text-violet-300 text-[1.07em] font-medium">
-                    No temporary marks yet today
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-          <div className="flex gap-1.5 mb-0.5 min-w-0">
-            <div className="min-w-0 flex-1">
-              <label htmlFor="sales-pad-rate-mobile" className="text-[0.93em] font-semibold text-muted-foreground uppercase tracking-wide mb-0 block truncate text-center leading-tight">
-                Rate ₹
-              </label>
-              <Input
-                id="sales-pad-rate-mobile"
-                ref={rateInputRef}
-                type="number"
-                value={rate}
-                onChange={(e) => {
-                  const v = e.target.value;
-                  setRate(v);
-                  if (v.trim() !== '') {
-                    userClearedRateRef.current = false;
-                  }
-                  if (editingBidId) setEditBidDraft((d) => (d ? { ...d, rate: v } : d));
-                }}
-                onFocus={(e) => {
-                  if (preferRateForFirstBidFormFocus) setPreferRateForFirstBidFormFocus(false);
-                  setActiveNumpadField('rate');
-                  if (!mobileKeyboardEnabled) {
-                    e.currentTarget.blur();
-                    hideNativeKeyboard();
-                  }
-                }}
-                onBlur={() => setMobileKeyboardEnabled(false)}
-                readOnly={!mobileKeyboardEnabled}
-                inputMode={!mobileKeyboardEnabled ? 'none' : 'numeric'}
-                placeholder="0"
-                aria-label="Bid rate in rupees"
-                className={cn(
-                  'h-11 min-h-[44px] rounded-md border-2 border-primary/45 bg-muted/25 text-center text-[1.07em] font-bold min-w-0 py-1 leading-none',
-                  activeNumpadField === 'rate' && 'border-primary ring-2 ring-primary shadow-[0_0_0_2px_hsl(var(--primary))]'
-                )}
-              />
-            </div>
-            <div className="min-w-0 flex-[1.15]">
-              <label htmlFor="sales-pad-mark-mobile" className="text-[0.93em] font-semibold text-muted-foreground uppercase tracking-wide mb-0 block truncate text-center leading-tight">
-                Mark
-              </label>
-              <Input
-                id="sales-pad-mark-mobile"
-                ref={markInputRef}
-                data-skip-route-autofocus={preferRateForFirstBidFormFocus ? 'true' : undefined}
-                type="text"
-                autoComplete="off"
-                value={scribbleMark}
-                readOnly={!!editingBidId}
-                onMouseDown={() => { manualMarkSelectionRef.current = true; }}
-                onTouchStart={() => { manualMarkSelectionRef.current = true; }}
-                onChange={(e) => {
-                  if (editingBidId) return;
-                  lastScribbleSegmentRef.current = '';
-                  const v = e.target.value.toUpperCase().slice(0, MAX_MARK_LEN);
-                  setScribbleMark(v);
-                  const rawPos = e.target.selectionStart ?? v.length;
-                  const clampedPos = clampInsideClosingParen(v, rawPos);
-                  markInsertPosRef.current = clampedPos;
-                  pendingMarkCaretPosRef.current = clampedPos;
-                  setSelectedBuyer(null);
-                }}
-                onSelect={(e) => {
-                  const rawPos = e.currentTarget.selectionStart ?? scribbleMark.length;
-                  const allowManualExit = manualMarkSelectionRef.current;
-                  manualMarkSelectionRef.current = false;
-                  const clampedPos = clampInsideClosingParen(scribbleMark, rawPos, allowManualExit);
-                  markInsertPosRef.current = clampedPos;
-                  pendingMarkCaretPosRef.current = clampedPos !== rawPos ? clampedPos : null;
-                }}
-                inputMode="none"
-                onFocus={() => { setActiveNumpadField('mark'); hideNativeKeyboard(); }}
-                placeholder="Search…"
-                aria-label="Search mark or name"
-                className={cn(
-                  'h-11 min-h-[44px] rounded-md border-2 border-violet-500/45 bg-muted/25 px-2 py-1 text-center text-[1.07em] font-medium min-w-0 leading-none',
-                  activeNumpadField === 'mark' && 'border-violet-600 ring-2 ring-violet-500/60'
-                )}
-              />
-            </div>
-            <div className="min-w-0 flex-1">
-              <label
-                htmlFor="sales-pad-qty-mobile"
-                className="mb-0 block truncate text-center text-[0.93em] font-semibold uppercase tracking-wide text-muted-foreground leading-tight"
-                title={`Quantity · ${remaining} bags remaining in lot`}
-              >
-                QTY / <span className="font-black tabular-nums text-foreground">{remaining}</span>
-              </label>
-              <div className="flex min-w-0 gap-1">
-                <Input
-                  id="sales-pad-qty-mobile"
-                  ref={qtyInputRef}
-                  type="number"
-                  value={qty}
-                  onChange={(e) => {
-                    const v = e.target.value;
-                    setQty(v);
-                    if (editingBidId) setEditBidDraft((d) => (d ? { ...d, qty: v } : d));
-                  }}
-                  onFocus={(e) => {
-                    setActiveNumpadField('qty');
-                    if (!mobileKeyboardEnabled) {
-                      e.currentTarget.blur();
-                      hideNativeKeyboard();
-                    }
-                  }}
-                  onBlur={() => setMobileKeyboardEnabled(false)}
-                  readOnly={!mobileKeyboardEnabled}
-                  inputMode={!mobileKeyboardEnabled ? 'none' : 'numeric'}
-                  placeholder="0"
-                  aria-label={`Quantity in bags, ${remaining} bags remaining in lot`}
-                  className={cn(
-                    'h-11 min-h-[44px] min-w-0 flex-1 rounded-md border-2 border-primary/45 bg-muted/25 text-center text-[1.07em] font-bold py-1 leading-none',
-                    activeNumpadField === 'qty' && 'border-primary ring-2 ring-primary shadow-[0_0_0_2px_hsl(var(--primary))]'
-                  )}
-                />
-                {editingBidId && editBidDraft && editingEntry && (
-                  <button
-                    type="button"
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() =>
-                      setPendingDeleteBid({
-                        id: editingEntry.id,
-                        label: `${editingEntry.buyerName} (${editingEntry.buyerMark})`,
-                      })
-                    }
-                    disabled={completeLoading || !can('Auctions / Sales', 'Delete')}
-                    className="flex h-11 min-h-[44px] w-11 shrink-0 items-center justify-center rounded-md border-2 border-destructive/40 bg-destructive/10 text-destructive hover:bg-destructive/20 disabled:pointer-events-none disabled:opacity-40"
-                    aria-label="Delete bid"
-                    title="Delete bid"
-                  >
-                    <Trash2 className="h-5 w-5" strokeWidth={2.25} />
-                  </button>
-                )}
-              </div>
-            </div>
-          </div>
+          <AuctionBuyerStrips
+            variant="mobile"
+            hideRegisteredContactStrip
+            contacts={filteredContacts}
+            temporaryMarks={filteredTemporaryMarks}
+            selectedBuyer={selectedBuyer}
+            scribbleMark={scribbleMark}
+            editingBidId={editingBidId}
+            buyerSearchLoading={buyerSearchLoading}
+            contactScrollRef={contactScrollRef}
+            markScrollRef={markScrollRef}
+            contactScrollHandlers={contactStripScrollHandlers}
+            markScrollHandlers={markStripScrollHandlers}
+            didDragContactRef={didDragContactRef}
+            didDragMarkRef={didDragMarkRef}
+            onBuyerSelect={selectAuctionBuyer}
+            onTemporaryMarkSelect={selectTemporaryBuyerMark}
+          />
+          <AuctionMobileBidTopRow
+            rate={rate}
+            qty={qty}
+            scribbleMark={scribbleMark}
+            remaining={remaining}
+            editingBidId={editingBidId}
+            editingActive={!!(editingBidId && editBidDraft && editingEntry)}
+            isMdViewport={isMdViewport}
+            completeLoading={completeLoading}
+            canDelete={can('Auctions / Sales', 'Delete')}
+            activeNumpadField={activeNumpadField}
+            mobileKeyboardEnabled={mobileKeyboardEnabled}
+            rateInputRef={rateInputRef}
+            qtyInputRef={qtyInputRef}
+            markInputRef={markInputRef}
+            dataSkipRouteAutofocus={preferRateForFirstBidFormFocus ? 'true' : undefined}
+            onRateChange={handleRateInputChange}
+            onQtyChange={handleQtyInputChange}
+            onMarkChange={handleMobileMarkInputChange}
+            onRateFocus={handleRateInputFocus}
+            onQtyFocus={handleQtyInputFocus}
+            onMarkFocus={handleMobileMarkFocus}
+            onNumericBlur={handleNumericInputBlur}
+            onMarkPointerStart={handleMarkPointerStart}
+            onMarkSelect={handleMobileMarkInputSelect}
+            onDeleteEditingBid={requestDeleteEditingBid}
+          />
           {canUsePreset && (
-            <div className="mb-0.5 flex min-h-[38px] items-center gap-2">
+            <div
+              className="my-[0.5rem] flex items-center gap-2"
+              style={{ minHeight: touchLayout.presetChipMinHeightPx }}
+            >
               <div
                 className="min-w-0 flex-1 overflow-x-auto overflow-y-hidden no-scrollbar overscroll-x-contain scroll-smooth touch-[pan-x_pan-y]"
                 style={{ WebkitOverflowScrolling: 'touch' }}
               >
-                <div className="inline-flex max-w-none flex-nowrap items-stretch gap-1.5">
+                <div className="inline-flex max-w-none flex-nowrap items-stretch gap-2">
                   {showPresetMargin && presetOptions.length > 0 && (
                     <>
                       {presetOptions.map((opt) => (
@@ -4515,8 +5761,9 @@ const AuctionsPage = () => {
                           key={opt.label + String(opt.value)}
                           type="button"
                           onClick={() => applyPreset(opt.value)}
+                          style={presetChipButtonStyle}
                           className={cn(
-                            'shrink-0 whitespace-nowrap rounded-lg px-3 py-2 text-xs font-bold transition-all min-h-[38px] sm:min-h-[40px] sm:py-2.5 sm:text-sm',
+                            'shrink-0 inline-flex items-center justify-center whitespace-nowrap rounded-none px-3 py-2 font-bold transition-all leading-tight',
                             preset === opt.value
                               ? opt.value >= 0
                                 ? 'bg-gradient-to-r from-emerald-500 to-green-500 text-white'
@@ -4536,7 +5783,8 @@ const AuctionsPage = () => {
                             const hit = presetOptions.find((o) => o.value === preset);
                             if (hit) applyPreset(hit.value);
                           }}
-                          className="flex size-9 min-h-[38px] shrink-0 items-center justify-center rounded-lg border border-border/60 bg-muted/50 text-muted-foreground hover:bg-muted sm:size-10 sm:min-h-[40px]"
+                          style={presetChipIconSquareStyle}
+                          className="inline-flex shrink-0 items-center justify-center rounded-none border border-border/60 bg-muted/50 text-muted-foreground hover:bg-muted"
                           aria-label="Clear preset margin"
                           title="Reset margin"
                         >
@@ -4617,7 +5865,7 @@ const AuctionsPage = () => {
                 </button>
               </div>
 
-              {/* ( ... ) / Self — delete while editing: trash next to QTY above */}
+              {/* ( ... ) / Self — delete while editing: trash beside qty row in dock */}
               <div
                 className={cn(
                   'grid gap-1',
@@ -4726,95 +5974,23 @@ const AuctionsPage = () => {
       {/* Scribble Pad */}
       <ScribblePad open={showScribble} onClose={() => setShowScribble(false)} onConfirm={handleScribbleConfirm} />
 
-      {/* ═══ DUPLICATE MARK DIALOG ═══ */}
-      <AnimatePresence>
-        {duplicateMarkDialog && (
-          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 backdrop-blur-sm px-6"
-            onClick={() => setDuplicateMarkDialog(null)}>
-            <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }}
-              className="w-full max-w-sm bg-card rounded-2xl p-5 shadow-2xl border border-border/50" onClick={e => e.stopPropagation()}>
-              <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-amber-500/20 to-orange-500/20 border border-amber-500/20 flex items-center justify-center mx-auto mb-3">
-                <AlertTriangle className="w-7 h-7 text-amber-500" />
-              </div>
-              <h3 className="text-lg font-bold text-center text-foreground mb-1">Reusing Mark "{duplicateMarkDialog.mark}"?</h3>
-              <p className="text-sm text-center text-muted-foreground mb-4">
-                This mark already exists in this lot (Bid #{duplicateMarkDialog.existingEntry.bidNumber}).
-                {duplicateMarkDialog.existingEntry.rate === duplicateMarkDialog.rate
-                  ? ' Same rate — bids will be merged.'
-                  : ' Different rate — bids will be kept separate.'}
-              </p>
-              <div className="flex gap-3">
-                <Button onClick={handleDuplicateNewMark} variant="outline" className="flex-1 h-12 rounded-xl">
-                  Different Mark
-                </Button>
-                <Button onClick={handleDuplicateMerge}
-                  className="flex-1 h-12 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 text-white">
-                  {duplicateMarkDialog.existingEntry.rate === duplicateMarkDialog.rate ? 'Merge' : 'Keep Separate'}
-                </Button>
-              </div>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      {/* ═══ QUANTITY INCREASE CONFIRMATION ═══ */}
-      <AnimatePresence>
-        {qtyIncreaseDialog && (
-          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 backdrop-blur-sm px-6"
-            onClick={() => setQtyIncreaseDialog(null)}>
-            <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }}
-              className="w-full max-w-sm bg-card rounded-2xl p-5 shadow-2xl border border-border/50" onClick={e => e.stopPropagation()}>
-              <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-blue-500/20 to-violet-500/20 border border-blue-500/20 flex items-center justify-center mx-auto mb-3">
-                <Plus className="w-7 h-7 text-primary" />
-              </div>
-              <h3 className="text-lg font-bold text-center text-foreground mb-1">Increase Lot Quantity?</h3>
-              <p className="text-sm text-center text-muted-foreground mb-4">
-                Lot has <strong>{qtyIncreaseDialog.lotTotal}</strong> bags, <strong>{qtyIncreaseDialog.currentTotal}</strong> already sold.
-                Adding <strong>{qtyIncreaseDialog.attemptedQty}</strong> bags exceeds the limit.
-                <br />New total will be: <strong>{qtyIncreaseDialog.currentTotal + qtyIncreaseDialog.attemptedQty}</strong> bags*
-              </p>
-              <div className="flex gap-3">
-                <Button onClick={() => setQtyIncreaseDialog(null)} variant="outline" className="flex-1 h-12 rounded-xl">Cancel</Button>
-                <Button onClick={confirmQtyIncrease}
-                  className="flex-1 h-12 rounded-xl bg-gradient-to-r from-blue-500 to-violet-500 text-white">
-                  Increase & Add
-                </Button>
-              </div>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      <AnimatePresence>
-        {editBidQtyDialog && (
-          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 backdrop-blur-sm px-6"
-            onClick={() => setEditBidQtyDialog(null)}>
-            <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }}
-              className="w-full max-w-sm bg-card rounded-2xl p-5 shadow-2xl border border-border/50" onClick={e => e.stopPropagation()}>
-              <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-blue-500/20 to-violet-500/20 border border-blue-500/20 flex items-center justify-center mx-auto mb-3">
-                <Pencil className="w-7 h-7 text-primary" />
-              </div>
-              <h3 className="text-lg font-bold text-center text-foreground mb-1">Increase Lot Quantity?</h3>
-              <p className="text-sm text-center text-muted-foreground mb-4">
-                Lot has <strong>{editBidQtyDialog.lotTotal}</strong> bags.
-                Other bids use <strong>{editBidQtyDialog.currentTotal}</strong> bags.
-                This bid at <strong>{editBidQtyDialog.attemptedQty}</strong> bags would bring the total sold to{' '}
-                <strong>{editBidQtyDialog.currentTotal + editBidQtyDialog.attemptedQty}</strong> bags.
-              </p>
-              <div className="flex gap-3">
-                <Button onClick={() => setEditBidQtyDialog(null)} variant="outline" className="flex-1 h-12 rounded-xl">Cancel</Button>
-                <Button onClick={() => { void confirmEditBidQtyIncrease(); }}
-                  className="flex-1 h-12 rounded-xl bg-gradient-to-r from-blue-500 to-violet-500 text-white">
-                  Allow & Update
-                </Button>
-              </div>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      {/* ═══ AUCTION DIALOGS ═══ */}
+      <AuctionDuplicateMarkDialog
+        dialog={duplicateMarkDialog}
+        onClose={() => setDuplicateMarkDialog(null)}
+        onDifferentMark={handleDuplicateNewMark}
+        onMergeOrKeepSeparate={handleDuplicateMerge}
+      />
+      <AuctionQtyIncreaseDialog
+        dialog={qtyIncreaseDialog}
+        onClose={() => setQtyIncreaseDialog(null)}
+        onConfirm={confirmQtyIncrease}
+      />
+      <AuctionEditBidQtyIncreaseDialog
+        dialog={editBidQtyDialog}
+        onClose={() => setEditBidQtyDialog(null)}
+        onConfirm={() => { void confirmEditBidQtyIncrease(); }}
+      />
 
       {isDesktop && <BottomNav />}
 

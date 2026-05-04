@@ -58,6 +58,8 @@ export interface ArrivalSummary {
   freightTotal: number;
   freightMethod: FreightMethod | null;
   arrivalDatetime: string;
+  /** From server auditing; list uses this so edited rows surface first */
+  lastModifiedDate?: string;
   godown?: string;
   gatepassNumber?: string;
   origin?: string;
@@ -125,6 +127,8 @@ export interface ArrivalFullDetail {
   /** Persisted multi-seller vs single-seller mode (restored on edit). */
   multiSeller?: boolean;
   sellers: ArrivalSellerFullDetail[];
+  /** Server-side reasons delete is blocked; enum names (e.g. `BILLING`). */
+  deleteBlockers?: string[];
 }
 
 export interface ArrivalLotFullDetail {
@@ -171,6 +175,30 @@ export interface ArrivalUpdatePayload {
   sellers?: ArrivalSellerPayload[];
 }
 
+export class ArrivalDeletionBlockedError extends Error {
+  readonly blockers: string[];
+
+  constructor(message: string, blockers: string[]) {
+    super(message);
+    this.name = 'ArrivalDeletionBlockedError';
+    this.blockers = blockers;
+  }
+}
+
+/** Human-readable list for tooltips (English). */
+export function formatArrivalDeletionBlockerCodes(codes: string[]): string {
+  const labels: Record<string, string> = {
+    BILLING: 'Billing',
+    AUCTION_SELF_SALE: 'Auction self-sale',
+    SELF_SALE_CLOSURE: 'Self-sale closure',
+    CDN: 'CDN',
+    STOCK_PURCHASE: 'Stock purchase',
+    WEIGHING: 'Weighing',
+    WRITER_PAD: 'Writer pad',
+  };
+  return codes.map(c => labels[c] ?? c).join(', ');
+}
+
 async function handleArrivalResponse<T>(res: Response, defaultMessage: string): Promise<T> {
   if (res.ok) {
     return res.json() as Promise<T>;
@@ -198,17 +226,57 @@ async function handleArrivalResponse<T>(res: Response, defaultMessage: string): 
   throw new Error(message);
 }
 
+function readTotalCount(res: Response, fallback: number): number {
+  const raw = res.headers.get('X-Total-Count');
+  if (raw == null || raw === '') return fallback;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+/** Paginated list response with Spring `X-Total-Count` (progressive load). */
+export interface ArrivalPagedResult<T> {
+  items: T[];
+  totalElements: number;
+}
+
+export interface ListArrivalsPageParams {
+  page?: number;
+  size?: number;
+  /** Stable sort for paging, e.g. `arrivalDatetime,desc`. */
+  sort?: string;
+  status?: string;
+  partiallyCompleted?: boolean;
+}
+
+export interface ListArrivalDetailPageParams {
+  page?: number;
+  size?: number;
+  sort?: string;
+}
+
 export const arrivalsApi = {
   async list(page = 0, size = 10, status?: string, partiallyCompleted?: boolean): Promise<ArrivalSummary[]> {
-    const searchParams = new URLSearchParams();
-    searchParams.set('page', String(page));
-    searchParams.set('size', String(size));
-    if (status && status !== 'ALL') searchParams.set('status', status);
-    if (partiallyCompleted !== undefined) searchParams.set('partiallyCompleted', String(partiallyCompleted));
+    const { items } = await arrivalsApi.listPage({ page, size, status, partiallyCompleted });
+    return items;
+  },
 
-    const res = await apiFetch(`/arrivals?${searchParams.toString()}`, { method: 'GET' });
+  /**
+   * One page of arrival summaries plus total from `X-Total-Count` (fallback: items.length).
+   */
+  async listPage(
+    params: ListArrivalsPageParams = {},
+    init?: RequestInit
+  ): Promise<ArrivalPagedResult<ArrivalSummary>> {
+    const searchParams = new URLSearchParams();
+    searchParams.set('page', String(params.page ?? 0));
+    searchParams.set('size', String(params.size ?? 10));
+    if (params.sort) searchParams.set('sort', params.sort);
+    if (params.status && params.status !== 'ALL') searchParams.set('status', params.status);
+    if (params.partiallyCompleted !== undefined) searchParams.set('partiallyCompleted', String(params.partiallyCompleted));
+
+    const res = await apiFetch(`/arrivals?${searchParams.toString()}`, { method: 'GET', ...init });
     const data = await handleArrivalResponse<ArrivalSummary[]>(res, 'Failed to load arrivals');
-    return data;
+    return { items: data, totalElements: readTotalCount(res, data.length) };
   },
 
   /**
@@ -216,13 +284,25 @@ export const arrivalsApi = {
    * Paginated; use multiple pages if you need all arrivals.
    */
   async listDetail(page = 0, size = 100): Promise<ArrivalDetail[]> {
-    const searchParams = new URLSearchParams();
-    searchParams.set('page', String(page));
-    searchParams.set('size', String(size));
+    const { items } = await arrivalsApi.listDetailPage({ page, size });
+    return items;
+  },
 
-    const res = await apiFetch(`/arrivals/detail?${searchParams.toString()}`, { method: 'GET' });
+  /**
+   * One page of arrival detail rows plus total from `X-Total-Count` (fallback: items.length).
+   */
+  async listDetailPage(
+    params: ListArrivalDetailPageParams = {},
+    init?: RequestInit
+  ): Promise<ArrivalPagedResult<ArrivalDetail>> {
+    const searchParams = new URLSearchParams();
+    searchParams.set('page', String(params.page ?? 0));
+    searchParams.set('size', String(params.size ?? 100));
+    if (params.sort) searchParams.set('sort', params.sort);
+
+    const res = await apiFetch(`/arrivals/detail?${searchParams.toString()}`, { method: 'GET', ...init });
     const data = await handleArrivalResponse<ArrivalDetail[]>(res, 'Failed to load arrival details');
-    return data;
+    return { items: data, totalElements: readTotalCount(res, data.length) };
   },
 
   async create(payload: ArrivalCreatePayload): Promise<ArrivalSummary> {
@@ -326,9 +406,29 @@ export const arrivalsApi = {
 
   async delete(vehicleId: number | string): Promise<void> {
     const res = await apiFetch(`/arrivals/${vehicleId}`, { method: 'DELETE' });
-    if (!res.ok) {
-      await handleArrivalResponse<never>(res, 'Failed to delete arrival');
+    if (res.ok) return;
+    let message = 'Failed to delete arrival';
+    let blockers: string[] = [];
+    try {
+      const contentType = res.headers.get('content-type') || '';
+      if (contentType.includes('application/json') || contentType.includes('application/problem+json')) {
+        const problem: { detail?: unknown; title?: unknown; blockers?: unknown } = await res.json();
+        if (typeof problem.detail === 'string' && problem.detail.trim().length > 0) {
+          message = problem.detail.trim();
+        } else if (typeof problem.title === 'string' && problem.title.trim().length > 0) {
+          message = problem.title.trim();
+        }
+        if (Array.isArray(problem.blockers)) {
+          blockers = problem.blockers.filter((x): x is string => typeof x === 'string');
+        }
+      }
+    } catch {
+      // ignore parse errors
     }
+    if (res.status === 409 && blockers.length > 0) {
+      throw new ArrivalDeletionBlockedError(message, blockers);
+    }
+    throw new Error(message);
   },
 };
 

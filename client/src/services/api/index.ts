@@ -11,7 +11,8 @@ export { weighingApi } from './weighing';
 export { printLogApi } from './printLog';
 export { logisticsApi } from './logistics';
 export { stockPurchaseApi } from './stockPurchase';
-export { settlementApi } from './settlement';
+export { settlementApi, SETTLEMENT_LIST_PAGE_SIZE } from './settlement';
+export type { SettlementPagedResult } from './settlement';
 export { billingApi } from './billing';
 export { writersPadApi } from './writersPad';
 export type {

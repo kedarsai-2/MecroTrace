@@ -15,10 +15,12 @@ import com.mercotrace.service.dto.ArrivalDTOs.ArrivalFullDetailDTO;
 import com.mercotrace.service.dto.ArrivalDTOs.ArrivalSellerFullDTO;
 import com.mercotrace.service.dto.ArrivalDTOs.ArrivalLotFullDTO;
 import com.mercotrace.service.dto.ArrivalDTOs.ArrivalUpdateDTO;
+import com.mercotrace.web.rest.errors.ArrivalDeletionBlockedException;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -74,6 +76,12 @@ public class ArrivalService {
     private final AuctionRepository auctionRepository;
     private final AuctionEntryRepository auctionEntryRepository;
     private final WeighingSessionRepository weighingSessionRepository;
+    private final SalesBillLineItemRepository salesBillLineItemRepository;
+    private final AuctionSelfSaleUnitRepository auctionSelfSaleUnitRepository;
+    private final SelfSaleClosureRepository selfSaleClosureRepository;
+    private final CdnItemRepository cdnItemRepository;
+    private final StockPurchaseItemRepository stockPurchaseItemRepository;
+    private final WriterPadSessionRepository writerPadSessionRepository;
 
     @PersistenceContext
     private EntityManager entityManager;
@@ -94,7 +102,13 @@ public class ArrivalService {
         TraderContextService traderContextService,
         AuctionRepository auctionRepository,
         AuctionEntryRepository auctionEntryRepository,
-        WeighingSessionRepository weighingSessionRepository
+        WeighingSessionRepository weighingSessionRepository,
+        SalesBillLineItemRepository salesBillLineItemRepository,
+        AuctionSelfSaleUnitRepository auctionSelfSaleUnitRepository,
+        SelfSaleClosureRepository selfSaleClosureRepository,
+        CdnItemRepository cdnItemRepository,
+        StockPurchaseItemRepository stockPurchaseItemRepository,
+        WriterPadSessionRepository writerPadSessionRepository
     ) {
         this.vehicleRepository = vehicleRepository;
         this.vehicleWeightRepository = vehicleWeightRepository;
@@ -112,6 +126,12 @@ public class ArrivalService {
         this.auctionRepository = auctionRepository;
         this.auctionEntryRepository = auctionEntryRepository;
         this.weighingSessionRepository = weighingSessionRepository;
+        this.salesBillLineItemRepository = salesBillLineItemRepository;
+        this.auctionSelfSaleUnitRepository = auctionSelfSaleUnitRepository;
+        this.selfSaleClosureRepository = selfSaleClosureRepository;
+        this.cdnItemRepository = cdnItemRepository;
+        this.stockPurchaseItemRepository = stockPurchaseItemRepository;
+        this.writerPadSessionRepository = writerPadSessionRepository;
     }
 
     /**
@@ -283,6 +303,7 @@ public class ArrivalService {
         summary.setFreightTotal(freightTotal);
         summary.setFreightMethod(fm);
         summary.setArrivalDatetime(vehicle.getArrivalDatetime());
+        summary.setLastModifiedDate(vehicle.getLastModifiedDate());
         summary.setPartiallyCompleted(isPartial);
         return summary;
     }
@@ -392,6 +413,7 @@ public class ArrivalService {
             dto.setBidsCount(bidsCount);
             dto.setWeighedCount(weighedCount);
             dto.setPartiallyCompleted(Boolean.TRUE.equals(v.getPartiallyCompleted()));
+            dto.setLastModifiedDate(v.getLastModifiedDate());
             return dto;
         }).toList();
 
@@ -504,6 +526,10 @@ public class ArrivalService {
         dto.setPartiallyCompleted(Boolean.TRUE.equals(vehicle.getPartiallyCompleted()));
         dto.setMultiSeller(!Boolean.FALSE.equals(vehicle.getMultiSeller()));
         dto.setSellers(sellerFullList);
+        List<Long> allLotIds = lots.stream().map(Lot::getId).toList();
+        dto.setDeleteBlockers(
+            collectLotDeletionBlockers(traderId, allLotIds).stream().map(Enum::name).sorted().toList()
+        );
         return dto;
     }
 
@@ -593,6 +619,7 @@ public class ArrivalService {
                     .ifPresent(fc -> freightDistributionRepository.deleteByFreightId(fc.getId()));
                 List<Lot> lotsToRemove = lotRepository.findAllBySellerVehicleIdIn(existingSellerVehicleIds);
                 List<Long> lotIdsToRemove = lotsToRemove.stream().map(Lot::getId).toList();
+                assertLotsNotBlockedForDeletion(traderId, lotIdsToRemove);
                 if (!lotIdsToRemove.isEmpty()) {
                     List<Auction> auctionsForLots = auctionRepository.findAllByLotIdIn(lotIdsToRemove);
                     List<Long> auctionIds = auctionsForLots.stream().map(Auction::getId).toList();
@@ -731,40 +758,90 @@ public class ArrivalService {
 
     /**
      * Delete arrival (vehicle and all related records). Trader-scoped.
+     * Blocked with {@link ArrivalDeletionBlockedException} when billing, self-sale, CDN, stock, weighing, or writer-pad still reference any lot.
      */
     @Transactional
     public void deleteArrival(Long vehicleId) {
-        evictSecondLevelCacheForArrivalDeletion(vehicleId);
         Long traderId = resolveTraderId();
         Vehicle vehicle = vehicleRepository.findById(vehicleId)
             .orElseThrow(() -> new IllegalArgumentException("Arrival not found: " + vehicleId));
         if (!vehicle.getTraderId().equals(traderId)) {
             throw new IllegalArgumentException("Arrival not found: " + vehicleId);
         }
+        List<SellerInVehicle> sellers = sellerInVehicleRepository.findAllByVehicleId(vehicleId);
+        List<Long> sellerVehicleIds = sellers.stream().map(SellerInVehicle::getId).toList();
+        List<Long> lotIdsToRemove = sellerVehicleIds.isEmpty()
+            ? List.of()
+            : lotRepository.findAllBySellerVehicleIdIn(sellerVehicleIds).stream().map(Lot::getId).toList();
+        assertLotsNotBlockedForDeletion(traderId, lotIdsToRemove);
+
+        evictSecondLevelCacheForArrivalDeletion(vehicleId);
         Optional<FreightCalculation> freightOpt = freightCalculationRepository.findOneByVehicleId(vehicleId);
         freightOpt.ifPresent(fc -> freightDistributionRepository.deleteByFreightId(fc.getId()));
         freightCalculationRepository.deleteByVehicleId(vehicleId);
         voucherRepository.deleteByReferenceTypeAndReferenceId("FREIGHT", vehicleId);
         voucherRepository.deleteByReferenceTypeAndReferenceId("ADVANCE", vehicleId);
         voucherRepository.deleteByReferenceTypeAndReferenceId("COOLIE", vehicleId);
-        List<SellerInVehicle> sellers = sellerInVehicleRepository.findAllByVehicleId(vehicleId);
-        List<Long> sellerVehicleIds = sellers.stream().map(SellerInVehicle::getId).toList();
         if (!sellerVehicleIds.isEmpty()) {
             List<Lot> lotsToRemove = lotRepository.findAllBySellerVehicleIdIn(sellerVehicleIds);
-            List<Long> lotIdsToRemove = lotsToRemove.stream().map(Lot::getId).toList();
-            if (!lotIdsToRemove.isEmpty()) {
-                List<Auction> auctionsForLots = auctionRepository.findAllByLotIdIn(lotIdsToRemove);
+            List<Long> lotIdsForDelete = lotsToRemove.stream().map(Lot::getId).toList();
+            if (!lotIdsForDelete.isEmpty()) {
+                List<Auction> auctionsForLots = auctionRepository.findAllByLotIdIn(lotIdsForDelete);
                 List<Long> auctionIds = auctionsForLots.stream().map(Auction::getId).toList();
                 if (!auctionIds.isEmpty()) {
                     auctionEntryRepository.deleteByAuctionIdIn(auctionIds);
                 }
-                auctionRepository.deleteByLotIdIn(lotIdsToRemove);
+                auctionRepository.deleteByLotIdIn(lotIdsForDelete);
             }
             lotRepository.deleteBySellerVehicleIdIn(sellerVehicleIds);
         }
         sellerInVehicleRepository.deleteByVehicleId(vehicleId);
         vehicleWeightRepository.deleteByVehicleId(vehicleId);
         vehicleRepository.delete(vehicle);
+    }
+
+    private List<ArrivalDeletionBlocker> collectLotDeletionBlockers(Long traderId, List<Long> lotIds) {
+        if (lotIds == null || lotIds.isEmpty()) {
+            return List.of();
+        }
+        List<String> lotIdStrs = lotIds.stream().map(String::valueOf).toList();
+        List<ArrivalDeletionBlocker> out = new ArrayList<>();
+        if (salesBillLineItemRepository.existsForTraderLotsDeletionScope(traderId, lotIdStrs, lotIds)) {
+            out.add(ArrivalDeletionBlocker.BILLING);
+        }
+        if (auctionSelfSaleUnitRepository.existsByLotIdIn(lotIds)) {
+            out.add(ArrivalDeletionBlocker.AUCTION_SELF_SALE);
+        }
+        if (selfSaleClosureRepository.existsActiveByTraderIdAndLotIdIn(traderId, lotIds)) {
+            out.add(ArrivalDeletionBlocker.SELF_SALE_CLOSURE);
+        }
+        if (cdnItemRepository.existsActiveByLotIdIn(lotIds)) {
+            out.add(ArrivalDeletionBlocker.CDN);
+        }
+        if (stockPurchaseItemRepository.existsActiveByTraderIdAndLotIdIn(traderId, lotIds)) {
+            out.add(ArrivalDeletionBlocker.STOCK_PURCHASE);
+        }
+        if (weighingSessionRepository.existsByLotIdIn(lotIds)) {
+            out.add(ArrivalDeletionBlocker.WEIGHING);
+        }
+        if (writerPadSessionRepository.existsByLotIdIn(lotIds)) {
+            out.add(ArrivalDeletionBlocker.WRITER_PAD);
+        }
+        out.sort(Comparator.comparing(ArrivalDeletionBlocker::name));
+        return out;
+    }
+
+    private void assertLotsNotBlockedForDeletion(Long traderId, List<Long> lotIds) {
+        List<ArrivalDeletionBlocker> blockers = collectLotDeletionBlockers(traderId, lotIds);
+        if (blockers.isEmpty()) {
+            return;
+        }
+        List<String> codes = blockers.stream().map(Enum::name).toList();
+        String labels = blockers.stream().map(ArrivalDeletionBlocker::displayLabel).collect(Collectors.joining(", "));
+        throw new ArrivalDeletionBlockedException(
+            "This arrival cannot be deleted while linked data exists in: " + labels + ". Remove or adjust those records first.",
+            codes
+        );
     }
 
     /**
@@ -877,6 +954,7 @@ public class ArrivalService {
         dto.setGatepassNumber(v.getGatepassNumber());
         dto.setOrigin(v.getOrigin());
         dto.setPartiallyCompleted(Boolean.TRUE.equals(v.getPartiallyCompleted()));
+        dto.setLastModifiedDate(v.getLastModifiedDate());
         return dto;
     }
 

@@ -22,6 +22,7 @@ type ContactDto = {
   name?: string;
   phone?: string;
   email?: string;
+  address?: string;
   mark?: string;
   canLogin?: boolean;
   can_login?: boolean;

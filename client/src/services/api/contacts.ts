@@ -188,6 +188,18 @@ export const contactApi = {
     return data.map(mapDtoToContact);
   },
 
+  async searchParticipants(q: string, opts?: { limit?: number }): Promise<Contact[]> {
+    const params = new URLSearchParams();
+    const trimmed = q.trim();
+    if (trimmed) params.set('q', trimmed);
+    params.set('limit', String(opts?.limit ?? 50));
+    const res = await apiFetch(`/contacts/participants/search?${params.toString()}`, {
+      method: 'GET',
+    });
+    const data = await handleResponse<ContactDto[]>(res, 'Failed to search participant contacts');
+    return data.map(mapDtoToContact);
+  },
+
   /** Get all ledgers linked to a contact (Phase 6: Contact Consolidated Ledger View). */
   async getContactLedgers(contactId: string): Promise<ChartOfAccountDTO[]> {
     const res = await apiFetch(`/contacts/${encodeURIComponent(contactId)}/ledgers`, { method: 'GET' });
@@ -211,4 +223,3 @@ export const contactApi = {
     return handleResponse<VoucherLineDTO[]>(res, 'Failed to load contact ledger transactions');
   },
 };
-

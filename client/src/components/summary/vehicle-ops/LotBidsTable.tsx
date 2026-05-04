@@ -19,7 +19,8 @@ import {
 } from '@/services/api/auction';
 import { cn } from '@/lib/utils';
 import { roundMoney2 } from '@/utils/billingMoney';
-import { vehicleOpsPrimaryBtnClass } from './vehicleOpsUi';
+import { entryFullyAuctionedBySoldBags } from './vehicleOpsUtils';
+import { vehicleOpsAuctionStripClass, vehicleOpsPrimaryBtnClass } from './vehicleOpsUi';
 
 /** Display-only — matches `readOnlyLotInputClass` in SellerDetailPanel (dashed, muted). */
 const readOnlyBidTextClass =
@@ -121,6 +122,12 @@ export function LotBidsTable({
   const entries = session?.entries ?? EMPTY_SESSION_ENTRIES;
 
   const entryIdsKey = useMemo(() => entries.map((e) => e.auction_entry_id).join(','), [entries]);
+
+  const soldBagsForStrips = Number(lotSummary?.sold_bags ?? session?.total_sold_bags ?? 0) || 0;
+  const entryAuctionedMap = useMemo(
+    () => entryFullyAuctionedBySoldBags(entries, soldBagsForStrips),
+    [entries, soldBagsForStrips],
+  );
 
   useEffect(() => {
     setLocalSummaryByEntryId((prev) => {
@@ -439,7 +446,24 @@ export function LotBidsTable({
         <>
           {/* Desktop: unchanged wide table from lg (1024px) — aligns with VehicleOps seller strip / lot carousel. */}
           <div className="hidden max-w-full overflow-x-auto rounded-xl border border-border/30 bg-background/40 lg:block">
-        <Table className="min-w-[720px] text-xs sm:text-sm">
+            <Table
+              className={cn(
+                'table-fixed border-collapse',
+                'min-w-[880px] w-full text-xs sm:text-sm',
+                '[&_th]:!px-2 [&_th]:!py-2.5 [&_td]:!p-2 [&_th]:align-middle [&_td]:align-middle',
+              )}
+            >
+              <colgroup>
+                <col style={{ width: '2%' }} />
+                <col style={{ width: '16%' }} />
+                <col style={{ width: '8%' }} />
+                <col style={{ width: '12%' }} />
+                <col style={{ width: '14%' }} />
+                <col style={{ width: '11%' }} />
+                <col style={{ width: '9%' }} />
+                <col style={{ width: '14%' }} />
+                <col style={{ width: '14%' }} />
+              </colgroup>
           <TableHeader>
             <TableRow
               className={cn(
@@ -448,7 +472,8 @@ export function LotBidsTable({
                 'hover:bg-[linear-gradient(90deg,#4B7CF3_0%,#5B8CFF_45%,#7B61FF_100%)] hover:brightness-[1.03]',
               )}
             >
-              <TableHead className="whitespace-nowrap text-white/95 first:rounded-tl-xl">Mark</TableHead>
+              <TableHead className="rounded-tl-xl border-b border-white/20 !p-0" aria-hidden />
+              <TableHead className="text-left text-white/95">Mark</TableHead>
               <TableHead className="text-right text-white/95">Qty</TableHead>
               <TableHead className="text-right text-white/95">Buyer rate</TableHead>
               <TableHead className="text-right text-white/95">
@@ -491,12 +516,13 @@ export function LotBidsTable({
                   </Tooltip>
                 </span>
               </TableHead>
-              <TableHead className="w-12 text-center text-white/95 last:rounded-tr-xl"> </TableHead>
+              <TableHead className="rounded-tr-xl text-center text-white/95 !px-2" aria-label="Actions" />
             </TableRow>
           </TableHeader>
           <TableBody>
             {entries.map((e) => {
               const id = e.auction_entry_id;
+              const rowAuctioned = entryAuctionedMap.get(id) ?? false;
               const buyerRate = Number(e.buyer_rate ?? e.bid_rate ?? 0);
               const brokerage = Number(e.extra_rate ?? 0);
               const preset = Number(e.preset_margin ?? 0);
@@ -504,7 +530,16 @@ export function LotBidsTable({
                 localSummaryByEntryId[id] !== undefined ? localSummaryByEntryId[id] : serverSummarySellerRate(e);
               return (
                 <TableRow key={id} className="border-border/30">
-                  <TableCell className="font-medium">{e.buyer_mark || '—'}</TableCell>
+                  <TableCell className="border-border/30 !p-0 align-middle">
+                    <span
+                      className={cn(
+                        'mx-auto block min-h-[2.25rem] w-1.5 max-w-[6px] rounded-sm',
+                        vehicleOpsAuctionStripClass(rowAuctioned),
+                      )}
+                      aria-hidden
+                    />
+                  </TableCell>
+                  <TableCell className="text-left font-medium">{e.buyer_mark || '—'}</TableCell>
                   <TableCell className="text-right tabular-nums">{e.quantity ?? 0}</TableCell>
                   <TableCell className="text-right tabular-nums">₹{roundDisplay(buyerRate)}</TableCell>
                   <TableCell className="text-right">
@@ -515,7 +550,7 @@ export function LotBidsTable({
                       value={`₹${roundDisplay(refSellerRateDisplay(e))}`}
                       title="Reference seller rate (display only)"
                       aria-label={`Reference seller rate for ${e.buyer_mark}`}
-                      className={cn(readOnlyBidNumericClass, 'h-8 w-[5.5rem]')}
+                      className={cn(readOnlyBidNumericClass, 'ml-auto box-border h-8 w-[5.5rem] max-w-full')}
                     />
                   </TableCell>
                   <TableCell className="text-right tabular-nums text-muted-foreground">₹{roundDisplay(brokerage)}</TableCell>
@@ -533,7 +568,7 @@ export function LotBidsTable({
                         }))
                       }
                       title={`New seller rate for ${e.buyer_mark}`}
-                      className="h-8 w-[5.5rem] rounded-lg border-border/50 text-right tabular-nums text-sm"
+                      className="ml-auto box-border h-8 w-[5.5rem] max-w-full rounded-lg border-border/50 text-right tabular-nums text-sm"
                     />
                   </TableCell>
                   <TableCell className="text-center">
@@ -587,6 +622,7 @@ export function LotBidsTable({
         >
           {entries.map((e) => {
             const id = e.auction_entry_id;
+            const rowAuctioned = entryAuctionedMap.get(id) ?? false;
             const buyerRate = Number(e.buyer_rate ?? e.bid_rate ?? 0);
             const brokerage = Number(e.extra_rate ?? 0);
             const preset = Number(e.preset_margin ?? 0);
@@ -595,8 +631,13 @@ export function LotBidsTable({
             return (
               <div
                 key={id}
-                className="glass-card w-[calc(100%-0.1rem)] shrink-0 snap-start space-y-3 rounded-xl border border-border/50 bg-card/80 p-3 shadow-sm"
+                className="glass-card flex w-[calc(100%-0.1rem)] shrink-0 snap-start overflow-hidden rounded-xl border border-border/50 bg-card/80 shadow-sm"
               >
+                <span
+                  className={cn('w-1.5 shrink-0 self-stretch', vehicleOpsAuctionStripClass(rowAuctioned))}
+                  aria-hidden
+                />
+                <div className="min-w-0 flex-1 space-y-3 p-3">
                 <div className="flex items-end justify-between gap-2 border-b border-border/30 pb-2">
                   <div className="min-w-0 flex-1 space-y-1">
                     <FieldLabel>Mark</FieldLabel>
@@ -724,6 +765,7 @@ export function LotBidsTable({
                       className="h-10 w-full min-w-0 rounded-lg border-border/50 text-right tabular-nums text-sm"
                     />
                   </div>
+                </div>
                 </div>
               </div>
             );

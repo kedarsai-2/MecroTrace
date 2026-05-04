@@ -4,14 +4,12 @@ const TRADER_TOKEN_KEY = 'merco.traderToken';
 const ADMIN_TOKEN_KEY = 'merco.adminToken';
 const CONTACT_TOKEN_KEY = 'merco.contactToken';
 
-function isAndroidNative(): boolean {
-  // Capacitor detection can be timing-sensitive during bootstrap.
-  // Evaluate lazily so we still load persisted tokens on native app restart.
-  return typeof window !== 'undefined' && Capacitor.getPlatform() === 'android';
+function isNativeApp(): boolean {
+  return typeof window !== 'undefined' && Capacitor.isNativePlatform();
 }
 
 function readPersistedToken(key: string): string | null {
-  if (!isAndroidNative()) return null;
+  if (!isNativeApp()) return null;
   try {
     return window.localStorage.getItem(key);
   } catch {
@@ -20,7 +18,7 @@ function readPersistedToken(key: string): string | null {
 }
 
 function persistToken(key: string, token: string | null): void {
-  if (!isAndroidNative()) return;
+  if (!isNativeApp()) return;
   try {
     if (token) {
       window.localStorage.setItem(key, token);
@@ -32,13 +30,13 @@ function persistToken(key: string, token: string | null): void {
   }
 }
 
-// In-memory cache for current session (used on desktop and as a fast path on Android).
+// In-memory cache for current session (browser); native iOS/Android also persist to localStorage for Authorization header.
 let traderToken: string | null = null;
 let adminToken: string | null = null;
 let contactToken: string | null = null;
 
 export function getTraderToken(): string | null {
-  if (!isAndroidNative()) return traderToken;
+  if (!isNativeApp()) return traderToken;
   if (traderToken === null) traderToken = readPersistedToken(TRADER_TOKEN_KEY);
   return traderToken;
 }
@@ -49,7 +47,7 @@ export function setTraderToken(token: string | null): void {
 }
 
 export function getAdminToken(): string | null {
-  if (!isAndroidNative()) return adminToken;
+  if (!isNativeApp()) return adminToken;
   if (adminToken === null) adminToken = readPersistedToken(ADMIN_TOKEN_KEY);
   return adminToken;
 }
@@ -60,7 +58,7 @@ export function setAdminToken(token: string | null): void {
 }
 
 export function getContactToken(): string | null {
-  if (!isAndroidNative()) return contactToken;
+  if (!isNativeApp()) return contactToken;
   if (contactToken === null) contactToken = readPersistedToken(CONTACT_TOKEN_KEY);
   return contactToken;
 }

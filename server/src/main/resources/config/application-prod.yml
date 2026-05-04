@@ -97,6 +97,10 @@ jhipster:
   # CORS configuration for production (applies to all APIs, including /api/portal/**)
   cors:
     allowed-origins:
+      # Capacitor / WebView: origin is often https://localhost or http://localhost (no port), not :8100
+      - http://localhost
+      - https://localhost
+      - capacitor://localhost
       - http://localhost:8100
       - https://localhost:8100
       - http://localhost:8081
@@ -119,9 +123,9 @@ jhipster:
         # - In a separate `application-prod.yml` file, in the same folder as your executable JAR file
         # - In the `JHIPSTER_SECURITY_AUTHENTICATION_JWT_BASE64_SECRET` environment variable
         base64-secret: MjQwMjlmMDVhODg4MDUwZGJjMDllZjU5Njg3NGY3MGZjOTlkNjU0MjU5YmJlYzVjMTA5ZDEwYjlkMTM3OGE5ZmM0ZThkNWVjY2MwNmRhZjI0OTc2ZDFiZjE0ZDk2ZGMyZDk3MzY4NWFkYWRlNzlkNDdhZDQ4ODE2OTA0MjE4NzE=
-        # Token is valid 24 hours
+        # Trader "remember me" JWT + ACCESS_TOKEN cookie max-age (90 days). /api/auth/login forces rememberMe for traders.
         token-validity-in-seconds: 86400
-        token-validity-in-seconds-for-remember-me: 2592000
+        token-validity-in-seconds-for-remember-me: 7776000
   mail: # specific JHipster mail property, for standard properties see MailProperties
     base-url: http://my-server-url-to-change # Modify according to your server's URL
   logging:
