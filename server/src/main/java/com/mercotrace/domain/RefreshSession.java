@@ -40,7 +40,7 @@ public class RefreshSession extends AbstractAuditingEntity<Long> implements Seri
     @Column(name = "contact_id")
     private Long contactId;
 
-    @Column(name = "authorities", length = 1000, nullable = false)
+    @Column(name = "authorities", columnDefinition = "text", nullable = false)
     private String authorities;
 
     @Column(name = "created_at", nullable = false)
