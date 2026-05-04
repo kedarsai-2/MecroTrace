@@ -205,14 +205,18 @@ async function handleArrivalResponse<T>(res: Response, defaultMessage: string): 
   }
 
   let message = defaultMessage;
+  let blockers: string[] = [];
   try {
     const contentType = res.headers.get('content-type') || '';
     if (contentType.includes('application/json') || contentType.includes('application/problem+json')) {
-      const problem = await res.json();
+      const problem: { detail?: unknown; title?: unknown; blockers?: unknown } = await res.json();
       if (typeof problem.detail === 'string' && problem.detail.trim().length > 0) {
         message = problem.detail;
       } else if (typeof problem.title === 'string' && problem.title.trim().length > 0) {
         message = problem.title;
+      }
+      if (Array.isArray(problem.blockers)) {
+        blockers = problem.blockers.filter((x): x is string => typeof x === 'string');
       }
     } else {
       const text = await res.text();
@@ -222,6 +226,9 @@ async function handleArrivalResponse<T>(res: Response, defaultMessage: string): 
     }
   } catch {
     // ignore parse errors
+  }
+  if (res.status === 409 && blockers.length > 0) {
+    throw new ArrivalDeletionBlockedError(message, blockers);
   }
   throw new Error(message);
 }
@@ -246,6 +253,8 @@ export interface ListArrivalsPageParams {
   sort?: string;
   status?: string;
   partiallyCompleted?: boolean;
+  /** Backend search over vehicle number, mark/alias, and seller/contact names. */
+  q?: string;
 }
 
 export interface ListArrivalDetailPageParams {
@@ -273,6 +282,7 @@ export const arrivalsApi = {
     if (params.sort) searchParams.set('sort', params.sort);
     if (params.status && params.status !== 'ALL') searchParams.set('status', params.status);
     if (params.partiallyCompleted !== undefined) searchParams.set('partiallyCompleted', String(params.partiallyCompleted));
+    if (params.q?.trim()) searchParams.set('q', params.q.trim());
 
     const res = await apiFetch(`/arrivals?${searchParams.toString()}`, { method: 'GET', ...init });
     const data = await handleArrivalResponse<ArrivalSummary[]>(res, 'Failed to load arrivals');
@@ -431,4 +441,3 @@ export const arrivalsApi = {
     throw new Error(message);
   },
 };
-

@@ -19,6 +19,51 @@ public interface VehicleRepository extends JpaRepository<Vehicle, Long> {
     Page<Vehicle> findAllByTraderIdAndPartiallyCompletedOrderByArrivalDatetimeDesc(Long traderId, Boolean partiallyCompleted, Pageable pageable);
 
     @Query(
+        value = """
+            SELECT v FROM Vehicle v
+            WHERE v.traderId = :traderId
+              AND v.partiallyCompleted = :partiallyCompleted
+              AND (
+                LOWER(COALESCE(v.vehicleNumber, '')) LIKE :q
+                OR LOWER(COALESCE(v.vehicleMarkAlias, '')) LIKE :q
+                OR EXISTS (
+                  SELECT 1 FROM SellerInVehicle siv
+                  LEFT JOIN Contact c ON c.id = siv.contactId
+                  WHERE siv.vehicleId = v.id
+                    AND (
+                      LOWER(COALESCE(siv.sellerName, '')) LIKE :q
+                      OR LOWER(COALESCE(c.name, '')) LIKE :q
+                    )
+                )
+              )
+            """,
+        countQuery = """
+            SELECT COUNT(v) FROM Vehicle v
+            WHERE v.traderId = :traderId
+              AND v.partiallyCompleted = :partiallyCompleted
+              AND (
+                LOWER(COALESCE(v.vehicleNumber, '')) LIKE :q
+                OR LOWER(COALESCE(v.vehicleMarkAlias, '')) LIKE :q
+                OR EXISTS (
+                  SELECT 1 FROM SellerInVehicle siv
+                  LEFT JOIN Contact c ON c.id = siv.contactId
+                  WHERE siv.vehicleId = v.id
+                    AND (
+                      LOWER(COALESCE(siv.sellerName, '')) LIKE :q
+                      OR LOWER(COALESCE(c.name, '')) LIKE :q
+                    )
+                )
+              )
+            """
+    )
+    Page<Vehicle> searchByTraderAndPartiallyCompleted(
+        @Param("traderId") Long traderId,
+        @Param("partiallyCompleted") Boolean partiallyCompleted,
+        @Param("q") String q,
+        Pageable pageable
+    );
+
+    @Query(
         "SELECT CASE WHEN COUNT(v) > 0 THEN true ELSE false END FROM Vehicle v WHERE LOWER(TRIM(v.vehicleMarkAlias)) = :normalized " +
         "AND v.vehicleMarkAlias IS NOT NULL AND TRIM(v.vehicleMarkAlias) <> ''"
     )
@@ -30,4 +75,3 @@ public interface VehicleRepository extends JpaRepository<Vehicle, Long> {
     )
     boolean existsByNormalizedVehicleMarkAliasExcludingId(@Param("normalized") String normalized, @Param("excludeId") Long excludeId);
 }
-

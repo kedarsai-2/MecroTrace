@@ -112,16 +112,24 @@ public class ArrivalResource {
      * {@code GET  /arrivals} : get paginated arrivals summaries.
      * @param status optional filter: PENDING, WEIGHED, AUCTIONED, SETTLED (filter applied in memory on current page).
      * @param partiallyCompleted optional filter: true = drafts only, false/null = completed only (default).
+     * @param q optional search over vehicle number, vehicle mark/alias, and seller/contact names.
      */
     @GetMapping("")
     @PreAuthorize("hasAuthority(\"" + AuthoritiesConstants.ARRIVALS_VIEW + "\")")
     public ResponseEntity<List<ArrivalSummaryDTO>> getAllArrivals(
         @org.springdoc.core.annotations.ParameterObject Pageable pageable,
         @RequestParam(required = false) String status,
-        @RequestParam(required = false) Boolean partiallyCompleted
+        @RequestParam(required = false) Boolean partiallyCompleted,
+        @RequestParam(required = false) String q
     ) {
-        LOG.debug("REST request to get Arrivals page: {} status: {} partiallyCompleted: {}", pageable, status, partiallyCompleted);
-        Page<ArrivalSummaryDTO> page = arrivalService.listArrivals(pageable, status, partiallyCompleted);
+        LOG.debug(
+            "REST request to get Arrivals page: {} status: {} partiallyCompleted: {} q: {}",
+            pageable,
+            status,
+            partiallyCompleted,
+            q
+        );
+        Page<ArrivalSummaryDTO> page = arrivalService.listArrivals(pageable, status, partiallyCompleted, q);
         HttpHeaders headers = PaginationUtil.generatePaginationHttpHeaders(ServletUriComponentsBuilder.fromCurrentRequest(), page);
         return ResponseEntity.ok().headers(headers).body(page.getContent());
     }
@@ -166,4 +174,3 @@ public class ArrivalResource {
         return ResponseEntity.noContent().build();
     }
 }
-

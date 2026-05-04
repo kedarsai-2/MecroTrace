@@ -44,8 +44,22 @@ public class ApplicationProperties {
 
         private final Cookie cookie = new Cookie();
 
+        /**
+         * Short-lived access JWT/cookie lifetime used when refresh sessions are enabled.
+         * Refresh session lifetime remains controlled by JHipster remember-me validity.
+         */
+        private long accessTokenValidityInSeconds = 1800;
+
         public Cookie getCookie() {
             return cookie;
+        }
+
+        public long getAccessTokenValidityInSeconds() {
+            return accessTokenValidityInSeconds;
+        }
+
+        public void setAccessTokenValidityInSeconds(long accessTokenValidityInSeconds) {
+            this.accessTokenValidityInSeconds = accessTokenValidityInSeconds;
         }
     }
 
