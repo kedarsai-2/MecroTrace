@@ -5,16 +5,19 @@ import { Sun, Moon } from 'lucide-react';
 import { MercotraceIcon } from '@/components/MercotraceLogo';
 import { useTheme } from '@/context/ThemeContext';
 import { useDesktopMode } from '@/hooks/use-desktop';
+import { useAuth } from '@/context/AuthContext';
 
 const SplashScreen = () => {
   const navigate = useNavigate();
   const [showContent, setShowContent] = useState(false);
   const { isDark, toggleTheme } = useTheme();
   const isDesktop = useDesktopMode();
+  const { isAuthenticated, hasBootstrapped, trader } = useAuth();
 
   useEffect(() => {
     if (isDesktop) {
-      navigate('/login', { replace: true });
+      if (!hasBootstrapped) return;
+      navigate(isAuthenticated && trader ? '/home' : '/login', { replace: true });
       return;
     }
     const contentTimer = setTimeout(() => setShowContent(true), 300);
@@ -25,7 +28,7 @@ const SplashScreen = () => {
       clearTimeout(contentTimer);
       clearTimeout(completeTimer);
     };
-  }, [navigate, isDesktop]);
+  }, [navigate, isDesktop, hasBootstrapped, isAuthenticated, trader]);
 
   return (
     <div className="fixed inset-0 z-0 flex flex-col overflow-hidden bg-slate-950">

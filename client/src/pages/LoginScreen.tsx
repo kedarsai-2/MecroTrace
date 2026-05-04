@@ -50,7 +50,16 @@ const LoginScreen = () => {
   const [showPassword, setShowPassword] = useState(false);
 
   const { isDark, toggleTheme } = useTheme();
-  const { login, loginWithOtp, isLoading: traderLoading, error: traderError, clearError: clearTraderError } = useAuth();
+  const {
+    login,
+    loginWithOtp,
+    isAuthenticated: traderAuthenticated,
+    hasBootstrapped: traderBootstrapped,
+    trader,
+    isLoading: traderLoading,
+    error: traderError,
+    clearError: clearTraderError,
+  } = useAuth();
   const {
     login: contactLogin,
     loginWithProfile,
@@ -71,6 +80,12 @@ const LoginScreen = () => {
   const isLoading = audience === 'trader' ? traderLoading : contactLoading;
   const error = audience === 'trader' ? traderError : contactError;
   const clearError = audience === 'trader' ? clearTraderError : clearContactError;
+
+  useEffect(() => {
+    if (traderBootstrapped && traderAuthenticated && trader) {
+      navigate('/home', { replace: true });
+    }
+  }, [navigate, trader, traderAuthenticated, traderBootstrapped]);
 
   // Email validation
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
