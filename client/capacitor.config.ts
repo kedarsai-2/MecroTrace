@@ -4,6 +4,10 @@ const config: CapacitorConfig = {
   appId: 'com.mercotrace.app',
   appName: 'Mercotrace',
   webDir: 'dist',
+  backgroundColor: "#60A5FA",
+  android: {
+    backgroundColor: "#60A5FA",
+  },
   server: {
     androidScheme: 'https',
     iosScheme: 'https',
@@ -13,10 +17,11 @@ const config: CapacitorConfig = {
   },
   plugins: {
     SplashScreen: {
-      launchShowDuration: 2000,
-      launchAutoHide: true,
-      backgroundColor: "#ffffff",
-      androidSplashResourceName: "splash",
+      launchShowDuration: 30000,
+      launchAutoHide: false,
+      launchFadeOutDuration: 120,
+      backgroundColor: "#60A5FA",
+      androidSplashResourceName: "launch_background",
       androidScaleType: "CENTER_CROP",
       showSpinner: false,
       iosSpinnerStyle: "small",

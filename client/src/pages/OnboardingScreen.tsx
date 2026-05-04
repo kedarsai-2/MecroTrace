@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
+import { Capacitor } from '@capacitor/core';
+import { SplashScreen as NativeSplashScreen } from '@capacitor/splash-screen';
 import { ArrowRight, ShoppingBag, BarChart3, Shield, Gift, ChevronLeft, Sun, Moon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
@@ -53,6 +55,24 @@ const OnboardingScreen = () => {
       navigate('/login', { replace: true });
     }
   }, [isDesktop, navigate]);
+
+  useEffect(() => {
+    if (!Capacitor.isNativePlatform()) return;
+
+    let timeoutId: number | undefined;
+    const frameId = requestAnimationFrame(() => {
+      timeoutId = window.setTimeout(() => {
+        void NativeSplashScreen.hide();
+      }, 120);
+    });
+
+    return () => {
+      cancelAnimationFrame(frameId);
+      if (timeoutId !== undefined) {
+        window.clearTimeout(timeoutId);
+      }
+    };
+  }, []);
 
   const handleNext = () => {
     if (currentSlide < slides.length - 1) {
