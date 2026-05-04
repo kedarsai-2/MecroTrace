@@ -1416,6 +1416,11 @@ const ArrivalsPage = () => {
       }));
   }, []);
 
+  const expandedSellerInfoRows = useMemo(
+    () => (expandedDetail ? mapSellerInfoRows(expandedDetail.sellers) : []),
+    [expandedDetail, mapSellerInfoRows],
+  );
+
   const isArrivalDirty = useMemo(() => {
     if (!isArrivalPanelOpen) return false;
     if (editLoading) return false;
@@ -3204,7 +3209,7 @@ const ArrivalsPage = () => {
                                             </div>
                                             <div className="space-y-3">
                                               <SellerInfoCard
-                                                sellers={mapSellerInfoRows(expandedDetail.sellers)}
+                                                sellers={expandedSellerInfoRows}
                                                 hidePrint
                                                 onRefresh={() => loadExpandedDetail(expandedDetail.vehicleId)}
                                               />
@@ -4217,7 +4222,7 @@ const ArrivalsPage = () => {
                                 <>
                                   <FreightDetailsCard freightRate={expandedDetail.freightRate ?? 0} freightKgs={expandedDetail.freightKgs} netWeight={expandedDetail.netWeight ?? 0} freightMethod={expandedDetail.freightMethod ?? 'BY_WEIGHT'} freightTotal={expandedDetail.freightTotal ?? 0} advancePaid={expandedDetail.advancePaid ?? 0} noRental={expandedDetail.noRental ?? false} />
                                   <SellerInfoCard
-                                    sellers={mapSellerInfoRows(expandedDetail.sellers)}
+                                    sellers={expandedSellerInfoRows}
                                     hidePrint
                                   />
                                   {showMobileArrivalActions && (
