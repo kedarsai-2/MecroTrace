@@ -89,7 +89,7 @@ const ContactPortalSignupPage = () => {
         alt=""
         role="presentation"
         className="absolute inset-0 w-full h-full object-cover z-0"
-        fetchPriority="high"
+        fetchpriority="high"
         decoding="async"
         width={1920}
         height={1080}
@@ -321,4 +321,3 @@ const ContactPortalSignupPage = () => {
 };
 
 export default ContactPortalSignupPage;
-
