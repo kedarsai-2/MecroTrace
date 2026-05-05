@@ -1599,7 +1599,7 @@ const ArrivalsPage = () => {
     }
   }, [editingVehicleId, buildPartialPayload, haveEditSellersOrLotsChanged, vehicleMarkAlias, formatArrivalEditBlockedMessage]);
 
-  const { confirmIfDirty, UnsavedChangesDialog } = useUnsavedChangesGuard({
+  const { confirmIfDirty, UnsavedChangesDialog, isOpen: isUnsavedChangesDialogOpen } = useUnsavedChangesGuard({
     when: isArrivalDirty,
     title: 'Save your progress?',
     description: 'You have unsaved changes. Would you like to save your progress before leaving?',
@@ -5067,7 +5067,7 @@ const ArrivalsPage = () => {
           </AnimatePresence>
 
           {/* Fixed action row: portal to body so z-index wins over BottomNav; sheet stays z-50 so tab bar stays visible */}
-          {showAdd &&
+          {showAdd && !isUnsavedChangesDialogOpen &&
             createPortal(
               <div
                 className="fixed bottom-[calc(3.5rem+env(safe-area-inset-bottom,0px)+0.25rem)] left-0 right-0 z-[55] bg-background/90 backdrop-blur-xl px-3 pt-2.5 pb-2 sm:px-4 sm:pt-3 md:px-6 md:pb-[max(0.5rem,env(safe-area-inset-bottom,0px))] lg:bottom-0 lg:pb-3 pointer-events-auto"
