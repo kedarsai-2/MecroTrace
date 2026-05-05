@@ -244,6 +244,7 @@ const CommoditySettings = () => {
       newCommodityName,
     });
   }, [items, showAddForm, newCommodityName, serializeItemsForDirty]);
+  const createSnapshotRef = useRef(createSnapshot);
 
   const isDirty = useMemo(() => {
     if (!canView || loading || baselineSnapshotRef.current == null) return false;
@@ -261,6 +262,10 @@ const CommoditySettings = () => {
       newCommodityName,
     });
   }, [items, showAddForm, newCommodityName, serializeItemsForDirty]);
+
+  useEffect(() => {
+    createSnapshotRef.current = createSnapshot;
+  }, [createSnapshot]);
 
   useEffect(() => {
     if (!canView || loading) return;
@@ -283,7 +288,7 @@ const CommoditySettings = () => {
 
     const hasUnsavedDraft =
       baselineSnapshotRef.current != null &&
-      createSnapshot() !== baselineSnapshotRef.current;
+      createSnapshotRef.current() !== baselineSnapshotRef.current;
 
     if (hasUnsavedDraft) {
       setHasAppliedQueryData(true);
@@ -296,7 +301,7 @@ const CommoditySettings = () => {
     ));
     baselineSnapshotRef.current = null;
     setHasAppliedQueryData(true);
-  }, [canView, commoditySettingsQuery.data, createSnapshot]);
+  }, [canView, commoditySettingsQuery.data]);
 
   useEffect(() => {
     if (commoditySettingsQuery.data) {
@@ -849,9 +854,18 @@ const CommoditySettings = () => {
           return (
           <motion.div key={item.commodity.commodity_id} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: index * 0.08 }}>
             <div className="glass-card rounded-2xl p-0 overflow-hidden">
-              <button
+              <div
+                role="button"
+                tabIndex={0}
                 onClick={() => setExpanded(expanded === index ? null : index)}
-                className="w-full flex items-center justify-between p-4"
+                onKeyDown={(e) => {
+                  if (e.target !== e.currentTarget) return;
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    setExpanded(expanded === index ? null : index);
+                  }
+                }}
+                className="w-full flex items-center justify-between p-4 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/60"
               >
                 <div className="flex items-center gap-3">
                   <div className="w-12 h-12 rounded-xl overflow-hidden shadow-md border-2 border-white/50 dark:border-white/20 flex-shrink-0">
@@ -872,6 +886,7 @@ const CommoditySettings = () => {
                 </div>
                 <div className="flex items-center gap-2">
                   <button
+                    type="button"
                     onClick={(e) => {
                       e.stopPropagation();
                       setDeleteConfirmId(item.commodity.commodity_id);
@@ -884,7 +899,7 @@ const CommoditySettings = () => {
                   </button>
                   {expanded === index ? <ChevronUp className="w-5 h-5 text-muted-foreground" /> : <ChevronDown className="w-5 h-5 text-muted-foreground" />}
                 </div>
-              </button>
+              </div>
 
               <AnimatePresence>
                 {expanded === index && (

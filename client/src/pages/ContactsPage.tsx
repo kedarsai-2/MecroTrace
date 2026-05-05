@@ -114,6 +114,39 @@ const ContactsPage = () => {
     }
   }, [contactsCacheKey, contactsQuery.data]);
 
+  useEffect(() => {
+    if (!modalMode || typeof window === 'undefined') return;
+
+    const scrollY = window.scrollY;
+    const { documentElement, body } = document;
+    const previousHtmlOverflow = documentElement.style.overflow;
+    const previousHtmlOverscrollBehavior = documentElement.style.overscrollBehavior;
+    const previousBodyOverflow = body.style.overflow;
+    const previousBodyPosition = body.style.position;
+    const previousBodyTop = body.style.top;
+    const previousBodyWidth = body.style.width;
+    const previousBodyOverscrollBehavior = body.style.overscrollBehavior;
+
+    documentElement.style.overflow = 'hidden';
+    documentElement.style.overscrollBehavior = 'none';
+    body.style.overflow = 'hidden';
+    body.style.position = 'fixed';
+    body.style.top = `-${scrollY}px`;
+    body.style.width = '100%';
+    body.style.overscrollBehavior = 'none';
+
+    return () => {
+      documentElement.style.overflow = previousHtmlOverflow;
+      documentElement.style.overscrollBehavior = previousHtmlOverscrollBehavior;
+      body.style.overflow = previousBodyOverflow;
+      body.style.position = previousBodyPosition;
+      body.style.top = previousBodyTop;
+      body.style.width = previousBodyWidth;
+      body.style.overscrollBehavior = previousBodyOverscrollBehavior;
+      window.scrollTo(0, scrollY);
+    };
+  }, [modalMode]);
+
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
     if (!q) return contacts;
@@ -686,17 +719,16 @@ const ContactsPage = () => {
         </DialogContent>
       </Dialog>
 
-      {/* View / Add / Edit Bottom Sheet */}
+      {/* View / Add / Edit Dialog */}
       <AnimatePresence>
         {modalMode && (
-          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[60] flex items-end lg:items-center justify-center bg-black/50 backdrop-blur-sm"
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[60] flex items-center justify-center overscroll-none bg-black/50 px-4 py-[max(1rem,env(safe-area-inset-top))] backdrop-blur-sm sm:px-6"
             onClick={e => { if (e.target === e.currentTarget) closeModal(); }}>
-            <motion.div initial={{ y: 400 }} animate={{ y: 0 }} exit={{ y: 400 }} transition={{ type: 'spring', damping: 30 }}
-              className="w-full max-w-lg rounded-t-3xl lg:rounded-3xl p-5 space-y-4 max-h-[85vh] overflow-y-auto shadow-2xl border border-border/30"
+            <motion.div initial={{ scale: 0.96, opacity: 0, y: 16 }} animate={{ scale: 1, opacity: 1, y: 0 }} exit={{ scale: 0.96, opacity: 0, y: 16 }} transition={{ type: 'spring', damping: 30 }}
+              className="w-full max-w-lg rounded-3xl p-5 space-y-4 max-h-[min(85dvh,720px)] overflow-y-auto overscroll-contain shadow-2xl border border-border/30"
               style={{ background: 'var(--glass-bg)', backdropFilter: 'blur(24px)', WebkitBackdropFilter: 'blur(24px)' }}
               
               onClick={e => e.stopPropagation()}>
-              <div className="w-10 h-1 bg-muted-foreground/20 rounded-full mx-auto mb-1 lg:hidden" />
 
               {/* VIEW MODE */}
               {modalMode === 'view' && selectedContact && (
