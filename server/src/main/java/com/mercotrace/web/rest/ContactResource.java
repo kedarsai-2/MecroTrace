@@ -24,17 +24,23 @@ import java.util.Optional;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.servlet.support.ServletUriComponentsBuilder;
 import tech.jhipster.web.util.HeaderUtil;
+import tech.jhipster.web.util.PaginationUtil;
 import tech.jhipster.web.util.ResponseUtil;
 
 /**
  * REST controller for managing {@link com.mercotrace.domain.Contact}.
  *
- * Note: This controller is intentionally kept simple (no criteria/pagination)
- * because the frontend loads all contacts client-side and performs its own filtering.
+ * The default list response remains an array for existing clients. Pagination/search are
+ * opt-in through page/size/q query parameters.
  */
 @RestController
 @RequestMapping("/api/contacts")
@@ -265,11 +271,28 @@ public class ContactResource {
     @GetMapping("")
     @PreAuthorize("hasAuthority(\"" + AuthoritiesConstants.CONTACTS_VIEW + "\")")
     public ResponseEntity<List<ContactDTO>> getAllContacts(
-        @RequestParam(name = "scope", required = false, defaultValue = "registry") String scope
+        @RequestParam(name = "scope", required = false, defaultValue = "registry") String scope,
+        @RequestParam(name = "page", required = false) Integer page,
+        @RequestParam(name = "size", required = false) Integer size,
+        @RequestParam(name = "q", required = false, defaultValue = "") String q
     ) {
-        LOG.debug("REST request to get Contacts for current trader, scope={}", scope);
+        LOG.debug("REST request to get Contacts for current trader, scope={}, page={}, size={}, q={}", scope, page, size, q);
         Long traderId = resolveTraderId();
         ContactListScope listScope = parseContactListScope(scope);
+        if (page != null || size != null) {
+            int pageNumber = page == null ? 0 : Math.max(0, page);
+            int pageSize = size == null ? 50 : Math.max(1, Math.min(size, 500));
+            Pageable pageable = PageRequest.of(pageNumber, pageSize);
+            Page<ContactDTO> contactPage = contactService.listContactsPage(traderId, listScope, pageable, q);
+            HttpHeaders headers = PaginationUtil.generatePaginationHttpHeaders(
+                ServletUriComponentsBuilder.fromCurrentRequest(),
+                contactPage
+            );
+            return ResponseEntity.ok().headers(headers).body(contactPage.getContent());
+        }
+        if (q != null && !q.isBlank()) {
+            return ResponseEntity.ok().body(contactService.listContactsPage(traderId, listScope, Pageable.unpaged(), q).getContent());
+        }
         List<ContactDTO> list = contactService.listContacts(traderId, listScope);
         return ResponseEntity.ok().body(list);
     }

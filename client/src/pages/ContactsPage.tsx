@@ -1,4 +1,6 @@
-import { useState, useEffect, useRef } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useWindowVirtualizer, measureElement } from '@tanstack/react-virtual';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
 import BottomNav from '@/components/BottomNav';
 import { ArrowLeft, Plus, Search, Phone, User as UserIcon, Users, BookOpen, AlertCircle, Eye, Pencil, Trash2, X, MapPin, Wallet } from 'lucide-react';
@@ -15,18 +17,59 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 import { RotateCcw } from 'lucide-react';
 import { usePermissions } from '@/lib/permissions';
 import ForbiddenPage from '@/components/ForbiddenPage';
+import { useAuth } from '@/context/AuthContext';
 
 type ModalMode = 'add' | 'view' | 'edit' | null;
+
+const CONTACTS_QUERY_KEY = ['contacts', 'registry'] as const;
+const CONTACTS_STALE_TIME_MS = 2 * 60 * 1000;
+const CONTACTS_LOCAL_CACHE_PREFIX = 'mercotrace.contacts.registry';
+
+type CachedContactsSnapshot = {
+  savedAt: number;
+  contacts: Contact[];
+};
+
+function readCachedContacts(cacheKey: string | null): CachedContactsSnapshot | null {
+  if (!cacheKey || typeof window === 'undefined') return null;
+  try {
+    const raw = window.localStorage.getItem(cacheKey);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as CachedContactsSnapshot;
+    if (!Array.isArray(parsed.contacts)) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function writeCachedContacts(cacheKey: string | null, contacts: Contact[]) {
+  if (!cacheKey || typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(cacheKey, JSON.stringify({ savedAt: Date.now(), contacts }));
+  } catch {
+    // Cache is best-effort; ignore quota/private-mode failures.
+  }
+}
+
+/** Single letter for avatar tiles (full mark/name overflows small boxes). */
+function contactAvatarInitial(contact: Pick<Contact, 'name' | 'mark'>): string {
+  const mark = contact.mark?.trim();
+  if (mark) return mark.charAt(0).toUpperCase();
+  const name = contact.name?.trim();
+  if (name) return name.charAt(0).toUpperCase();
+  return '?';
+}
 
 const ContactsPage = () => {
   const navigate = useNavigate();
   const isDesktop = useDesktopMode();
+  const { trader, user } = useAuth();
   const { canAccessModule, can } = usePermissions();
   const canView = canAccessModule('Contacts');
   const canCreate = can('Contacts', 'Create');
   const canEdit = can('Contacts', 'Edit');
   const canDelete = can('Contacts', 'Delete');
-  const [contacts, setContacts] = useState<Contact[]>([]);
   const [search, setSearch] = useState('');
   const [modalMode, setModalMode] = useState<ModalMode>(null);
   const [selectedContact, setSelectedContact] = useState<Contact | null>(null);
@@ -35,20 +78,68 @@ const ContactsPage = () => {
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
   const [restorePendingPhone, setRestorePendingPhone] = useState<string | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
+  const queryClient = useQueryClient();
+  const contactsCacheKey = useMemo(() => {
+    const ownerId = trader?.trader_id || user?.trader_id;
+    return ownerId ? `${CONTACTS_LOCAL_CACHE_PREFIX}.${ownerId}` : null;
+  }, [trader?.trader_id, user?.trader_id]);
 
-  const loadContacts = () => {
-    if (!canView) return;
-    contactApi.list({ scope: 'registry' }).then(setContacts);
+  const contactsQuery = useQuery({
+    queryKey: CONTACTS_QUERY_KEY,
+    queryFn: () => contactApi.list({ scope: 'registry' }),
+    enabled: canView,
+    staleTime: CONTACTS_STALE_TIME_MS,
+    refetchOnMount: 'always',
+    placeholderData: previousData => previousData,
+    initialData: () => readCachedContacts(contactsCacheKey)?.contacts,
+    initialDataUpdatedAt: () => readCachedContacts(contactsCacheKey)?.savedAt,
+  });
+
+  const contacts = contactsQuery.data ?? [];
+  const isLoadingInitial = contactsQuery.isLoading && contacts.length === 0;
+  const isRefreshing = contactsQuery.isFetching && !isLoadingInitial;
+  const error = contactsQuery.error;
+
+  const invalidateContacts = () => {
+    void queryClient.invalidateQueries({ queryKey: CONTACTS_QUERY_KEY });
   };
-  useEffect(() => { loadContacts(); }, []);
 
-  const filtered = contacts.filter(c => {
+  const updateContactsCache = (updater: (prev: Contact[]) => Contact[]) => {
+    queryClient.setQueryData<Contact[]>(CONTACTS_QUERY_KEY, prev => updater(prev ?? []));
+  };
+
+  useEffect(() => {
+    if (contactsQuery.data) {
+      writeCachedContacts(contactsCacheKey, contactsQuery.data);
+    }
+  }, [contactsCacheKey, contactsQuery.data]);
+
+  const filtered = useMemo(() => {
     const q = search.toLowerCase();
-    return (
+    if (!q) return contacts;
+    return contacts.filter(c => (
       c.name?.toLowerCase().includes(q) ||
       c.phone?.includes(q) ||
       c.mark?.toLowerCase().includes(q)
-    );
+    ));
+  }, [contacts, search]);
+
+  const desktopVirtualizer = useWindowVirtualizer({
+    count: isDesktop ? filtered.length : 0,
+    estimateSize: () => 64,
+    overscan: 12,
+    measureElement,
+    getItemKey: index => filtered[index]?.contact_id ?? index,
+    enabled: isDesktop && filtered.length > 0,
+  });
+
+  const mobileVirtualizer = useWindowVirtualizer({
+    count: isDesktop ? 0 : filtered.length,
+    estimateSize: () => 116,
+    overscan: 10,
+    measureElement,
+    getItemKey: index => filtered[index]?.contact_id ?? index,
+    enabled: !isDesktop && filtered.length > 0,
   });
 
   const openAdd = () => {
@@ -129,7 +220,8 @@ const ContactsPage = () => {
         address: formData.address.trim(),
         trader_id: '',
       });
-      setContacts(prev => [...prev, created]);
+      updateContactsCache(prev => [...prev, created]);
+      invalidateContacts();
       closeModal();
       toast.success(`✅ ${created.name} registered`);
     } catch (err) {
@@ -158,7 +250,7 @@ const ContactsPage = () => {
       }
       await contactApi.restore(existing.contact_id);
       setRestorePendingPhone(null);
-      loadContacts();
+      invalidateContacts();
       toast.success(`Contact with phone ${restorePendingPhone} restored. You can use it again.`);
     } catch (err) {
       console.error('Restore contact error:', err);
@@ -179,7 +271,8 @@ const ContactsPage = () => {
         mark: formData.mark.trim().toUpperCase(),
         address: formData.address.trim(),
       });
-      setContacts(prev => prev.map(c => c.contact_id === updated.contact_id ? updated : c));
+      updateContactsCache(prev => prev.map(c => c.contact_id === updated.contact_id ? updated : c));
+      invalidateContacts();
       closeModal();
       toast.success(`✏️ ${updated.name} updated successfully`);
     } catch (err) {
@@ -200,7 +293,8 @@ const ContactsPage = () => {
     const contact = contacts.find(c => c.contact_id === contactId);
     try {
       await contactApi.remove(contactId);
-      setContacts(prev => prev.filter(c => c.contact_id !== contactId));
+      updateContactsCache(prev => prev.filter(c => c.contact_id !== contactId));
+      invalidateContacts();
       setDeleteConfirm(null);
       toast.success(`🗑️ ${contact?.name || 'Contact'} deleted`);
     } catch (err) {
@@ -212,6 +306,15 @@ const ContactsPage = () => {
   if (!canView) {
     return <ForbiddenPage moduleName="Contacts" />;
   }
+
+  const showEmptyState = !isLoadingInitial && !error && filtered.length === 0;
+  const statusText = error
+    ? 'Unable to load contacts'
+    : isLoadingInitial
+      ? 'Loading contacts...'
+      : isRefreshing
+        ? 'Refreshing...'
+        : null;
 
   return (
     <div className="min-h-[100dvh] bg-gradient-to-b from-background via-background to-emerald-50/20 dark:to-emerald-950/10 pb-28 lg:pb-6">
@@ -236,7 +339,7 @@ const ContactsPage = () => {
                 </button>
                 <div>
                   <h1 className="text-xl font-bold text-white">Contacts</h1>
-                  <p className="text-white/70 text-xs">{contacts.length} contacts · Unified Registry</p>
+              <p className="text-white/70 text-xs">{contacts.length} contacts · Unified Registry{statusText ? ` · ${statusText}` : ''}</p>
                 </div>
               </div>
               <button onClick={openAdd} className="w-10 h-10 rounded-full bg-white/20 backdrop-blur flex items-center justify-center hover:bg-white/30 transition-colors">
@@ -261,7 +364,7 @@ const ContactsPage = () => {
             </div>
             <div>
               <h3 className="text-base font-bold text-foreground">Contact Registry</h3>
-              <p className="text-xs text-muted-foreground">{contacts.length} contacts · Unified across all transactions</p>
+              <p className="text-xs text-muted-foreground">{contacts.length} contacts · Unified across all transactions{statusText ? ` · ${statusText}` : ''}</p>
             </div>
           </div>
           <div className="flex items-center gap-3">
@@ -303,15 +406,53 @@ const ContactsPage = () => {
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((c, i) => (
-                  <tr key={c.contact_id} className={cn(
+                {isLoadingInitial && (
+                  <tr>
+                    <td colSpan={6} className="px-5 py-12 text-center">
+                      <div className="w-8 h-8 rounded-full border-2 border-emerald-500/30 border-t-emerald-500 animate-spin mx-auto mb-3" />
+                      <p className="text-muted-foreground font-medium">Loading contacts...</p>
+                    </td>
+                  </tr>
+                )}
+                {error && !isLoadingInitial && (
+                  <tr>
+                    <td colSpan={6} className="px-5 py-12 text-center">
+                      <AlertCircle className="w-8 h-8 text-destructive/70 mx-auto mb-3" />
+                      <p className="text-muted-foreground font-medium">Unable to load contacts</p>
+                      <p className="text-xs text-muted-foreground/60 mt-1">{error instanceof Error ? error.message : 'Please try again'}</p>
+                    </td>
+                  </tr>
+                )}
+                {!isLoadingInitial && !error && (() => {
+                  const virtualRows = desktopVirtualizer.getVirtualItems();
+                  const paddingTop = virtualRows.length > 0 ? virtualRows[0].start : 0;
+                  const paddingBottom =
+                    virtualRows.length > 0
+                      ? desktopVirtualizer.getTotalSize() - virtualRows[virtualRows.length - 1].end
+                      : 0;
+                  return (
+                    <>
+                      {paddingTop > 0 && (
+                        <tr aria-hidden>
+                          <td colSpan={6} style={{ height: paddingTop, padding: 0, border: 0 }} />
+                        </tr>
+                      )}
+                      {virtualRows.map(virtualRow => {
+                        const c = filtered[virtualRow.index];
+                        if (!c) return null;
+                        return (
+                  <tr
+                    key={virtualRow.key}
+                    data-index={virtualRow.index}
+                    ref={desktopVirtualizer.measureElement}
+                    className={cn(
                     "border-t border-border/20 hover:bg-muted/40 transition-all cursor-default group",
-                    i % 2 === 0 ? 'bg-emerald-500/[0.02] dark:bg-emerald-500/[0.03]' : ''
+                    virtualRow.index % 2 === 0 ? 'bg-emerald-500/[0.02] dark:bg-emerald-500/[0.03]' : ''
                   )}>
                     <td className="px-5 py-3.5">
                       <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-emerald-500 to-teal-500 flex items-center justify-center shadow-sm text-white text-xs font-bold shrink-0">
-                          {c.mark || c.name?.charAt(0) || '?'}
+                        <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-emerald-500 to-teal-500 flex items-center justify-center shadow-sm text-white text-xs font-bold shrink-0 overflow-hidden">
+                          {contactAvatarInitial(c)}
                         </div>
                         <span className="font-semibold text-foreground group-hover:text-primary transition-colors">{c.name}</span>
                       </div>
@@ -373,8 +514,17 @@ const ContactsPage = () => {
                       </div>
                     </td>
                   </tr>
-                ))}
-                {filtered.length === 0 && (
+                        );
+                      })}
+                      {paddingBottom > 0 && (
+                        <tr aria-hidden>
+                          <td colSpan={6} style={{ height: paddingBottom, padding: 0, border: 0 }} />
+                        </tr>
+                      )}
+                    </>
+                  );
+                })()}
+                {showEmptyState && (
                   <tr>
                     <td colSpan={6} className="px-5 py-12 text-center">
                       <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-emerald-500/10 to-teal-500/10 flex items-center justify-center mx-auto mb-3 border border-emerald-500/15">
@@ -391,13 +541,38 @@ const ContactsPage = () => {
         </div>
       ) : (
         /* Mobile Card View */
-        <div className="px-4 space-y-2">
-          {filtered.map((c, i) => (
-            <motion.div key={c.contact_id} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.04 }}
+        <div className="px-4">
+          {isLoadingInitial && (
+            <div className="glass-card rounded-2xl p-8 text-center">
+              <div className="w-8 h-8 rounded-full border-2 border-emerald-500/30 border-t-emerald-500 animate-spin mx-auto mb-3" />
+              <p className="text-muted-foreground font-medium">Loading contacts...</p>
+            </div>
+          )}
+          {error && !isLoadingInitial && (
+            <div className="glass-card rounded-2xl p-8 text-center">
+              <AlertCircle className="w-10 h-10 text-destructive/60 mx-auto mb-3" />
+              <p className="text-muted-foreground font-medium">Unable to load contacts</p>
+              <p className="text-sm text-muted-foreground/70 mt-1">{error instanceof Error ? error.message : 'Please try again'}</p>
+            </div>
+          )}
+          {!isLoadingInitial && !error && filtered.length > 0 && (
+            <div className="relative w-full" style={{ height: mobileVirtualizer.getTotalSize() }}>
+              {mobileVirtualizer.getVirtualItems().map(virtualRow => {
+                const c = filtered[virtualRow.index];
+                if (!c) return null;
+                return (
+                  <div
+                    key={virtualRow.key}
+                    data-index={virtualRow.index}
+                    ref={mobileVirtualizer.measureElement}
+                    className="absolute left-0 top-0 w-full pb-2"
+                    style={{ transform: `translateY(${virtualRow.start}px)` }}
+                  >
+            <motion.div initial={false}
               className="glass-card rounded-2xl p-3 group hover:shadow-lg transition-all">
               <div className="flex items-center gap-3 mb-2">
                 <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-500 flex items-center justify-center shadow-md shadow-emerald-500/20 relative overflow-hidden shrink-0">
-                  <span className="text-white font-bold text-sm relative z-10">{c.mark || c.name?.charAt(0) || '?'}</span>
+                  <span className="text-white font-bold text-sm relative z-10 leading-none">{contactAvatarInitial(c)}</span>
                   <div className="absolute inset-0 bg-[linear-gradient(135deg,rgba(255,255,255,0.3)_0%,transparent_50%)]" />
                 </div>
                 <div className="flex-1 min-w-0">
@@ -447,8 +622,12 @@ const ContactsPage = () => {
                 </button>
               </div>
             </motion.div>
-          ))}
-          {filtered.length === 0 && (
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          {showEmptyState && (
             <div className="glass-card rounded-2xl p-8 text-center">
               <UserIcon className="w-10 h-10 text-muted-foreground/30 mx-auto mb-3" />
               <p className="text-muted-foreground font-medium">No contacts found</p>
@@ -532,8 +711,8 @@ const ContactsPage = () => {
                   <div className="rounded-2xl bg-gradient-to-br from-emerald-500 to-teal-500 p-5 text-white relative overflow-hidden">
                     <div className="absolute inset-0 bg-[linear-gradient(135deg,rgba(255,255,255,0.15)_0%,transparent_50%)]" />
                     <div className="relative z-10 flex items-center gap-4">
-                      <div className="w-16 h-16 rounded-2xl bg-white/20 backdrop-blur flex items-center justify-center border border-white/30">
-                        <span className="text-2xl font-bold">{selectedContact.mark || selectedContact.name?.charAt(0) || '?'}</span>
+                      <div className="w-16 h-16 rounded-2xl bg-white/20 backdrop-blur flex items-center justify-center border border-white/30 overflow-hidden">
+                        <span className="text-2xl font-bold leading-none">{contactAvatarInitial(selectedContact)}</span>
                       </div>
                       <div>
                         <h2 className="text-xl font-bold">{selectedContact.name}</h2>

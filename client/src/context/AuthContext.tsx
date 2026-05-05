@@ -48,14 +48,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     let cancelled = false;
 
     // Skip trader bootstrap entirely when user is in the admin or contact portal.
-    if (
-      typeof window !== 'undefined' &&
-      (window.location.pathname.startsWith('/admin') || window.location.pathname.startsWith('/contact'))
-    ) {
+    if (typeof window !== 'undefined') {
+      const pathname = window.location.pathname;
+      const isAdminPath = pathname.startsWith('/admin');
+      const isContactPortalPath = pathname === '/contact' || pathname.startsWith('/contact/');
+      if (!isAdminPath && !isContactPortalPath) {
+        // continue with trader bootstrap below
+      } else {
       setHasBootstrapped(true);
       return () => {
         cancelled = true;
       };
+      }
     }
 
     const bootstrap = async () => {
