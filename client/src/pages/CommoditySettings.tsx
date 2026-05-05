@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
 import BottomNav from '@/components/BottomNav';
 import { Plus, Trash2, AlertTriangle, ChevronDown, ChevronUp, ArrowLeft, Save, Package, RotateCcw } from 'lucide-react';
@@ -17,6 +18,7 @@ import ForbiddenPage from '@/components/ForbiddenPage';
 import { ConfirmDeleteDialog } from '@/components/ConfirmDeleteDialog';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import useUnsavedChangesGuard from '@/hooks/useUnsavedChangesGuard';
+import { useAuth } from '@/context/AuthContext';
 
 import onionImg from '@/assets/commodities/onion.jpg';
 import potatoImg from '@/assets/commodities/potato.jpg';
@@ -24,6 +26,18 @@ import dryChiliImg from '@/assets/commodities/dry-chili.jpg';
 import tomatoImg from '@/assets/commodities/tomato.jpg';
 
 const commodityImages: Record<string, string> = { 'Onion': onionImg, 'Potato': potatoImg, 'Dry Chili': dryChiliImg, 'Tomato': tomatoImg };
+const COMMODITY_SETTINGS_QUERY_KEY = ['commodity-settings', 'full-configs'] as const;
+const COMMODITY_SETTINGS_STALE_TIME_MS = 2 * 60 * 1000;
+const COMMODITY_SETTINGS_LOCAL_CACHE_PREFIX = 'mercotrace.commodity-settings.full-configs';
+
+type CommoditySettingsQueryData = {
+  commodities: Commodity[];
+  fullConfigs: FullCommodityConfigDto[];
+};
+
+type CachedCommoditySettingsSnapshot = CommoditySettingsQueryData & {
+  savedAt: number;
+};
 
 interface LocalCommodityConfig {
   commodity: Commodity;
@@ -89,6 +103,43 @@ function fullConfigToLocal(commodity: Commodity, full: FullCommodityConfigDto): 
   };
 }
 
+function buildLocalCommodityConfigs(
+  commodities: Commodity[],
+  fullConfigs: FullCommodityConfigDto[],
+): LocalCommodityConfig[] {
+  const fullConfigByCommodityId = new Map(
+    fullConfigs.map((full) => [String(full.commodityId), full]),
+  );
+
+  return commodities.map((commodity) => {
+    const full = fullConfigByCommodityId.get(String(commodity.commodity_id));
+    if (full) return fullConfigToLocal(commodity, full);
+    return fullConfigToLocal(commodity, { commodityId: Number(commodity.commodity_id) || 0 });
+  });
+}
+
+function readCachedCommoditySettings(cacheKey: string | null): CachedCommoditySettingsSnapshot | null {
+  if (!cacheKey || typeof window === 'undefined') return null;
+  try {
+    const raw = window.localStorage.getItem(cacheKey);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as CachedCommoditySettingsSnapshot;
+    if (!Array.isArray(parsed.commodities) || !Array.isArray(parsed.fullConfigs)) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function writeCachedCommoditySettings(cacheKey: string | null, data: CommoditySettingsQueryData) {
+  if (!cacheKey || typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(cacheKey, JSON.stringify({ ...data, savedAt: Date.now() }));
+  } catch {
+    // Snapshot cache is best-effort; ignore quota/private-mode failures.
+  }
+}
+
 function parseOptionalPercentField(raw: number | string | undefined | null): number | undefined {
   if (raw === undefined || raw === null) return undefined;
   if (typeof raw === 'string') {
@@ -122,14 +173,26 @@ function validateOptionalGstSplitPercent(
 const CommoditySettings = () => {
   const navigate = useNavigate();
   const isDesktop = useDesktopMode();
+  const { trader, user } = useAuth();
   const { canAccessModule, can } = usePermissions();
   const canView = canAccessModule('Commodity Settings');
   const canCreate = can('Commodity Settings', 'Create');
   const canEdit = can('Commodity Settings', 'Edit');
   const canDelete = can('Commodity Settings', 'Delete');
+  const queryClient = useQueryClient();
+  const ownerId = trader?.trader_id || user?.trader_id;
+  const queryOwnerId = ownerId || 'current';
+  const commoditySettingsQueryKey = useMemo(
+    () => [...COMMODITY_SETTINGS_QUERY_KEY, queryOwnerId] as const,
+    [queryOwnerId],
+  );
+  const commoditySettingsCacheKey = useMemo(
+    () => ownerId ? `${COMMODITY_SETTINGS_LOCAL_CACHE_PREFIX}.${ownerId}` : null,
+    [ownerId],
+  );
   const [items, setItems] = useState<LocalCommodityConfig[]>([]);
   const [expanded, setExpanded] = useState<number | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [hasAppliedQueryData, setHasAppliedQueryData] = useState(false);
   const [showAddForm, setShowAddForm] = useState(false);
   const [newCommodityName, setNewCommodityName] = useState('');
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
@@ -139,8 +202,25 @@ const CommoditySettings = () => {
     | { kind: 'hamali'; cIndex: number; slabIndex: number }
     | { kind: 'charge'; cIndex: number; chargeIndex: number };
   const [pendingInlineRemove, setPendingInlineRemove] = useState<InlineRemove | null>(null);
-  const [refreshTrigger, setRefreshTrigger] = useState(0);
   const baselineSnapshotRef = useRef<string | null>(null);
+
+  const commoditySettingsQuery = useQuery({
+    queryKey: commoditySettingsQueryKey,
+    queryFn: async (): Promise<CommoditySettingsQueryData> => {
+      const [commodities, fullConfigs] = await Promise.all([
+        commodityApi.list(),
+        commodityApi.getAllFullConfigs(),
+      ]);
+      return { commodities, fullConfigs };
+    },
+    enabled: canView,
+    staleTime: COMMODITY_SETTINGS_STALE_TIME_MS,
+    refetchOnMount: true,
+    placeholderData: previousData => previousData,
+    initialData: () => readCachedCommoditySettings(commoditySettingsCacheKey) ?? undefined,
+    initialDataUpdatedAt: () => readCachedCommoditySettings(commoditySettingsCacheKey)?.savedAt,
+  });
+  const loading = canView && !hasAppliedQueryData && !commoditySettingsQuery.isError;
 
   const serializeItemsForDirty = useCallback((list: LocalCommodityConfig[]) => {
     return list.map((item) => ({
@@ -190,32 +270,55 @@ const CommoditySettings = () => {
   }, [canView, loading, createSnapshot]);
 
   useEffect(() => {
-    const load = async () => {
-      if (!canView) {
-        setLoading(false);
-        return;
-      }
-      try {
-        const [commodities, fullConfigs] = await Promise.all([
-          commodityApi.list(),
-          commodityApi.getAllFullConfigs(),
-        ]);
-        const result: LocalCommodityConfig[] = commodities.map((c) => {
-          const full = fullConfigs.find((f: FullCommodityConfigDto) => String(f.commodityId) === String(c.commodity_id));
-          if (full) return fullConfigToLocal(c, full);
-          return fullConfigToLocal(c, { commodityId: Number(c.commodity_id) || 0 });
-        });
-        setItems(result);
-      baselineSnapshotRef.current = null;
-      } catch (err) {
-        console.error('Load commodities:', err);
-        toast.error('Failed to load commodity settings');
-      } finally {
-        setLoading(false);
-      }
-    };
-    load();
-  }, [canView, refreshTrigger]);
+    setHasAppliedQueryData(false);
+    baselineSnapshotRef.current = null;
+  }, [commoditySettingsQueryKey]);
+
+  useEffect(() => {
+    if (!canView) {
+      setHasAppliedQueryData(true);
+      return;
+    }
+    if (!commoditySettingsQuery.data) return;
+
+    const hasUnsavedDraft =
+      baselineSnapshotRef.current != null &&
+      createSnapshot() !== baselineSnapshotRef.current;
+
+    if (hasUnsavedDraft) {
+      setHasAppliedQueryData(true);
+      return;
+    }
+
+    setItems(buildLocalCommodityConfigs(
+      commoditySettingsQuery.data.commodities,
+      commoditySettingsQuery.data.fullConfigs,
+    ));
+    baselineSnapshotRef.current = null;
+    setHasAppliedQueryData(true);
+  }, [canView, commoditySettingsQuery.data, createSnapshot]);
+
+  useEffect(() => {
+    if (commoditySettingsQuery.data) {
+      writeCachedCommoditySettings(commoditySettingsCacheKey, commoditySettingsQuery.data);
+    }
+  }, [commoditySettingsCacheKey, commoditySettingsQuery.data]);
+
+  useEffect(() => {
+    if (!commoditySettingsQuery.isError) return;
+    console.error('Load commodities:', commoditySettingsQuery.error);
+    toast.error('Failed to load commodity settings');
+    setHasAppliedQueryData(true);
+  }, [commoditySettingsQuery.error, commoditySettingsQuery.isError]);
+
+  const updateCommoditySettingsCache = useCallback((
+    updater: (previous: CommoditySettingsQueryData) => CommoditySettingsQueryData,
+  ) => {
+    queryClient.setQueryData<CommoditySettingsQueryData>(commoditySettingsQueryKey, previous => {
+      if (!previous) return previous;
+      return updater(previous);
+    });
+  }, [commoditySettingsQueryKey, queryClient]);
 
   const updateConfig = (index: number, updates: Partial<CommodityConfiguration>) => {
     setItems(prev => prev.map((item, i) => {
@@ -322,6 +425,10 @@ const CommoditySettings = () => {
       setShowAddForm(false);
       setExpanded(items.length);
       baselineSnapshotRef.current = null;
+      updateCommoditySettingsCache(previous => ({
+        ...previous,
+        commodities: [...previous.commodities, created],
+      }));
       toast.success(`"${name}" added successfully`);
     } catch (err) {
       if (err instanceof CommodityApiError && err.errorKey === 'commoditynameexistsinactive') {
@@ -344,8 +451,8 @@ const CommoditySettings = () => {
       await commodityApi.restore(existing.commodity_id);
       setRestorePendingName(null);
       setNewCommodityName('');
-      setRefreshTrigger(prev => prev + 1);
       baselineSnapshotRef.current = null;
+      await commoditySettingsQuery.refetch();
       toast.success(`"${restorePendingName}" restored. You can use it again.`);
     } catch (err) {
       console.error('Restore commodity error:', err);
@@ -369,6 +476,10 @@ const CommoditySettings = () => {
       setExpanded(null);
       setDeleteConfirmId(null);
       baselineSnapshotRef.current = null;
+      updateCommoditySettingsCache(previous => ({
+        commodities: previous.commodities.filter(c => String(c.commodity_id) !== String(commodityId)),
+        fullConfigs: previous.fullConfigs.filter(c => String(c.commodityId) !== String(commodityId)),
+      }));
       toast.success(`"${name}" removed`);
     } catch (err) {
       console.error('Delete commodity error:', err);
@@ -574,10 +685,16 @@ const CommoditySettings = () => {
     };
 
     try {
-      await commodityApi.saveFullConfig(item.commodity.commodity_id, payload);
+      const saved = await commodityApi.saveFullConfig(item.commodity.commodity_id, payload);
       toast.success(`✅ ${commodityName} settings saved successfully!`);
       setExpanded(null); // Close the expanded panel so list shows as normal
       refreshDirtyBaseline();
+      updateCommoditySettingsCache(previous => {
+        const nextFullConfigs = previous.fullConfigs.some(full => String(full.commodityId) === String(saved.commodityId))
+          ? previous.fullConfigs.map(full => String(full.commodityId) === String(saved.commodityId) ? saved : full)
+          : [...previous.fullConfigs, saved];
+        return { ...previous, fullConfigs: nextFullConfigs };
+      });
     } catch (err) {
       console.error('Save commodity config:', err);
       toast.error('Failed to save settings');
