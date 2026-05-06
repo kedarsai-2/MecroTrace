@@ -57,6 +57,7 @@ export default function LocationSearchInput({
   const lastRequestAtRef = useRef(0);
   const fetchGenerationRef = useRef(0);
   const MIN_REQUEST_INTERVAL_MS = 1100; // Nominatim: max 1 request per second
+  const MIN_QUERY_LEN = 1;
 
   const updateDropdownPos = useCallback(() => {
     if (wrapRef.current) {
@@ -74,7 +75,8 @@ export default function LocationSearchInput({
   }, [value]);
 
   useEffect(() => {
-    if (!query.trim() || query.length < 2) {
+    const trimmedQuery = query.trim();
+    if (!trimmedQuery || trimmedQuery.length < MIN_QUERY_LEN) {
       setSuggestions([]);
       setOpen(false);
       setSearchFinished(false);
@@ -107,7 +109,7 @@ export default function LocationSearchInput({
           .then((data: NominatimResult[]) => {
             if (gen !== fetchGenerationRef.current) return;
             setSuggestions(data);
-            setOpen(data.length > 0 || query.trim().length >= 2);
+            setOpen(data.length > 0 || query.trim().length >= MIN_QUERY_LEN);
             updateDropdownPos();
           })
           .catch((err: unknown) => {
@@ -117,7 +119,7 @@ export default function LocationSearchInput({
               (err instanceof Error && err.name === 'AbortError');
             if (aborted) return;
             setSuggestions([]);
-            setOpen(query.trim().length >= 2);
+            setOpen(query.trim().length >= MIN_QUERY_LEN);
             updateDropdownPos();
           })
           .finally(() => {
@@ -154,7 +156,7 @@ export default function LocationSearchInput({
   };
 
   const showUseTypedRow =
-    searchFinished && !loading && query.trim().length >= 2 && suggestions.length === 0;
+    searchFinished && !loading && query.trim().length >= MIN_QUERY_LEN && suggestions.length === 0;
 
   const handleFocus = () => {
     if (suggestions.length > 0 || showUseTypedRow) {

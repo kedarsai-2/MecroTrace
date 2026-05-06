@@ -26,6 +26,11 @@ export interface BidInfo {
   /** Total bags for this seller on the same vehicle (seller qty) */
   sellerVehicleQty?: number;
   /**
+   * Lot-level bag count for canonical identifier last segment (Sales Pad / Billing / Print Hub).
+   * Must not be the buyer line `quantity` unless that line owns the full lot.
+   */
+  lotTotalQty?: number;
+  /**
    * When set (e.g. from completed auction API), overrides summed bid quantities for identifier totals.
    * Logistics may omit so totals are derived from bids.
    */
@@ -46,6 +51,13 @@ export interface BidInfo {
   auctionEntryId?: number;
   /** Set when this lot is a self-sale re-auction unit. */
   selfSaleUnitId?: number | null;
+  /** Optional fields from auction result entry (migrate / delete flows). */
+  tokenAdvance?: number;
+  presetApplied?: number;
+  presetType?: "PROFIT" | "LOSS";
+  buyerId?: number | null;
+  isScribble?: boolean;
+  isSelfSale?: boolean;
 }
 
 type ThermalPayload = { html: string; thermalText: string };
@@ -70,14 +82,21 @@ function lotDisplay(bid: BidInfo): string {
 }
 
 /**
- * Lot identifier: {vehicleMark}-{vehicleTotal}/{sellerMark}-{sellerTotal}/{lotName}/{lineQty}
- * (e.g. AB-200/SA-122/SA1/22). Aligns with Sales Pad / Billing.
+ * Lot identifier: {vehicleMark}-{vehicleTotal}/{sellerMark}-{sellerTotal}/{lotName}/{lotBagCount}
+ * (e.g. AB-200/SA-122/SA1/22). Mirrors BillingPage `formatLotIdentifierForBillEntry` / Sales Pad.
  */
 export function formatLotIdentifierForBid(bid: BidInfo): string {
-  const vTotal = bid.vehicleTotalQty ?? bid.quantity;
-  const sTotal = bid.sellerVehicleQty ?? bid.quantity;
+  const lineQty = Math.max(0, Math.floor(Number(bid.quantity) || 0));
+  const rawLt = bid.lotTotalQty;
+  const lotQty =
+    rawLt != null && Number.isFinite(Number(rawLt)) && Number(rawLt) > 0 ? Number(rawLt) : lineQty;
   const lotName = (bid.lotName || '').trim() || String(bid.lotNumber);
-  const lotQty = bid.quantity;
+  const rawVt = bid.vehicleTotalQty ?? bid.auctionVehicleTotalQty;
+  const vTotal =
+    rawVt != null && Number.isFinite(Number(rawVt)) && Number(rawVt) > 0 ? Number(rawVt) : lotQty;
+  const rawSv = bid.sellerVehicleQty ?? bid.auctionSellerTotalQty;
+  const sTotal =
+    rawSv != null && Number.isFinite(Number(rawSv)) && Number(rawSv) > 0 ? Number(rawSv) : lotQty;
   return formatAuctionLotIdentifier({
     vehicleMark: bid.vehicleMark,
     vehicleTotalQty: vTotal,

@@ -134,6 +134,8 @@ export interface AuctionResultDTO {
   sellerMark?: string;
   vehicleTotalQty?: number;
   sellerTotalQty?: number;
+  /** Lot bag count from arrival (last segment of canonical lot identifier; not bid line qty). */
+  lotBagCount?: number;
   sellerSerial?: number;
   lotNumber?: number;
   origin?: string;

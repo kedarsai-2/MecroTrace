@@ -1,7 +1,7 @@
 /**
  * Canonical auction lot identifier (Sales Pad, Billing, Logistics, print hub).
- * Format: {vehicleMark}-{vehicleTotalQty}/{sellerMark}-{sellerTotalQty}/{lotName}/{lotQty}
- * Example: AB-200/SA-122/SA1/22
+ * Format: {vehicleMark}-{vehicleTotalQty}/{sellerMark}-{sellerTotalQty}/{lotName}/{lotBagCount}
+ * Example: AB-200/SA-122/SA1/22 — final segment is **lot** bag count, not buyer line quantity.
  * When marks are blank, segments fall back to qty-only (e.g. 200/122/SA1/22).
  */
 export function formatAuctionLotIdentifier(parts: {

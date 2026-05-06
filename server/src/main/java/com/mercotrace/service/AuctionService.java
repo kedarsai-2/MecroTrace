@@ -833,6 +833,10 @@ public class AuctionService {
 
         auctionEntryRepository.delete(entry);
         List<AuctionEntry> refreshed = auctionEntryRepository.findAllByAuctionId(auction.getId());
+        if (refreshed.isEmpty() && auction.getCompletedAt() != null) {
+            auction.setCompletedAt(null);
+            auctionRepository.save(auction);
+        }
         return buildSessionDTO(auction, lot, refreshed);
     }
 
@@ -1302,6 +1306,7 @@ public class AuctionService {
             dto.setSellerVehicleId(lot.getSellerVehicleId());
             dto.setSellerSerial(lot.getSellerSerialNo());
             dto.setLotNumber(lot.getLotSerialNo());
+            dto.setLotBagCount(lot.getBagCount());
             if (lot.getCommodityId() != null) {
                 Commodity commodity = commodityRepository.findById(lot.getCommodityId()).orElse(null);
                 dto.setCommodityName(commodity != null ? commodity.getCommodityName() : null);

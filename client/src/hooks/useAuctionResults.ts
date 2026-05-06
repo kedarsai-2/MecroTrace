@@ -22,6 +22,11 @@ export type UseAuctionResultsOptions = {
   onProgress?: (p: AuctionResultsProgress) => void;
 };
 
+export type RefetchAuctionResultsOptions = {
+  /** Keep existing rows visible while fresh pages load. */
+  keepPreviousData?: boolean;
+};
+
 /**
  * Auction results from `/module-auctions/results`, loaded page-by-page.
  * `auctionResults` grows as pages arrive; `loading` clears after first page so UI can render fast.
@@ -33,7 +38,7 @@ export function useAuctionResults(options?: UseAuctionResultsOptions): {
   resultsComplete: boolean;
   totalElements: number | null;
   error: Error | null;
-  refetch: () => Promise<void>;
+  refetch: (options?: RefetchAuctionResultsOptions) => Promise<void>;
 } {
   const [auctionResults, setAuctionResults] = useState<AuctionResultDTO[]>([]);
   const [loading, setLoading] = useState(true);
@@ -47,7 +52,7 @@ export function useAuctionResults(options?: UseAuctionResultsOptions): {
   const onProgressRef = useRef(options?.onProgress);
   onProgressRef.current = options?.onProgress;
 
-  const refetch = useCallback(async () => {
+  const refetch = useCallback(async (options?: RefetchAuctionResultsOptions) => {
     genRef.current += 1;
     const gen = genRef.current;
     abortRef.current?.abort();
@@ -55,8 +60,10 @@ export function useAuctionResults(options?: UseAuctionResultsOptions): {
     abortRef.current = ac;
     const { signal } = ac;
 
-    setAuctionResults([]);
-    setLoading(true);
+    if (!options?.keepPreviousData) {
+      setAuctionResults([]);
+    }
+    setLoading(!options?.keepPreviousData);
     setLoadingMore(false);
     setResultsComplete(false);
     setTotalElements(null);

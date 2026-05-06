@@ -7,10 +7,12 @@ import {
   ChevronDown,
   Eye,
   Layers,
+  Loader2,
   Package,
   Printer,
   Save,
   Search,
+  Trash2,
   User,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
@@ -24,14 +26,17 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
 import BottomNav from '@/components/BottomNav';
 import { toast } from 'sonner';
 import { useAuth } from '@/context/AuthContext';
 import { useAuctionResults } from '@/hooks/useAuctionResults';
 import { printLogApi, arrivalsApi, logisticsApi } from '@/services/api';
+import { auctionApi, type AuctionBidCreateRequest } from '@/services/api/auction';
 import type { ArrivalDetail, ArrivalFullDetail } from '@/services/api/arrivals';
 import {
   directPrint,
@@ -51,6 +56,33 @@ import type { BidInfo } from '@/utils/printTemplates';
 export type { BidInfo };
 
 const bidKey = (b: BidInfo) => `${b.lotId}:${b.bidNumber}`;
+
+function roundMoney2(n: number): number {
+  return Math.round((Number(n) || 0) * 100) / 100;
+}
+
+/** 409 from auction PATCH/POST when sold qty vs recorded lot bags (Billing: second save with allow lot increase). */
+function isAuctionQuantityAllowIncreaseConflict(err: unknown): boolean {
+  return Boolean(err && typeof err === 'object' && (err as { isConflict?: boolean }).isConflict);
+}
+
+/** Stable key for migrate/delete selection (matches Billing-style `ae:id` when present). */
+function logisticsBidSelectionKey(b: BidInfo): string {
+  if (b.auctionEntryId != null && Number.isFinite(Number(b.auctionEntryId))) {
+    return `ae:${b.auctionEntryId}`;
+  }
+  return `${b.lotId}:${b.bidNumber}`;
+}
+
+function sameLogisticsBuyer(
+  a: { buyerMark?: string; buyerName?: string },
+  b: { buyerMark?: string; buyerName?: string },
+): boolean {
+  return (
+    (a.buyerMark || '').toLowerCase() === (b.buyerMark || '').toLowerCase()
+    && (a.buyerName || '').toLowerCase() === (b.buyerName || '').toLowerCase()
+  );
+}
 
 /** List / table row key — `lotId:bidNumber` is not unique in some API payloads; prefer auction entry id. */
 const bidListKey = (b: BidInfo, indexInList: number): string => {
@@ -87,6 +119,12 @@ const buyerChittiHeaderLines = (g: { buyerName: string; buyerMark: string }): { 
   if (nameIsOnlyMark) return { primary: mark || name };
   return { primary: name, secondary: mark || undefined };
 };
+
+const searchMigrateBidTableInset = 'px-2 sm:px-2.5';
+
+/** Native `type="number"` spin buttons hidden; plain numeric box (see BillingPage / SettlementPage). */
+const numberInputNoSpinnerClass =
+  '[appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none';
 
 const BUYER_CHITTI_BULK_BTN_CLASS =
   'h-8 min-h-8 text-[10px] px-2.5 font-bold text-[#FFFFFF] border border-[rgba(255,255,255,0.25)] rounded-md transition-shadow shadow-[0_0_10px_rgba(91,140,255,0.85)] hover:shadow-[0_0_14px_rgba(123,97,255,0.9)] active:opacity-90 touch-manipulation';
@@ -210,6 +248,7 @@ const LogisticsPage = () => {
     loadingMore: auctionResultsLoadingMore,
     resultsComplete: auctionResultsComplete,
     totalElements: auctionResultsTotal,
+    refetch: refetchAuctionResults,
   } = useAuctionResults();
   const [arrivalDetails, setArrivalDetails] = useState<ArrivalDetail[]>([]);
   const [arrivalDetailsComplete, setArrivalDetailsComplete] = useState(false);
@@ -324,6 +363,11 @@ const LogisticsPage = () => {
             auction.selfSaleUnitId != null && Number(auction.selfSaleUnitId) > 0
               ? Number(auction.selfSaleUnitId)
               : null;
+          const rawLotBag = auction.lotBagCount ?? auction.lot_bag_count;
+          const lotTotalQty =
+            rawLotBag != null && Number.isFinite(Number(rawLotBag)) && Number(rawLotBag) > 0
+              ? Number(rawLotBag)
+              : undefined;
           (auction.entries || []).forEach((entry: any) => {
             const entryBuyerMark = String(entry.buyerMark ?? entry.buyer_mark ?? '').trim();
             if (entryBuyerMark === '__M0_UNB__') return;
@@ -368,6 +412,12 @@ const LogisticsPage = () => {
                 ? Number(rawEntryId)
                 : undefined;
 
+            const buyerIdRaw = entry.buyerId ?? entry.buyer_id;
+            const buyerId =
+              buyerIdRaw != null && Number.isFinite(Number(buyerIdRaw))
+                ? Number(buyerIdRaw)
+                : null;
+
             allBids.push({
               bidNumber: entry.bidNumber,
               buyerMark: entry.buyerMark,
@@ -376,6 +426,7 @@ const LogisticsPage = () => {
               rate: entry.rate,
               lotId: String(auction.lotId),
               lotName,
+              lotTotalQty,
               sellerName,
               sellerSerial,
               lotNumber,
@@ -389,6 +440,12 @@ const LogisticsPage = () => {
               sellerMark: sellerMark || undefined,
               auctionVehicleTotalQty,
               auctionSellerTotalQty,
+              tokenAdvance: Number(entry.tokenAdvance ?? entry.token_advance ?? 0) || undefined,
+              presetApplied: entry.presetApplied ?? entry.preset_applied ?? undefined,
+              presetType: entry.presetType ?? entry.preset_type ?? undefined,
+              buyerId,
+              isScribble: Boolean(entry.isScribble ?? entry.is_scribble),
+              isSelfSale: Boolean(entry.isSelfSale ?? entry.is_self_sale),
             });
           });
         });
@@ -542,6 +599,35 @@ const LogisticsPage = () => {
   const chittiPrintRateLabelBase = useId();
   const [chittiPreviewMark, setChittiPreviewMark] = useState<string | null>(null);
 
+  const [pendingRemoveBid, setPendingRemoveBid] = useState<BidInfo | null>(null);
+  const [removeBidSaving, setRemoveBidSaving] = useState(false);
+  const [migrateDialogOpen, setMigrateDialogOpen] = useState(false);
+  const [migrateTarget, setMigrateTarget] = useState<{ buyerMark: string; buyerName: string } | null>(null);
+  const [migrateSourceSearch, setMigrateSourceSearch] = useState('');
+  const [migrateSourceGroup, setMigrateSourceGroup] = useState<{
+    buyerMark: string;
+    buyerName: string;
+    bids: BidInfo[];
+    totalQty: number;
+    totalAmount: number;
+  } | null>(null);
+  const [migrateSelectedKeys, setMigrateSelectedKeys] = useState<string[]>([]);
+  const [migrateQtyByKey, setMigrateQtyByKey] = useState<Record<string, number>>({});
+  const [migrateSaving, setMigrateSaving] = useState(false);
+  const [showMigrateSourceSuggestions, setShowMigrateSourceSuggestions] = useState(false);
+  const migrateSourceSelectRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const onPointerDown = (e: MouseEvent) => {
+      if (!migrateSourceSelectRef.current) return;
+      if (!migrateSourceSelectRef.current.contains(e.target as Node)) {
+        setShowMigrateSourceSuggestions(false);
+      }
+    };
+    document.addEventListener('mousedown', onPointerDown);
+    return () => document.removeEventListener('mousedown', onPointerDown);
+  }, []);
+
   useEffect(() => {
     setBuyerChittiSelected((prev) => {
       const out: Record<string, Set<string>> = { ...prev };
@@ -693,6 +779,245 @@ const LogisticsPage = () => {
   const uniqueLots = useMemo(() => new Set(bids.map(b => b.lotId)).size, [bids]);
   const uniqueBuyers = useMemo(() => new Set(bids.map(b => b.buyerMark || b.buyerName)).size, [bids]);
   const uniqueSellers = useMemo(() => new Set(bids.map(b => b.sellerName)).size, [bids]);
+
+  const migrateSourceBuyerOptions = useMemo(() => {
+    if (!migrateTarget) return [];
+    const q = migrateSourceSearch.trim().toLowerCase();
+    const candidates = buyerGroups.filter(g => !sameLogisticsBuyer(g, migrateTarget));
+    if (!q) return candidates;
+    return candidates.filter(
+      g =>
+        (g.buyerMark || '').toLowerCase().includes(q) ||
+        (g.buyerName || '').toLowerCase().includes(q),
+    );
+  }, [buyerGroups, migrateTarget, migrateSourceSearch]);
+
+  const migrateLiveSourceGroup = useMemo(() => {
+    if (!migrateSourceGroup) return null;
+    const m = (migrateSourceGroup.buyerMark || '').toLowerCase();
+    const n = (migrateSourceGroup.buyerName || '').toLowerCase();
+    return (
+      buyerGroups.find(
+        g => (g.buyerMark || '').toLowerCase() === m && (g.buyerName || '').toLowerCase() === n,
+      ) ?? null
+    );
+  }, [buyerGroups, migrateSourceGroup]);
+
+  const migrateVisibleEntries = useMemo(() => {
+    if (!migrateLiveSourceGroup) return [];
+    return migrateLiveSourceGroup.bids.filter(b => Math.floor(Number(b.quantity) || 0) > 0);
+  }, [migrateLiveSourceGroup]);
+
+  const migrateVisibleRowKeys = useMemo(
+    () => migrateVisibleEntries.map(b => logisticsBidSelectionKey(b)),
+    [migrateVisibleEntries],
+  );
+
+  const openMigrateDialog = useCallback((g: (typeof buyerGroups)[number]) => {
+    setMigrateTarget({ buyerMark: g.buyerMark, buyerName: g.buyerName });
+    setMigrateSourceSearch('');
+    setMigrateSourceGroup(null);
+    setMigrateSelectedKeys([]);
+    setMigrateQtyByKey({});
+    setShowMigrateSourceSuggestions(false);
+    setMigrateDialogOpen(true);
+  }, []);
+
+  const toggleMigrateBidSelection = useCallback((b: BidInfo) => {
+    const key = logisticsBidSelectionKey(b);
+    setMigrateSelectedKeys(prev => (prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]));
+  }, []);
+
+  const toggleMigrateSelectAllVisible = useCallback(() => {
+    if (migrateVisibleRowKeys.length === 0) return;
+    setMigrateSelectedKeys(prev => {
+      const allOn = migrateVisibleRowKeys.every(k => prev.includes(k));
+      if (allOn) return [];
+      return [...migrateVisibleRowKeys];
+    });
+  }, [migrateVisibleRowKeys]);
+
+  const migrateOneBidRow = async (
+    bid: BidInfo,
+    qty: number,
+    target: { buyerMark: string; buyerName: string; buyerId?: number | null },
+  ): Promise<boolean> => {
+    let usedLotIncrease = false;
+    const entryId = bid.auctionEntryId;
+    if (entryId == null || !Number.isFinite(Number(entryId))) {
+      throw new Error('Missing auction entry id');
+    }
+    const maxQty = Math.floor(Number(bid.quantity) || 0);
+    if (maxQty <= 0 || qty <= 0) throw new Error('Invalid quantity');
+    const q = Math.min(maxQty, qty);
+
+    const tokFull = Number(bid.tokenAdvance) || 0;
+    const selfSale = Boolean(bid.isSelfSale && bid.selfSaleUnitId != null && bid.selfSaleUnitId > 0);
+
+    if (selfSale) {
+      const unitId = bid.selfSaleUnitId as number;
+      if (q === maxQty) {
+        await auctionApi.updateSelfSaleBid(unitId, entryId, {
+          billing_reassign_buyer: true,
+          buyer_name: target.buyerName,
+          buyer_mark: target.buyerMark,
+          buyer_id: target.buyerId ?? undefined,
+        });
+        return false;
+      }
+      const ratio = q / maxQty;
+      const tokM = roundMoney2(tokFull * ratio);
+      const tokRem = roundMoney2(tokFull - tokM);
+      await auctionApi.updateSelfSaleBid(unitId, entryId, {
+        quantity: maxQty - q,
+        token_advance: tokRem,
+      });
+      await auctionApi.addSelfSaleBid(unitId, {
+        buyer_name: target.buyerName,
+        buyer_mark: target.buyerMark,
+        buyer_id: target.buyerId ?? undefined,
+        rate: bid.rate,
+        quantity: q,
+        token_advance: tokM,
+        preset_applied: bid.presetApplied ?? 0,
+        preset_type: bid.presetType ?? 'PROFIT',
+        is_scribble: bid.isScribble ?? false,
+        is_self_sale: true,
+      });
+      return false;
+    }
+
+    const lotId = bid.lotId;
+    if (q === maxQty) {
+      await auctionApi.updateBid(lotId, entryId, {
+        billing_reassign_buyer: true,
+        buyer_name: target.buyerName,
+        buyer_mark: target.buyerMark,
+        buyer_id: target.buyerId ?? undefined,
+      });
+      return false;
+    }
+    const ratio = q / maxQty;
+    const tokM = roundMoney2(tokFull * ratio);
+    const tokRem = roundMoney2(tokFull - tokM);
+
+    const patchSourceQty = (allowLotIncrease: boolean) =>
+      auctionApi.updateBid(lotId, entryId, {
+        quantity: maxQty - q,
+        token_advance: tokRem,
+        allow_lot_increase: allowLotIncrease,
+      });
+
+    try {
+      await patchSourceQty(false);
+    } catch (e) {
+      if (isAuctionQuantityAllowIncreaseConflict(e)) {
+        await patchSourceQty(true);
+        usedLotIncrease = true;
+      } else {
+        throw e;
+      }
+    }
+
+    const addPayload: AuctionBidCreateRequest = {
+      buyer_name: target.buyerName,
+      buyer_mark: target.buyerMark,
+      buyer_id: target.buyerId ?? undefined,
+      rate: bid.rate,
+      quantity: q,
+      token_advance: tokM,
+      preset_applied: bid.presetApplied ?? 0,
+      preset_type: bid.presetType ?? 'PROFIT',
+      is_scribble: bid.isScribble ?? false,
+    };
+
+    try {
+      await auctionApi.addBid(lotId, { ...addPayload, allow_lot_increase: false });
+    } catch (e) {
+      if (isAuctionQuantityAllowIncreaseConflict(e)) {
+        await auctionApi.addBid(lotId, { ...addPayload, allow_lot_increase: true });
+        usedLotIncrease = true;
+      } else {
+        throw e;
+      }
+    }
+
+    return usedLotIncrease;
+  };
+
+  const runLogisticsMigrate = async () => {
+    if (!migrateTarget || !migrateLiveSourceGroup) return;
+    if (migrateSelectedKeys.length === 0) {
+      toast.error('Select at least one lot');
+      return;
+    }
+    const targetRow = buyerGroups.find(g => sameLogisticsBuyer(g, migrateTarget));
+    const targetBuyerId = targetRow?.bids[0]?.buyerId ?? null;
+    const target = {
+      buyerMark: migrateTarget.buyerMark,
+      buyerName: migrateTarget.buyerName,
+      buyerId: targetBuyerId,
+    };
+    setMigrateSaving(true);
+    let migrated = 0;
+    let anyLotIncrease = false;
+    try {
+      for (const key of migrateSelectedKeys) {
+        const bid = migrateLiveSourceGroup.bids.find(b => logisticsBidSelectionKey(b) === key);
+        if (!bid) continue;
+        const rowMaxQty = Math.floor(Number(bid.quantity) || 0);
+        let qtyWant = migrateQtyByKey[key];
+        if (qtyWant === undefined || qtyWant === 0) qtyWant = rowMaxQty;
+        qtyWant = Math.floor(Number(qtyWant) || 0);
+        if (rowMaxQty <= 0 || qtyWant <= 0) continue;
+        const qty = Math.min(rowMaxQty, qtyWant);
+        const usedIncrease = await migrateOneBidRow(bid, qty, target);
+        if (usedIncrease) anyLotIncrease = true;
+        migrated++;
+      }
+      if (migrated === 0) {
+        toast.error('Enter a valid migrate quantity (bags)');
+        return;
+      }
+      await refetchAuctionResults({ keepPreviousData: true });
+      setMigrateDialogOpen(false);
+      setMigrateSelectedKeys([]);
+      setMigrateQtyByKey({});
+      toast.success(
+        anyLotIncrease
+          ? `${migrated} lot(s) moved to ${migrateTarget.buyerMark}. Lot bag count was increased where the recorded lot was below sold quantity (same as Billing “allow lot increase”).`
+          : `${migrated} lot(s) moved to ${migrateTarget.buyerMark}.`,
+      );
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Migrate failed');
+    } finally {
+      setMigrateSaving(false);
+    }
+  };
+
+  const confirmRemoveBid = async () => {
+    const bid = pendingRemoveBid;
+    if (!bid?.auctionEntryId) {
+      toast.error('Cannot remove: missing entry id');
+      return;
+    }
+    setRemoveBidSaving(true);
+    try {
+      const selfSale = Boolean(bid.isSelfSale && bid.selfSaleUnitId != null && bid.selfSaleUnitId > 0);
+      if (selfSale) {
+        await auctionApi.deleteSelfSaleBid(bid.selfSaleUnitId as number, bid.auctionEntryId);
+      } else {
+        await auctionApi.deleteBid(bid.lotId, bid.auctionEntryId);
+      }
+      await refetchAuctionResults({ keepPreviousData: true });
+      setPendingRemoveBid(null);
+      toast.success('Bid removed. Remaining quantity is available for trading again.');
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Remove failed');
+    } finally {
+      setRemoveBidSaving(false);
+    }
+  };
 
   const handlePrintSticker = async (bid: BidInfo) => {
     toast.info('🖨 Printing Sticker…');
@@ -1117,6 +1442,19 @@ const LogisticsPage = () => {
                           <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-2 min-w-0 shrink">
                             <button
                             type="button"
+                            onClick={() => openMigrateDialog(g)}
+                            className={cn(
+                              BUYER_CHITTI_BULK_BTN_CLASS,
+                              'h-8 shrink-0 justify-center inline-flex items-center gap-2 px-3',
+                            )}
+                            style={buyerChittiBulkBtnStyle}
+                            title="Search and migrate lots into this buyer"
+                          >
+                            <Search className="h-4 w-4 shrink-0" strokeWidth={2.25} aria-hidden />
+                            Search &amp; migrate
+                          </button>
+                            <button
+                            type="button"
                             onClick={() => setChittiPreviewMark(g.buyerMark)}
                             className={cn(
                               BUYER_CHITTI_BULK_BTN_CLASS,
@@ -1164,6 +1502,20 @@ const LogisticsPage = () => {
                           <h3 className="text-[11px] font-bold uppercase tracking-wide text-muted-foreground">
                             Current lots
                           </h3>
+                          <div className="flex flex-wrap items-center justify-end gap-2 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => openMigrateDialog(g)}
+                            className={cn(
+                              BUYER_CHITTI_BULK_BTN_CLASS,
+                              'md:hidden h-8 shrink-0 inline-flex items-center justify-center gap-2 px-3',
+                            )}
+                            style={buyerChittiBulkBtnStyle}
+                            title="Search and migrate lots into this buyer"
+                          >
+                            <Search className="h-4 w-4 shrink-0" strokeWidth={2.25} aria-hidden />
+                            Migrate
+                          </button>
                           <button
                             type="button"
                             onClick={() => setChittiPreviewMark(g.buyerMark)}
@@ -1177,6 +1529,7 @@ const LogisticsPage = () => {
                             <Eye className="h-4 w-4 shrink-0" strokeWidth={2.25} aria-hidden />
                             Preview
                           </button>
+                          </div>
                         </div>
                         <div className="hidden md:block min-w-0 pt-0.5">
                           {(() => {
@@ -1224,6 +1577,7 @@ const LogisticsPage = () => {
                                         <col className="w-[4.5rem]" />
                                         {printRateOn ? <col className="w-[4.75rem]" /> : null}
                                         <col className="w-[3.5rem]" />
+                                        <col className="w-9" />
                                       </colgroup>
                                       <thead>
                                         <tr style={buyerChittiTableHeadStyle}>
@@ -1259,10 +1613,18 @@ const LogisticsPage = () => {
                                           <th
                                             className={cn(
                                               CHITTI_TABLE_HEAD_CELL,
-                                              '!text-center whitespace-nowrap rounded-tr-xl pr-4',
+                                              '!text-center whitespace-nowrap',
                                             )}
                                           >
                                             Qty
+                                          </th>
+                                          <th
+                                            className={cn(
+                                              CHITTI_TABLE_HEAD_CELL,
+                                              '!text-center whitespace-nowrap rounded-tr-xl pr-1',
+                                            )}
+                                          >
+                                            <span className="sr-only">Remove</span>
                                           </th>
                                         </tr>
                                       </thead>
@@ -1305,8 +1667,20 @@ const LogisticsPage = () => {
                                                   </div>
                                                 </td>
                                               )}
-                                              <td className="py-1.5 pr-4 text-center tabular-nums align-middle whitespace-nowrap">
+                                              <td className="py-1.5 pr-2 text-center tabular-nums align-middle whitespace-nowrap">
                                                 {b.quantity}
+                                              </td>
+                                              <td className="py-1.5 pr-1 text-center align-middle">
+                                                <button
+                                                  type="button"
+                                                  title="Remove bid from buyer"
+                                                  disabled={b.auctionEntryId == null}
+                                                  onClick={() => setPendingRemoveBid(b)}
+                                                  className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-destructive hover:bg-destructive/10 disabled:pointer-events-none disabled:opacity-40"
+                                                  aria-label={`Remove lot ${formatLotIdentifierForBid(b)}`}
+                                                >
+                                                  <Trash2 className="h-4 w-4" strokeWidth={2.25} />
+                                                </button>
                                               </td>
                                             </tr>
                                           );
@@ -1355,9 +1729,9 @@ const LogisticsPage = () => {
                               return (
                                 <li
                                   key={bidListKey(b, rowIdx)}
-                                  className="rounded-xl border border-border/60 p-2.5"
+                                  className="flex items-start justify-between gap-2 rounded-xl border border-border/60 p-2.5"
                                 >
-                                  <div className="flex items-center gap-2">
+                                  <div className="flex items-center gap-2 min-w-0 flex-1">
                                     <div className="flex h-9 w-10 shrink-0 items-center justify-center">
                                       <Checkbox
                                         checked={on}
@@ -1378,6 +1752,16 @@ const LogisticsPage = () => {
                                       </p>
                                     </div>
                                   </div>
+                                  <button
+                                    type="button"
+                                    title="Remove bid from buyer"
+                                    disabled={b.auctionEntryId == null}
+                                    onClick={() => setPendingRemoveBid(b)}
+                                    className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-destructive hover:bg-destructive/10 disabled:pointer-events-none disabled:opacity-40"
+                                    aria-label={`Remove lot ${formatLotIdentifierForBid(b)}`}
+                                  >
+                                    <Trash2 className="h-4 w-4" strokeWidth={2.25} />
+                                  </button>
                                 </li>
                               );
                             })}
@@ -1662,6 +2046,278 @@ const LogisticsPage = () => {
               <p className="text-sm text-muted-foreground">Nothing to show.</p>
             )}
           </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={pendingRemoveBid != null}
+        onOpenChange={(open) => {
+          if (!open) setPendingRemoveBid(null);
+        }}
+      >
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Remove bid from buyer?</DialogTitle>
+            <DialogDescription>
+              This removes the line from the completed auction. Any bags return to the lot for trading. If that was the
+              only bid, the lot is opened again.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2 sm:gap-2">
+            <Button type="button" variant="outline" onClick={() => setPendingRemoveBid(null)}>
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              disabled={removeBidSaving}
+              onClick={() => void confirmRemoveBid()}
+            >
+              {removeBidSaving ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : null}
+              Remove
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={migrateDialogOpen}
+        onOpenChange={(open) => {
+          setMigrateDialogOpen(open);
+          if (!open) {
+            setMigrateTarget(null);
+            setMigrateSourceGroup(null);
+            setMigrateSelectedKeys([]);
+            setMigrateQtyByKey({});
+            setMigrateSourceSearch('');
+            setShowMigrateSourceSuggestions(false);
+          }
+        }}
+      >
+        <DialogContent className="dialog-content flex max-h-[min(92dvh,720px)] w-[calc(100vw-1rem)] max-w-xl min-w-0 flex-col gap-3 overflow-visible p-4 sm:w-full sm:p-6">
+          <DialogHeader className="min-w-0 shrink-0 space-y-1.5 text-left">
+            <DialogTitle className="break-words pr-7 text-base leading-snug sm:pr-8 sm:text-lg">
+              Search &amp; migrate into{' '}
+              {migrateTarget ? `${migrateTarget.buyerName} (${migrateTarget.buyerMark})` : 'buyer'}
+            </DialogTitle>
+            <DialogDescription className="text-xs">
+              Pick another buyer as source, select lots, adjust migrate quantities, then migrate into this buyer.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="relative z-30 shrink-0 space-y-1">
+            <Label htmlFor="logistics-migrate-source" className="text-xs font-semibold">
+              Source buyer
+            </Label>
+            <div ref={migrateSourceSelectRef} className="relative z-10">
+              <Input
+                id="logistics-migrate-source"
+                value={migrateSourceSearch}
+                onFocus={() => setShowMigrateSourceSuggestions(true)}
+                onChange={(e) => {
+                  setMigrateSourceSearch(e.target.value);
+                  setShowMigrateSourceSuggestions(true);
+                }}
+                placeholder="Search buyer mark or name…"
+                className="h-10 rounded-lg text-sm"
+                autoComplete="off"
+              />
+              {showMigrateSourceSuggestions && migrateDialogOpen && (
+                <div className="absolute left-0 top-full z-[200] mt-1 max-h-44 w-full min-w-[12rem] overflow-y-auto rounded-lg border border-border/50 bg-popover text-popover-foreground shadow-lg">
+                  {migrateSourceBuyerOptions.length === 0 ? (
+                    <p className="px-3 py-2 text-xs text-muted-foreground">No other buyer found.</p>
+                  ) : (
+                    migrateSourceBuyerOptions.map((b, idx) => (
+                      <button
+                        key={`${b.buyerMark}::${b.buyerName}::${idx}`}
+                        type="button"
+                        className="w-full border-b border-border/40 px-3 py-2 text-left last:border-b-0 hover:bg-muted/40"
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={() => {
+                          setMigrateSourceGroup(b);
+                          const keys = b.bids
+                            .filter((row) => Math.floor(Number(row.quantity) || 0) > 0)
+                            .map((row) => logisticsBidSelectionKey(row));
+                          setMigrateSelectedKeys(keys);
+                          setMigrateQtyByKey({});
+                          setMigrateSourceSearch(`${b.buyerMark} — ${b.buyerName}`);
+                          setShowMigrateSourceSuggestions(false);
+                        }}
+                      >
+                        <p className="text-xs font-semibold">
+                          {b.buyerMark} — {b.buyerName}
+                        </p>
+                        <p className="text-[11px] text-muted-foreground">{b.bids.length} lot(s)</p>
+                      </button>
+                    ))
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
+          {!migrateLiveSourceGroup || migrateVisibleEntries.length === 0 ? (
+            <p className="text-sm text-muted-foreground">Choose a source buyer with lots to move.</p>
+          ) : (
+            <div className="min-h-0 min-w-0 overflow-hidden">
+              <div className="max-h-[min(18rem,42vh)] overflow-auto overscroll-x-contain [-webkit-overflow-scrolling:touch]">
+                <div className={cn('min-w-[28rem]', searchMigrateBidTableInset)}>
+                  <table className="w-full table-fixed border-separate border-spacing-y-2 border-spacing-x-0 text-xs">
+                    <caption className="sr-only">
+                      Lots to migrate — select rows and set quantities to move.
+                    </caption>
+                    <colgroup>
+                      <col className="w-8" />
+                      <col />
+                      <col className="w-[7.5rem]" />
+                      <col className="w-[5.5rem]" />
+                      <col className="w-[9rem]" />
+                    </colgroup>
+                    <thead className="sticky top-0 z-10 bg-background shadow-[0_1px_0_0_hsl(var(--border)/0.5)]">
+                      <tr className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground sm:text-[11px]">
+                        <th scope="col" className="w-8 pb-2 pr-1 text-center align-bottom font-semibold">
+                          <input
+                            type="checkbox"
+                            checked={
+                              migrateVisibleRowKeys.length > 0
+                              && migrateVisibleRowKeys.every((k) => migrateSelectedKeys.includes(k))
+                            }
+                            disabled={migrateVisibleRowKeys.length === 0}
+                            onChange={toggleMigrateSelectAllVisible}
+                            className="h-4 w-4 rounded border-border disabled:opacity-50"
+                            aria-label={
+                              migrateVisibleRowKeys.length > 0
+                              && migrateVisibleRowKeys.every((k) => migrateSelectedKeys.includes(k))
+                                ? 'Unselect all lots'
+                                : 'Select all lots'
+                            }
+                          />
+                        </th>
+                        <th scope="col" className="min-w-0 pb-2 pr-2 text-left align-bottom font-semibold">
+                          Item
+                        </th>
+                        <th scope="col" className="pb-2 pl-1 text-right align-bottom font-semibold tabular-nums">
+                          Qty
+                        </th>
+                        <th scope="col" className="pb-2 text-right align-bottom font-semibold tabular-nums">
+                          Rate
+                        </th>
+                        <th scope="col" className="pb-2 pl-1 text-right align-bottom font-semibold tabular-nums">
+                          Preset
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {migrateVisibleEntries.map((entry) => {
+                        const bidKey = logisticsBidSelectionKey(entry);
+                        const checked = migrateSelectedKeys.includes(bidKey);
+                        const entryMaxQty = Math.max(0, Math.floor(Number(entry.quantity) || 0));
+                        const qtyVal = migrateQtyByKey[bidKey] ?? entryMaxQty;
+                        const enteredMigrateQty =
+                          entryMaxQty <= 0 ? 0 : Math.min(entryMaxQty, Math.max(0, Math.round(Number(qtyVal)) || 0));
+                        const remainingAfterMigrate = Math.max(0, entryMaxQty - enteredMigrateQty);
+                        const lotLabel = formatLotIdentifierForBid(entry);
+                        const rowCellBg = checked ? 'bg-primary/10' : 'bg-background group-hover:bg-muted/40';
+                        return (
+                          <tr
+                            key={bidKey}
+                            tabIndex={0}
+                            role="button"
+                            aria-pressed={checked}
+                            onClick={() => toggleMigrateBidSelection(entry)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter' || e.key === ' ') {
+                                e.preventDefault();
+                                toggleMigrateBidSelection(entry);
+                              }
+                            }}
+                            className={cn(
+                              'group cursor-pointer border-b border-border/40 text-left outline-none transition-colors last:border-b-0',
+                              'focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
+                              checked && 'border-primary/25',
+                            )}
+                          >
+                            <td
+                              className={cn('py-2 pl-0.5 pr-0 align-middle', rowCellBg)}
+                              onClick={(e) => e.stopPropagation()}
+                              onPointerDown={(e) => e.stopPropagation()}
+                            >
+                              <div className="flex h-8 items-center justify-center">
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  onClick={(e) => e.stopPropagation()}
+                                  onChange={() => toggleMigrateBidSelection(entry)}
+                                  className="h-4 w-4 rounded border-border"
+                                  aria-label={`Select ${lotLabel}`}
+                                />
+                              </div>
+                            </td>
+                            <td className={cn('max-w-0 py-2 pr-2 align-middle', rowCellBg)}>
+                              <p className="truncate font-semibold leading-tight text-foreground" title={lotLabel}>
+                                {lotLabel}
+                              </p>
+                            </td>
+                            <td
+                              className={cn('py-2 pl-1 align-middle', rowCellBg)}
+                              onClick={(e) => e.stopPropagation()}
+                              onPointerDown={(e) => e.stopPropagation()}
+                            >
+                              <div className="flex h-8 items-center justify-end gap-0.5 whitespace-nowrap tabular-nums">
+                                <Input
+                                  type="number"
+                                  inputMode="numeric"
+                                  min={0}
+                                  max={entryMaxQty}
+                                  disabled={entryMaxQty <= 0}
+                                  value={entryMaxQty <= 0 ? 0 : qtyVal}
+                                  onChange={(e) => {
+                                    if (entryMaxQty <= 0) return;
+                                    const n = Math.min(entryMaxQty, Math.max(0, Math.round(Number(e.target.value) || 0)));
+                                    setMigrateQtyByKey((prev) => ({ ...prev, [bidKey]: n }));
+                                  }}
+                                  className={cn(
+                                    'h-8 w-[3.25rem] min-w-[3rem] shrink-0 px-1.5 py-0 text-xs text-right tabular-nums',
+                                    numberInputNoSpinnerClass,
+                                  )}
+                                  title={`Migrate quantity for ${lotLabel}`}
+                                />
+                                <span className="shrink-0 select-none text-muted-foreground" aria-hidden>
+                                  /
+                                </span>
+                                <span className="min-w-[1.25rem] shrink-0 text-right text-muted-foreground tabular-nums">
+                                  {remainingAfterMigrate}
+                                </span>
+                              </div>
+                            </td>
+                            <td className={cn('py-2 text-right align-middle tabular-nums leading-none', rowCellBg)}>
+                              {Number(entry.rate || 0)}
+                            </td>
+                            <td className={cn('py-2 pl-1 text-right align-middle tabular-nums leading-none', rowCellBg)}>
+                              ₹{Number(entry.presetApplied ?? 0).toLocaleString('en-IN')}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          )}
+          </div>
+          <DialogFooter className="min-w-0 shrink-0 gap-2 sm:gap-2">
+            <Button type="button" variant="outline" onClick={() => setMigrateDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              disabled={migrateSaving || migrateSelectedKeys.length === 0 || !migrateLiveSourceGroup}
+              onClick={() => void runLogisticsMigrate()}
+            >
+              {migrateSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden /> : null}
+              Migrate selected ({migrateSelectedKeys.length})
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 
