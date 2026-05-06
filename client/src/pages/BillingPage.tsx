@@ -4531,7 +4531,7 @@ const BillingPage = () => {
                 </button>
                 {showBuyerSuggestions && !searchBidDialogOpen && (
                   <div className={cn("absolute z-50 top-full mt-1 w-full max-h-56 overflow-y-auto rounded-xl border border-border bg-background shadow-lg", searchBidDialogOpen && "z-[20]")}>
-                    {filteredBuyerOptions.length === 0 ? (
+                    {filteredBuyerOptions.length === 0 && buyerBidMarkInput.trim() ? (
                       <p className="px-3 py-2 text-xs text-muted-foreground">No buyers match your search.</p>
                     ) : (
                       filteredBuyerOptions.map((b, idx) => (
