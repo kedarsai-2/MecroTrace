@@ -40,9 +40,9 @@ export const adminAuthApi = {
 
     // Admin login returns a JWT token; prefer explicit token field, fall back to Authorization header.
     if (data && typeof (data as any).token === 'string') {
-      setAdminToken((data as any).token as string);
+      await setAdminToken((data as any).token as string);
     } else {
-      captureAuthTokenFromResponse(res, 'admin');
+      await captureAuthTokenFromResponse(res, 'admin');
     }
 
     const user: User = {
@@ -99,4 +99,3 @@ export const adminAuthApi = {
     }
   },
 };
-

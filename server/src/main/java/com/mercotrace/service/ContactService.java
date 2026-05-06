@@ -3,6 +3,8 @@ package com.mercotrace.service;
 import com.mercotrace.service.dto.ContactDTO;
 import java.util.List;
 import java.util.Optional;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 
 /**
  * Service Interface for managing {@link com.mercotrace.domain.Contact}.
@@ -74,6 +76,17 @@ public interface ContactService {
      * @param scope registry vs participants.
      */
     List<ContactDTO> listContacts(Long traderId, ContactListScope scope);
+
+    /**
+     * Paginated/searchable contact list for scalable registry views.
+     *
+     * @param traderId current trader.
+     * @param scope registry vs participants.
+     * @param pageable requested page and size.
+     * @param query optional name, phone, or mark fragment.
+     * @return page of contacts after applying the same visibility and dedupe rules as {@link #listContacts}.
+     */
+    Page<ContactDTO> listContactsPage(Long traderId, ContactListScope scope, Pageable pageable, String query);
 
     /**
      * When a portal (self-signup) contact is used in a trader flow, record the association so it appears in that trader's registry.

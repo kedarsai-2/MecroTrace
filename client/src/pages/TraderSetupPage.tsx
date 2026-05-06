@@ -326,7 +326,7 @@ const TraderSetupPage = () => {
     <div className="fixed inset-0 z-0 flex flex-col overflow-hidden bg-slate-950">
       <UnsavedChangesDialog />
       {/* Background — identical to login/register */}
-      <img src={loginBg} alt="" className="absolute inset-0 w-full h-full object-cover z-0" fetchPriority="high" decoding="async" width={1920} height={1080} />
+      <img src={loginBg} alt="" className="absolute inset-0 w-full h-full object-cover z-0" fetchpriority="high" decoding="async" width={1920} height={1080} />
       <div className="absolute inset-0 bg-gradient-to-br from-blue-900/75 via-blue-800/65 to-violet-900/75 z-[1]" />
       <div className="absolute inset-0 bg-[radial-gradient(circle_at_30%_20%,rgba(255,255,255,0.15)_0%,transparent_50%)] z-[1]" />
       <div className="absolute inset-0 bg-[radial-gradient(circle_at_70%_80%,rgba(123,97,255,0.2)_0%,transparent_40%)] z-[1]" />

@@ -50,7 +50,16 @@ const LoginScreen = () => {
   const [showPassword, setShowPassword] = useState(false);
 
   const { isDark, toggleTheme } = useTheme();
-  const { login, loginWithOtp, isLoading: traderLoading, error: traderError, clearError: clearTraderError } = useAuth();
+  const {
+    login,
+    loginWithOtp,
+    isAuthenticated: traderAuthenticated,
+    hasBootstrapped: traderBootstrapped,
+    trader,
+    isLoading: traderLoading,
+    error: traderError,
+    clearError: clearTraderError,
+  } = useAuth();
   const {
     login: contactLogin,
     loginWithProfile,
@@ -71,6 +80,12 @@ const LoginScreen = () => {
   const isLoading = audience === 'trader' ? traderLoading : contactLoading;
   const error = audience === 'trader' ? traderError : contactError;
   const clearError = audience === 'trader' ? clearTraderError : clearContactError;
+
+  useEffect(() => {
+    if (traderBootstrapped && traderAuthenticated && trader) {
+      navigate('/home', { replace: true });
+    }
+  }, [navigate, trader, traderAuthenticated, traderBootstrapped]);
 
   // Email validation
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -195,7 +210,7 @@ const LoginScreen = () => {
   return (
     <div className="fixed inset-0 z-0 flex flex-col overflow-hidden bg-slate-950" role="presentation">
       {/* Background image */}
-      <img src={loginBg} alt="" role="presentation" className="absolute inset-0 w-full h-full object-cover z-0" fetchPriority="high" decoding="async" width={1920} height={1080} />
+      <img src={loginBg} alt="" role="presentation" className="absolute inset-0 w-full h-full object-cover z-0" fetchpriority="high" decoding="async" width={1920} height={1080} />
       <div className="absolute inset-0 bg-gradient-to-br from-blue-900/70 via-blue-800/60 to-violet-900/70 z-[1]" />
       <div className="absolute inset-0 bg-[radial-gradient(circle_at_30%_20%,rgba(91,140,255,0.25)_0%,transparent_50%)] z-[1]" />
       <div className="absolute inset-0 bg-[radial-gradient(circle_at_70%_80%,rgba(123,97,255,0.3)_0%,transparent_40%)] z-[1]" />

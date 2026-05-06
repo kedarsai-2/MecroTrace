@@ -134,6 +134,10 @@ export interface AuctionResultDTO {
   sellerMark?: string;
   vehicleTotalQty?: number;
   sellerTotalQty?: number;
+  sellerSerial?: number;
+  lotNumber?: number;
+  origin?: string;
+  godown?: string;
   commodityName: string;
   auctionDatetime?: string;
   conductedBy?: string;

@@ -90,7 +90,9 @@ public class AdminAuthResource {
         }
 
         TraderAuthDTO dto = buildAdminAuthDto(account);
-        String jwt = authenticateController.createToken(authentication, loginVM.isRememberMe(), SecurityUtils.TOKEN_TYPE_ADMIN);
+        // Admin sessions deliberately ignore rememberMe. Super-admin/admin access must not become a 90-day session.
+        boolean rememberAdmin = false;
+        String jwt = authenticateController.createToken(authentication, rememberAdmin, SecurityUtils.TOKEN_TYPE_ADMIN);
 
         org.springframework.http.HttpHeaders headers = new org.springframework.http.HttpHeaders();
         headers.setBearerAuth(jwt);
@@ -100,7 +102,7 @@ public class AdminAuthResource {
             .secure(cookieSecure)
             .sameSite("Lax")
             .path("/")
-            .maxAge(Duration.ofSeconds(authenticateController.tokenValiditySeconds(loginVM.isRememberMe())))
+            .maxAge(Duration.ofSeconds(authenticateController.tokenValiditySeconds(rememberAdmin)))
             .build();
         headers.add(org.springframework.http.HttpHeaders.SET_COOKIE, cookie.toString());
 
@@ -198,4 +200,3 @@ public class AdminAuthResource {
         return dto;
     }
 }
-

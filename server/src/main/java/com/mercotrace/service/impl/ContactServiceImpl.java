@@ -15,13 +15,18 @@ import com.mercotrace.service.mapper.ContactMapper;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.cache.annotation.CacheEvict;
@@ -253,6 +258,26 @@ public class ContactServiceImpl implements ContactService {
     }
 
     @Override
+    @Transactional(readOnly = true)
+    public Page<ContactDTO> listContactsPage(Long traderId, ContactListScope scope, Pageable pageable, String query) {
+        Pageable pageRequest = pageable == null ? Pageable.ofSize(50) : pageable;
+        String needle = query == null ? "" : query.trim().toLowerCase(Locale.ROOT);
+        List<ContactDTO> filtered = listContacts(traderId, scope)
+            .stream()
+            .filter(dto -> matchesQuery(dto, needle))
+            .sorted(CONTACT_DTO_ORDER)
+            .collect(Collectors.toList());
+
+        if (pageRequest.isUnpaged()) {
+            return new PageImpl<>(filtered);
+        }
+
+        int start = Math.toIntExact(Math.min(pageRequest.getOffset(), filtered.size()));
+        int end = Math.min(start + pageRequest.getPageSize(), filtered.size());
+        return new PageImpl<>(filtered.subList(start, end), pageRequest, filtered.size());
+    }
+
+    @Override
     @CacheEvict(cacheNames = STOCK_PURCHASE_VENDORS_BY_TRADER_CACHE, key = "#traderId")
     public void ensureTraderUsesPortalContact(Long traderId, Long contactId) {
         if (traderId == null || contactId == null) {
@@ -340,12 +365,26 @@ public class ContactServiceImpl implements ContactService {
             .peek(d -> d.setPortalSignupLinked(Boolean.FALSE))
             .collect(Collectors.toList());
 
-        for (TraderPortalContactLink link : traderPortalContactLinkRepository.findAllByTraderIdOrderByLinkedAtDesc(traderId)) {
+        List<TraderPortalContactLink> links = traderPortalContactLinkRepository.findAllByTraderIdOrderByLinkedAtDesc(traderId);
+        List<Long> linkedIds = new ArrayList<>();
+        Set<Long> requestedIds = new HashSet<>();
+        for (TraderPortalContactLink link : links) {
             Long cid = link.getContactId();
             if (cid == null || seenIds.contains(cid)) {
                 continue;
             }
-            Contact global = contactRepository.findById(cid).orElse(null);
+            if (requestedIds.add(cid)) {
+                linkedIds.add(cid);
+            }
+        }
+
+        Map<Long, Contact> linkedContactsById = contactRepository
+            .findAllById(linkedIds)
+            .stream()
+            .collect(Collectors.toMap(Contact::getId, contact -> contact, (left, right) -> left));
+
+        for (Long cid : linkedIds) {
+            Contact global = linkedContactsById.get(cid);
             if (global == null || Boolean.FALSE.equals(global.getActive()) || global.getTraderId() != null) {
                 continue;
             }
@@ -370,6 +409,29 @@ public class ContactServiceImpl implements ContactService {
             }
         }
         return out;
+    }
+
+    private static final Comparator<ContactDTO> CONTACT_DTO_ORDER = Comparator
+        .comparing((ContactDTO dto) -> lowerSort(dto.getName()))
+        .thenComparing(dto -> lowerSort(dto.getMark()))
+        .thenComparing(dto -> lowerSort(dto.getPhone()))
+        .thenComparing(dto -> dto.getId() == null ? Long.MAX_VALUE : dto.getId());
+
+    private static boolean matchesQuery(ContactDTO dto, String needle) {
+        if (needle == null || needle.isBlank()) {
+            return true;
+        }
+        return containsLower(dto.getName(), needle) ||
+            containsLower(dto.getMark(), needle) ||
+            (dto.getPhone() != null && dto.getPhone().contains(needle));
+    }
+
+    private static boolean containsLower(String value, String needle) {
+        return value != null && value.toLowerCase(Locale.ROOT).contains(needle);
+    }
+
+    private static String lowerSort(String value) {
+        return value == null ? "" : value.toLowerCase(Locale.ROOT);
     }
 
     /**
@@ -463,4 +525,3 @@ public class ContactServiceImpl implements ContactService {
         }
     }
 }
-

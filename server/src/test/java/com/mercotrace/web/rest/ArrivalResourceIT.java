@@ -339,6 +339,132 @@ class ArrivalResourceIT {
 
     @Test
     @Transactional
+    void getAllArrivalsSearchMatchesVehicleNumberAndKeepsTotalCount() throws Exception {
+        ArrivalRequestDTO request = buildBasicRequest(true);
+        request.setVehicleNumber("SEARCH-VEH-001");
+
+        String responseBody = restArrivalMockMvc
+            .perform(post(ENTITY_API_URL).contentType(MediaType.APPLICATION_JSON).content(om.writeValueAsBytes(request)))
+            .andExpect(status().isCreated())
+            .andReturn()
+            .getResponse()
+            .getContentAsString();
+        ArrivalSummaryDTO created = om.readValue(responseBody, ArrivalSummaryDTO.class);
+        insertedVehicle = vehicleRepository.findById(created.getVehicleId()).orElse(null);
+
+        restArrivalMockMvc
+            .perform(get(ENTITY_API_URL + "?page=0&size=20&q=search-veh"))
+            .andExpect(status().isOk())
+            .andExpect(header().string("X-Total-Count", "1"))
+            .andExpect(jsonPath("$", hasSize(1)))
+            .andExpect(jsonPath("$[0].vehicleNumber").value("SEARCH-VEH-001"));
+    }
+
+    @Test
+    @Transactional
+    void getAllArrivalsSearchMatchesVehicleMarkAlias() throws Exception {
+        ArrivalRequestDTO request = buildBasicRequest(true);
+        request.setVehicleNumber("SEARCH-ALIAS-001");
+        request.setVehicleMarkAlias("VX91");
+
+        String responseBody = restArrivalMockMvc
+            .perform(post(ENTITY_API_URL).contentType(MediaType.APPLICATION_JSON).content(om.writeValueAsBytes(request)))
+            .andExpect(status().isCreated())
+            .andReturn()
+            .getResponse()
+            .getContentAsString();
+        ArrivalSummaryDTO created = om.readValue(responseBody, ArrivalSummaryDTO.class);
+        insertedVehicle = vehicleRepository.findById(created.getVehicleId()).orElse(null);
+
+        restArrivalMockMvc
+            .perform(get(ENTITY_API_URL + "?page=0&size=20&q=vx91"))
+            .andExpect(status().isOk())
+            .andExpect(header().string("X-Total-Count", "1"))
+            .andExpect(jsonPath("$", hasSize(1)))
+            .andExpect(jsonPath("$[0].vehicleMarkAlias").value("VX91"));
+    }
+
+    @Test
+    @Transactional
+    void getAllArrivalsSearchMatchesAnySellerContactName() throws Exception {
+        Contact secondary = new Contact();
+        secondary.setTraderId(1L);
+        secondary.setName("Secondary Match Seller");
+        secondary.setPhone("9888888888");
+        secondary.setOpeningBalance(BigDecimal.ZERO);
+        secondary.setCurrentBalance(BigDecimal.ZERO);
+        secondary = contactRepository.saveAndFlush(secondary);
+
+        ArrivalLotDTO secondaryLot = new ArrivalLotDTO();
+        secondaryLot.setLotName("LOT-2");
+        secondaryLot.setBagCount(8);
+        secondaryLot.setCommodityName(commodity.getCommodityName());
+
+        ArrivalSellerDTO secondarySeller = new ArrivalSellerDTO();
+        secondarySeller.setContactId(secondary.getId());
+        secondarySeller.setSellerName(secondary.getName());
+        secondarySeller.setSellerPhone(secondary.getPhone());
+        secondarySeller.setLots(List.of(secondaryLot));
+
+        ArrivalRequestDTO request = buildBasicRequest(true);
+        request.setVehicleNumber("SEARCH-SELLER-001");
+        request.setSellers(List.of(request.getSellers().get(0), secondarySeller));
+
+        String responseBody = restArrivalMockMvc
+            .perform(post(ENTITY_API_URL).contentType(MediaType.APPLICATION_JSON).content(om.writeValueAsBytes(request)))
+            .andExpect(status().isCreated())
+            .andReturn()
+            .getResponse()
+            .getContentAsString();
+        ArrivalSummaryDTO created = om.readValue(responseBody, ArrivalSummaryDTO.class);
+        insertedVehicle = vehicleRepository.findById(created.getVehicleId()).orElse(null);
+
+        restArrivalMockMvc
+            .perform(get(ENTITY_API_URL + "?page=0&size=20&q=secondary%20match"))
+            .andExpect(status().isOk())
+            .andExpect(header().string("X-Total-Count", "1"))
+            .andExpect(jsonPath("$", hasSize(1)))
+            .andExpect(jsonPath("$[0].vehicleNumber").value("SEARCH-SELLER-001"));
+    }
+
+    @Test
+    @Transactional
+    void getAllArrivalsSearchRespectsPartiallyCompletedFilter() throws Exception {
+        ArrivalRequestDTO completed = buildBasicRequest(true);
+        completed.setVehicleNumber("PARTIAL-Q-COMPLETE");
+        restArrivalMockMvc
+            .perform(post(ENTITY_API_URL).contentType(MediaType.APPLICATION_JSON).content(om.writeValueAsBytes(completed)))
+            .andExpect(status().isCreated());
+
+        ArrivalRequestDTO partial = buildBasicRequest(true);
+        partial.setVehicleNumber("PARTIAL-Q-DRAFT");
+        partial.setPartiallyCompleted(true);
+        String partialBody = restArrivalMockMvc
+            .perform(post(ENTITY_API_URL + "/partial").contentType(MediaType.APPLICATION_JSON).content(om.writeValueAsBytes(partial)))
+            .andExpect(status().isCreated())
+            .andReturn()
+            .getResponse()
+            .getContentAsString();
+        ArrivalSummaryDTO createdPartial = om.readValue(partialBody, ArrivalSummaryDTO.class);
+        insertedVehicle = vehicleRepository.findById(createdPartial.getVehicleId()).orElse(null);
+
+        restArrivalMockMvc
+            .perform(get(ENTITY_API_URL + "?page=0&size=20&q=partial-q&partiallyCompleted=false"))
+            .andExpect(status().isOk())
+            .andExpect(header().string("X-Total-Count", "1"))
+            .andExpect(jsonPath("$", hasSize(1)))
+            .andExpect(jsonPath("$[0].vehicleNumber").value("PARTIAL-Q-COMPLETE"));
+
+        restArrivalMockMvc
+            .perform(get(ENTITY_API_URL + "?page=0&size=20&q=partial-q&partiallyCompleted=true"))
+            .andExpect(status().isOk())
+            .andExpect(header().string("X-Total-Count", "1"))
+            .andExpect(jsonPath("$", hasSize(1)))
+            .andExpect(jsonPath("$[0].vehicleNumber").value("PARTIAL-Q-DRAFT"));
+    }
+
+    @Test
+    @Transactional
     void getArrivalByIdReturnsSellerSerialAndPatchPreservesIt() throws Exception {
         ArrivalRequestDTO request = buildBasicRequest(false);
         ArrivalLotDTO secondLot = new ArrivalLotDTO();
@@ -675,4 +801,3 @@ class ArrivalResourceIT {
         return request;
     }
 }
-

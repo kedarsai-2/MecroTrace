@@ -1,4 +1,4 @@
-import { useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback, Fragment, type ReactNode } from 'react';
+import { useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback, type ReactNode } from 'react';
 import { useWindowVirtualizer, measureElement } from '@tanstack/react-virtual';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -15,7 +15,7 @@ import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { useNavigate } from 'react-router-dom';
 import { cn } from '@/lib/utils';
 import { contactApi, arrivalsApi, commodityApi } from '@/services/api';
-import type { ArrivalSummary, ArrivalCreatePayload, ArrivalFullDetail, ArrivalDetail } from '@/services/api/arrivals';
+import type { ArrivalSummary, ArrivalCreatePayload, ArrivalFullDetail } from '@/services/api/arrivals';
 import { ArrivalDeletionBlockedError, formatArrivalDeletionBlockerCodes } from '@/services/api/arrivals';
 import ArrivalStatusBadge, { getArrivalStatus, type ArrivalStatus } from '@/components/arrivals/ArrivalStatusBadge';
 import ArrivalSummaryVehicleSellerQty from '@/components/arrivals/ArrivalSummaryVehicleSellerQty';
@@ -74,13 +74,6 @@ function sortArrivalSummaries(a: ArrivalSummary, b: ArrivalSummary): number {
   const tb = arrivalSummarySortKeyMs(b);
   if (tb !== ta) return tb - ta;
   return Number(b.vehicleId) - Number(a.vehicleId);
-}
-
-function sortArrivalDetails(a: ArrivalDetail, b: ArrivalDetail): number {
-  const ta = new Date(a.arrivalDatetime).getTime();
-  const tb = new Date(b.arrivalDatetime).getTime();
-  if (tb !== ta) return tb - ta;
-  return b.vehicleId - a.vehicleId;
 }
 
 // ── Types for local arrival data ──────────────────────────
@@ -943,15 +936,16 @@ const ArrivalsPage = () => {
   const [expandedDetail, setExpandedDetail] = useState<ArrivalFullDetail | null>(null);
   const [expandedDetailLoading, setExpandedDetailLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('');
   const summaryMode: 'arrivals' | 'sellers' | 'lots' = 'arrivals';
   type StatusFilter = 'ALL' | ArrivalStatus;
   const SUMMARY_STATUS_FILTERS: StatusFilter[] = ['ALL', 'PENDING', 'WEIGHED', 'AUCTIONED', 'SETTLED', 'PARTIALLY_COMPLETED'];
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('ALL');
   const [partialArrivals, setPartialArrivals] = useState<ArrivalSummary[]>([]);
   const [partialArrivalsLoading, setPartialArrivalsLoading] = useState(false);
-  const [arrivalDetails, setArrivalDetails] = useState<ArrivalDetail[]>([]);
   const loadArrivalsGenRef = useRef(0);
   const loadArrivalsAbortRef = useRef<AbortController | null>(null);
+  const formReferenceDataLoadRef = useRef<Promise<void> | null>(null);
   const arrivalFullDetailCacheRef = useRef<Map<string, ArrivalFullDetail>>(new Map());
   const arrivalFullDetailPrefetchingRef = useRef<Set<string>>(new Set());
   const [arrivalsStreamingMore, setArrivalsStreamingMore] = useState(false);
@@ -959,8 +953,6 @@ const ArrivalsPage = () => {
   const [completedArrivalsComplete, setCompletedArrivalsComplete] = useState(false);
   const [partialArrivalsTotal, setPartialArrivalsTotal] = useState<number | null>(null);
   const [partialArrivalsComplete, setPartialArrivalsComplete] = useState(false);
-  const [detailArrivalsTotal, setDetailArrivalsTotal] = useState<number | null>(null);
-  const [detailArrivalsComplete, setDetailArrivalsComplete] = useState(false);
   const [editingVehicleId, setEditingVehicleId] = useState<number | string | null>(null);
   const [editLoading, setEditLoading] = useState(false);
   const submitArrivalInFlightRef = useRef(false);
@@ -1542,11 +1534,27 @@ const ArrivalsPage = () => {
     }),
   }), [isMultiSeller, vehicleNumber, vehicleMarkAlias, loadedWeight, emptyWeight, deductedWeight, freightMethod, freightRate, freightKgs, noRental, advancePaid, brokerName, brokerContactId, narration, godown, gatepassNumber, origin, sellers]);
 
+  const haveEditSellersOrLotsChanged = useCallback(() => {
+    if (editingVehicleId == null || !editBaselineSnapshotRef.current) return true;
+    try {
+      const baseline = JSON.parse(editBaselineSnapshotRef.current) as { sellers?: unknown };
+      return JSON.stringify(baseline.sellers ?? []) !== JSON.stringify(serializeSellersForDirty(sellers));
+    } catch {
+      return true;
+    }
+  }, [editingVehicleId, sellers, serializeSellersForDirty]);
+
+  const formatArrivalEditBlockedMessage = useCallback((blockers: string[]) => {
+    const linked = formatArrivalDeletionBlockerCodes(blockers);
+    return `Seller or lot details cannot be changed because this arrival is already linked in: ${linked}. Edit only vehicle, weight, freight, broker, narration, and location fields, or remove/adjust those linked records first.`;
+  }, []);
+
   const handlePartialSave = useCallback(async (): Promise<boolean> => {
     try {
       setVehicleMarkAliasApiError(null);
       if (editingVehicleId != null) {
         const payload = buildPartialPayload();
+        const sellersChanged = haveEditSellersOrLotsChanged();
         await arrivalsApi.update(editingVehicleId, {
           vehicle_number: payload.vehicle_number,
           vehicle_mark_alias: vehicleMarkAlias.trim(),
@@ -1566,7 +1574,7 @@ const ArrivalsPage = () => {
           advance_paid: payload.advance_paid,
           multi_seller: payload.is_multi_seller,
           partially_completed: true,
-          sellers: payload.sellers,
+          sellers: sellersChanged ? payload.sellers : undefined,
         });
         arrivalFullDetailCacheRef.current.delete(String(editingVehicleId));
       } else {
@@ -1580,7 +1588,7 @@ const ArrivalsPage = () => {
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to save partial data';
       if (err instanceof ArrivalDeletionBlockedError) {
-        toast.error(message);
+        toast.error(formatArrivalEditBlockedMessage(err.blockers));
       } else if (message.includes('Vehicle mark/alias')) {
         setVehicleMarkAliasApiError(message);
         toast.error(message);
@@ -1589,9 +1597,9 @@ const ArrivalsPage = () => {
       }
       return false;
     }
-  }, [editingVehicleId, buildPartialPayload, vehicleMarkAlias]);
+  }, [editingVehicleId, buildPartialPayload, haveEditSellersOrLotsChanged, vehicleMarkAlias, formatArrivalEditBlockedMessage]);
 
-  const { confirmIfDirty, UnsavedChangesDialog } = useUnsavedChangesGuard({
+  const { confirmIfDirty, UnsavedChangesDialog, isOpen: isUnsavedChangesDialogOpen } = useUnsavedChangesGuard({
     when: isArrivalDirty,
     title: 'Save your progress?',
     description: 'You have unsaved changes. Would you like to save your progress before leaving?',
@@ -1610,14 +1618,38 @@ const ArrivalsPage = () => {
     [confirmIfDirty],
   );
 
+  const loadArrivalFormReferenceData = useCallback(async () => {
+    if (formReferenceDataLoadRef.current) return formReferenceDataLoadRef.current;
+    const promise = Promise.all([
+      contactApi.list({ scope: 'participants' }),
+      commodityApi.list(),
+      commodityApi.getAllFullConfigs(),
+    ])
+      .then(([loadedContacts, loadedCommodities, loadedCommodityConfigs]) => {
+        setContacts(loadedContacts);
+        setCommodities(loadedCommodities);
+        setCommodityConfigs(loadedCommodityConfigs);
+      })
+      .catch(err => {
+        console.error('Failed to load arrival form reference data:', err);
+      })
+      .finally(() => {
+        formReferenceDataLoadRef.current = null;
+      });
+    formReferenceDataLoadRef.current = promise;
+    return promise;
+  }, []);
+
   const openNewArrivalPanel = useCallback(() => {
     void (async () => {
       const ok = await confirmIfDirty();
       if (!ok) return;
+      void loadArrivalFormReferenceData();
       resetForm();
+      setShowAdd(true);
       setDesktopTab('new-arrival');
     })();
-  }, [confirmIfDirty]);
+  }, [confirmIfDirty, loadArrivalFormReferenceData]);
 
   const refreshBrokerDropdownPos = useCallback(() => {
     const el = brokerSearchWrapRef.current;
@@ -1837,6 +1869,13 @@ const ArrivalsPage = () => {
   );
   const totalNetWeightTons = useMemo(() => (totalNetWeightKg > 0 ? totalNetWeightKg / 1000 : 0), [totalNetWeightKg]);
 
+  useEffect(() => {
+    const id = window.setTimeout(() => {
+      setDebouncedSearchQuery(searchQuery.trim());
+    }, 250);
+    return () => window.clearTimeout(id);
+  }, [searchQuery]);
+
   const filteredArrivals = useMemo(() => {
     const source =
       statusFilter === 'PARTIALLY_COMPLETED'
@@ -1845,21 +1884,11 @@ const ArrivalsPage = () => {
           ? [...apiArrivals, ...partialArrivals].sort(sortArrivalSummaries)
           : apiArrivals;
     let result = source;
-    const q = searchQuery.trim().toLowerCase();
-    if (q) {
-      result = result.filter(a => {
-        if (String(a.vehicleNumber).toLowerCase().includes(q)) return true;
-        if (String(a.vehicleMarkAlias ?? '').toLowerCase().includes(q)) return true;
-        const detail = arrivalDetails.find(d => String(d.vehicleId) === String(a.vehicleId));
-        if (detail?.sellers?.some(s => (s.sellerName ?? '').toLowerCase().includes(q))) return true;
-        return false;
-      });
-    }
     if (statusFilter === 'PENDING' || statusFilter === 'WEIGHED' || statusFilter === 'AUCTIONED' || statusFilter === 'SETTLED') {
       result = result.filter(a => getArrivalStatus(a) === statusFilter);
     }
     return result;
-  }, [apiArrivals, partialArrivals, searchQuery, statusFilter, arrivalDetails]);
+  }, [apiArrivals, partialArrivals, statusFilter]);
 
   const statusCounts = useMemo(() => {
     const counts: Record<StatusFilter, number> = {
@@ -1877,15 +1906,17 @@ const ArrivalsPage = () => {
     if (s === 'PARTIALLY_COMPLETED') return 'Partially Completed';
     return s.charAt(0) + s.slice(1).toLowerCase();
   };
+  const isSearchDebouncing = searchQuery.trim() !== debouncedSearchQuery.trim();
   const activeArrivalsLoading =
-    statusFilter === 'ALL'
+    isSearchDebouncing ||
+    (statusFilter === 'ALL'
       ? apiArrivalsLoading || partialArrivalsLoading
       : statusFilter === 'PARTIALLY_COMPLETED'
         ? partialArrivalsLoading
-        : apiArrivalsLoading;
+        : apiArrivalsLoading);
 
   const allStreamsComplete =
-    completedArrivalsComplete && partialArrivalsComplete && detailArrivalsComplete;
+    completedArrivalsComplete && partialArrivalsComplete;
 
   const summaryVehiclesDisplay = useMemo(() => {
     const loaded = apiArrivals.length + partialArrivals.length;
@@ -1927,6 +1958,29 @@ const ArrivalsPage = () => {
     measureElement,
     getItemKey: index => String(filteredArrivals[index]?.vehicleId ?? index),
     enabled: !isDesktop && filteredArrivals.length > 0,
+  });
+
+  const desktopArrivalRows = useMemo(() => {
+    if (!isDesktop) return [];
+    return filteredArrivals.flatMap((arrival, arrivalIndex) => {
+      const rows: Array<
+        | { kind: 'summary'; arrival: ArrivalSummary; arrivalIndex: number; key: string }
+        | { kind: 'expanded'; arrival: ArrivalSummary; arrivalIndex: number; key: string }
+      > = [{ kind: 'summary', arrival, arrivalIndex, key: `summary-${arrival.vehicleId}` }];
+      if (sameArrivalVehicleId(expandedDetail?.vehicleId, arrival.vehicleId)) {
+        rows.push({ kind: 'expanded', arrival, arrivalIndex, key: `expanded-${arrival.vehicleId}` });
+      }
+      return rows;
+    });
+  }, [expandedDetail?.vehicleId, filteredArrivals, isDesktop]);
+
+  const desktopArrivalsVirtualizer = useWindowVirtualizer({
+    count: isDesktop ? desktopArrivalRows.length : 0,
+    estimateSize: index => (desktopArrivalRows[index]?.kind === 'expanded' ? 280 : 58),
+    overscan: 12,
+    measureElement,
+    getItemKey: index => desktopArrivalRows[index]?.key ?? index,
+    enabled: isDesktop && desktopArrivalRows.length > 0,
   });
 
   useEffect(() => {
@@ -1984,16 +2038,11 @@ const ArrivalsPage = () => {
     setCompletedArrivalsComplete(false);
     setPartialArrivalsTotal(null);
     setPartialArrivalsComplete(false);
-    setDetailArrivalsTotal(null);
-    setDetailArrivalsComplete(false);
     setApiArrivals([]);
     setPartialArrivals([]);
-    setArrivalDetails([]);
+    const q = debouncedSearchQuery.trim();
 
     const mergeSummaryMap = (map: Map<string, ArrivalSummary>, items: ArrivalSummary[]) => {
-      for (const it of items) map.set(String(it.vehicleId), it);
-    };
-    const mergeDetailMap = (map: Map<string, ArrivalDetail>, items: ArrivalDetail[]) => {
       for (const it of items) map.set(String(it.vehicleId), it);
     };
 
@@ -2009,6 +2058,7 @@ const ArrivalsPage = () => {
               size: ARRIVALS_PAGE_SIZE,
               sort: ARRIVAL_LIST_SORT,
               partiallyCompleted: false,
+              q,
             },
             { signal }
           );
@@ -2023,7 +2073,7 @@ const ArrivalsPage = () => {
           }
 
           mergeSummaryMap(merged, items);
-          applyIfCurrent(() => setApiArrivals([...merged.values()].sort(sortArrivalSummaries)));
+          applyIfCurrent(() => setApiArrivals([...merged.values()]));
 
           const noMore =
             items.length === 0 ||
@@ -2057,6 +2107,7 @@ const ArrivalsPage = () => {
               size: ARRIVALS_PAGE_SIZE,
               sort: ARRIVAL_LIST_SORT,
               partiallyCompleted: true,
+              q,
             },
             { signal }
           );
@@ -2071,7 +2122,7 @@ const ArrivalsPage = () => {
           }
 
           mergeSummaryMap(merged, items);
-          applyIfCurrent(() => setPartialArrivals([...merged.values()].sort(sortArrivalSummaries)));
+          applyIfCurrent(() => setPartialArrivals([...merged.values()]));
 
           const noMore =
             items.length === 0 ||
@@ -2091,51 +2142,8 @@ const ArrivalsPage = () => {
       }
     };
 
-    const runDetailStream = async () => {
-      const merged = new Map<string, ArrivalDetail>();
-      let page = 0;
-      let reportedTotal = 0;
-      try {
-        for (;;) {
-          const { items, totalElements } = await arrivalsApi.listDetailPage(
-            {
-              page,
-              size: ARRIVALS_PAGE_SIZE,
-              sort: ARRIVAL_LIST_SORT,
-            },
-            { signal }
-          );
-          if (signal.aborted || loadArrivalsGenRef.current !== myGen) return;
-
-          if (page === 0) {
-            reportedTotal = totalElements;
-            applyIfCurrent(() => setDetailArrivalsTotal(totalElements));
-          } else {
-            applyIfCurrent(() => setArrivalsStreamingMore(true));
-          }
-
-          mergeDetailMap(merged, items);
-          applyIfCurrent(() => setArrivalDetails([...merged.values()].sort(sortArrivalDetails)));
-
-          const noMore =
-            items.length === 0 ||
-            items.length < ARRIVALS_PAGE_SIZE ||
-            merged.size >= reportedTotal;
-          if (noMore) break;
-          page += 1;
-        }
-        applyIfCurrent(() => setDetailArrivalsComplete(true));
-      } catch (e) {
-        if (isAbortError(e) || loadArrivalsGenRef.current !== myGen) return;
-        applyIfCurrent(() => {
-          setArrivalDetails([]);
-          setDetailArrivalsComplete(true);
-        });
-      }
-    };
-
     try {
-      await Promise.all([runCompletedStream(), runPartialStream(), runDetailStream()]);
+      await Promise.all([runCompletedStream(), runPartialStream()]);
     } finally {
       applyIfCurrent(() => {
         setArrivalsStreamingMore(false);
@@ -2143,7 +2151,7 @@ const ArrivalsPage = () => {
         setPartialArrivalsLoading(false);
       });
     }
-  }, []);
+  }, [debouncedSearchQuery]);
 
   const loadContactsFromApi = useCallback(async () => {
     try {
@@ -2152,12 +2160,6 @@ const ArrivalsPage = () => {
     } catch (err) {
       console.error('Failed to reload contacts:', err);
     }
-  }, []);
-
-  useEffect(() => {
-    contactApi.list({ scope: 'participants' }).then(setContacts);
-    commodityApi.list().then(setCommodities);
-    commodityApi.getAllFullConfigs().then(setCommodityConfigs);
   }, []);
 
   useEffect(() => {
@@ -2810,6 +2812,7 @@ const ArrivalsPage = () => {
       ? expandedDetail
       : arrivalFullDetailCacheRef.current.get(key);
 
+    void loadArrivalFormReferenceData();
     setActiveSellerSearch(null);
     setSellerDropdown(false);
     setAddLotForm(null);
@@ -2858,6 +2861,7 @@ const ArrivalsPage = () => {
     }
     try {
       setVehicleMarkAliasApiError(null);
+      const sellersChanged = haveEditSellersOrLotsChanged();
       await arrivalsApi.update(editingVehicleId, {
         vehicle_number: vehicleNumber.trim() || undefined,
         vehicle_mark_alias: vehicleMarkAlias.trim(),
@@ -2878,7 +2882,7 @@ const ArrivalsPage = () => {
         no_rental: noRental,
         advance_paid: advancePaid ? parseFloat(advancePaid) : undefined,
         partially_completed: false,
-        sellers: sellers.length > 0 ? sellers.map(s => {
+        sellers: sellersChanged && sellers.length > 0 ? sellers.map(s => {
           const hasContactId = s.contact_id !== '' && !Number.isNaN(Number(s.contact_id));
           return {
             contact_id: hasContactId ? Number(s.contact_id) : null,
@@ -2908,7 +2912,7 @@ const ArrivalsPage = () => {
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to update arrival';
       if (err instanceof ArrivalDeletionBlockedError) {
-        toast.error(message);
+        toast.error(formatArrivalEditBlockedMessage(err.blockers));
       } else if (message.includes('Vehicle mark/alias')) {
         setVehicleMarkAliasApiError(message);
         toast.error(message);
@@ -2949,7 +2953,7 @@ const ArrivalsPage = () => {
                   <p className="text-white/70 text-xs">{activeArrivalsLoading ? '…' : totalLots} lots · Inward Logistics</p>
                 </div>
               </div>
-              <button onClick={() => { resetForm(); setShowAdd(true); }} className="w-10 h-10 rounded-full bg-white/20 backdrop-blur flex items-center justify-center">
+              <button onClick={openNewArrivalPanel} className="w-10 h-10 rounded-full bg-white/20 backdrop-blur flex items-center justify-center">
                 <Plus className="w-5 h-5 text-white" />
               </button>
             </div>
@@ -2965,10 +2969,7 @@ const ArrivalsPage = () => {
               </button>
               <button
                 type="button"
-                onClick={() => {
-                  resetForm();
-                  setShowAdd(true);
-                }}
+                onClick={openNewArrivalPanel}
                 className={mobileArrivalsStyleTab(showAdd)}
               >
                 New Arrival
@@ -3147,113 +3148,145 @@ const ArrivalsPage = () => {
                           </tr>
                         </thead>
                         <tbody>
-                          {filteredArrivals.map((a, i) => {
-                              const status = getArrivalStatus(a);
-                              const isExpanded = sameArrivalVehicleId(expandedDetail?.vehicleId, a.vehicleId);
-                              return (
-                                <Fragment key={a.vehicleId + '-' + i}>
-                                  <motion.tr
-                                    initial={{ opacity: 0 }}
-                                    animate={{ opacity: 1 }}
-                                    transition={{ delay: i * 0.03 }}
-                                    className="border-b border-border/20 hover:bg-muted/20 transition-colors cursor-pointer"
-                                    onClick={() => loadExpandedDetail(a.vehicleId)}
-                                  >
-                                    <td className="px-4 py-3 text-foreground">
-                                      <ArrivalSummaryVehicleSellerQty
-                                        vehicleNumber={a.vehicleNumber}
-                                        primarySellerName={a.primarySellerName}
-                                        totalBags={a.totalBags}
-                                      />
-                                    </td>
-                                    <td className="px-4 py-3 text-muted-foreground text-xs max-w-[10rem] truncate" title={a.vehicleMarkAlias?.trim() || undefined}>
-                                      {a.vehicleMarkAlias?.trim() ? a.vehicleMarkAlias.trim() : '—'}
-                                    </td>
-                                    <td className="px-4 py-3"><ArrivalStatusBadge status={status} /></td>
-                                    <td className="px-4 py-3 text-muted-foreground text-xs">{a.godown ?? '—'}</td>
-                                    <td className="px-4 py-3 text-right text-muted-foreground">{a.bidsCount ?? 0}</td>
-                                    <td className="px-4 py-3 text-right text-muted-foreground">{a.weighedCount ?? 0}</td>
-                                    <td className="px-4 py-3 text-right text-muted-foreground">{a.sellerCount}</td>
-                                    <td className="px-4 py-3 text-right font-medium text-foreground">{a.lotCount}</td>
-                                    <td className="px-4 py-3 text-right text-muted-foreground">{a.netWeight}kg</td>
-                                    <td className="px-4 py-3 text-right text-muted-foreground">{a.freightTotal > 0 ? `₹${a.freightTotal.toLocaleString()}` : '—'}</td>
-                                    <td className="px-4 py-3 text-muted-foreground text-xs">{new Date(a.arrivalDatetime).toLocaleDateString()}</td>
-                                    <td className="px-4 py-3 text-center" onClick={e => e.stopPropagation()}>
-                                      <div className="flex items-center justify-center gap-1">
-                                        {can('Arrivals', 'Edit') && (
-                                          <button type="button" onClick={() => handleEditArrival(a)} className="p-1.5 rounded-lg hover:bg-muted text-muted-foreground hover:text-foreground" title="Edit"><Pencil className="w-4 h-4" /></button>
-                                        )}
-                                        {can('Arrivals', 'Delete') && (
-                                          <button type="button" onClick={() => setPendingDelete({ kind: 'arrival', vehicleId: a.vehicleId, label: a.vehicleNumber })} className="p-1.5 rounded-lg hover:bg-red-50 dark:hover:bg-red-950/30 text-muted-foreground hover:text-red-600" title="Delete"><Trash2 className="w-4 h-4" /></button>
-                                        )}
-                                      </div>
-                                    </td>
-                                  </motion.tr>
-                                  {isExpanded && (
-                                    <tr key={a.vehicleId + '-exp'} className="border-b border-border/20 bg-muted/10">
-                                      <td colSpan={12} className="px-4 py-4">
-                                        {expandedDetailLoading ? (
-                                          <p className="text-sm text-muted-foreground">Loading…</p>
-                                        ) : expandedDetail ? (
-                                          <div className="overflow-x-auto -mx-1 px-1 max-w-full [-webkit-overflow-scrolling:touch] touch-[pan-x_pan-y] lg:touch-auto">
-                                          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 text-sm min-w-0 w-full">
-                                            <div className="space-y-3">
-                                              <FreightDetailsCard
-                                                freightRate={expandedDetail.freightRate ?? 0}
-                                                netWeight={expandedDetail.netWeight ?? 0}
-                                                freightMethod={expandedDetail.freightMethod ?? 'BY_WEIGHT'}
-                                                freightTotal={expandedDetail.freightTotal ?? 0}
-                                                advancePaid={expandedDetail.advancePaid ?? 0}
-                                                noRental={expandedDetail.noRental ?? false}
-                                              />
-                                            </div>
-                                            <div className="space-y-3">
-                                              <SellerInfoCard
-                                                sellers={expandedSellerInfoRows}
-                                                hidePrint
-                                                onRefresh={() => loadExpandedDetail(expandedDetail.vehicleId)}
-                                              />
-                                              <div className="flex gap-2">
-                                                {can('Arrivals', 'Edit') && (
-                                                  <Button
-                                                    type="button"
-                                                    size="sm"
-                                                    onClick={e => { e.stopPropagation(); handleEditArrival({ vehicleId: expandedDetail.vehicleId }); }}
-                                                    className={cn("h-9 px-3 text-xs font-semibold", ARRIVALS_SETTLEMENT_BUTTON_GRADIENT)}
-                                                  >
-                                                    <Pencil className="w-3.5 h-3.5 mr-1" /> Edit
-                                                  </Button>
-                                                )}
-                                                {can('Arrivals', 'Delete') && (
-                                                  <Button
-                                                    type="button"
-                                                    variant="destructive"
-                                                    size="sm"
-                                                    disabled={(expandedDetail.deleteBlockers?.length ?? 0) > 0}
-                                                    title={
-                                                      (expandedDetail.deleteBlockers?.length ?? 0) > 0
-                                                        ? `Cannot delete: ${formatArrivalDeletionBlockerCodes(expandedDetail.deleteBlockers ?? [])}`
-                                                        : undefined
-                                                    }
-                                                    onClick={e => {
-                                                      e.stopPropagation();
-                                                      setPendingDelete({ kind: 'arrival', vehicleId: expandedDetail.vehicleId, label: expandedDetail.vehicleNumber });
-                                                    }}
-                                                  >
-                                                    <Trash2 className="w-3.5 h-3.5 mr-1" /> Delete
-                                                  </Button>
-                                                )}
+                          {(() => {
+                            const virtualRows = desktopArrivalsVirtualizer.getVirtualItems();
+                            const paddingTop = virtualRows.length > 0 ? virtualRows[0].start : 0;
+                            const paddingBottom =
+                              virtualRows.length > 0
+                                ? desktopArrivalsVirtualizer.getTotalSize() - virtualRows[virtualRows.length - 1].end
+                                : 0;
+                            return (
+                              <>
+                                {paddingTop > 0 && (
+                                  <tr aria-hidden>
+                                    <td colSpan={12} style={{ height: paddingTop, padding: 0, border: 0 }} />
+                                  </tr>
+                                )}
+                                {virtualRows.map(virtualRow => {
+                                  const row = desktopArrivalRows[virtualRow.index];
+                                  if (!row) return null;
+                                  const a = row.arrival;
+                                  if (row.kind === 'expanded') {
+                                    return (
+                                      <tr
+                                        key={virtualRow.key}
+                                        data-index={virtualRow.index}
+                                        ref={desktopArrivalsVirtualizer.measureElement}
+                                        className="border-b border-border/20 bg-muted/10"
+                                      >
+                                        <td colSpan={12} className="px-4 py-4">
+                                          {expandedDetailLoading ? (
+                                            <p className="text-sm text-muted-foreground">Loading…</p>
+                                          ) : expandedDetail ? (
+                                            <div className="overflow-x-auto -mx-1 px-1 max-w-full [-webkit-overflow-scrolling:touch] touch-[pan-x_pan-y] lg:touch-auto">
+                                            <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 text-sm min-w-0 w-full">
+                                              <div className="space-y-3">
+                                                <FreightDetailsCard
+                                                  freightRate={expandedDetail.freightRate ?? 0}
+                                                  netWeight={expandedDetail.netWeight ?? 0}
+                                                  freightMethod={expandedDetail.freightMethod ?? 'BY_WEIGHT'}
+                                                  freightTotal={expandedDetail.freightTotal ?? 0}
+                                                  advancePaid={expandedDetail.advancePaid ?? 0}
+                                                  noRental={expandedDetail.noRental ?? false}
+                                                />
+                                              </div>
+                                              <div className="space-y-3">
+                                                <SellerInfoCard
+                                                  sellers={expandedSellerInfoRows}
+                                                  hidePrint
+                                                  onRefresh={() => loadExpandedDetail(expandedDetail.vehicleId)}
+                                                />
+                                                <div className="flex gap-2">
+                                                  {can('Arrivals', 'Edit') && (
+                                                    <Button
+                                                      type="button"
+                                                      size="sm"
+                                                      onClick={e => { e.stopPropagation(); handleEditArrival({ vehicleId: expandedDetail.vehicleId }); }}
+                                                      className={cn("h-9 px-3 text-xs font-semibold", ARRIVALS_SETTLEMENT_BUTTON_GRADIENT)}
+                                                    >
+                                                      <Pencil className="w-3.5 h-3.5 mr-1" /> Edit
+                                                    </Button>
+                                                  )}
+                                                  {can('Arrivals', 'Delete') && (
+                                                    <Button
+                                                      type="button"
+                                                      variant="destructive"
+                                                      size="sm"
+                                                      disabled={(expandedDetail.deleteBlockers?.length ?? 0) > 0}
+                                                      title={
+                                                        (expandedDetail.deleteBlockers?.length ?? 0) > 0
+                                                          ? `Cannot delete: ${formatArrivalDeletionBlockerCodes(expandedDetail.deleteBlockers ?? [])}`
+                                                          : undefined
+                                                      }
+                                                      onClick={e => {
+                                                        e.stopPropagation();
+                                                        setPendingDelete({ kind: 'arrival', vehicleId: expandedDetail.vehicleId, label: expandedDetail.vehicleNumber });
+                                                      }}
+                                                    >
+                                                      <Trash2 className="w-3.5 h-3.5 mr-1" /> Delete
+                                                    </Button>
+                                                  )}
+                                                </div>
                                               </div>
                                             </div>
-                                          </div>
-                                          </div>
-                                        ) : null}
+                                            </div>
+                                          ) : null}
+                                        </td>
+                                      </tr>
+                                    );
+                                  }
+                                  const status = getArrivalStatus(a);
+                                  return (
+                                    <motion.tr
+                                      key={virtualRow.key}
+                                      data-index={virtualRow.index}
+                                      ref={desktopArrivalsVirtualizer.measureElement}
+                                      initial={{ opacity: 0 }}
+                                      animate={{ opacity: 1 }}
+                                      transition={{ duration: 0.12 }}
+                                      className="border-b border-border/20 hover:bg-muted/20 transition-colors cursor-pointer"
+                                      onClick={() => loadExpandedDetail(a.vehicleId)}
+                                    >
+                                      <td className="px-4 py-3 text-foreground">
+                                        <ArrivalSummaryVehicleSellerQty
+                                          vehicleNumber={a.vehicleNumber}
+                                          primarySellerName={a.primarySellerName}
+                                          totalBags={a.totalBags}
+                                        />
                                       </td>
-                                    </tr>
-                                  )}
-                                </Fragment>
-                              );
-                            })}
+                                      <td className="px-4 py-3 text-muted-foreground text-xs max-w-[10rem] truncate" title={a.vehicleMarkAlias?.trim() || undefined}>
+                                        {a.vehicleMarkAlias?.trim() ? a.vehicleMarkAlias.trim() : '—'}
+                                      </td>
+                                      <td className="px-4 py-3"><ArrivalStatusBadge status={status} /></td>
+                                      <td className="px-4 py-3 text-muted-foreground text-xs">{a.godown ?? '—'}</td>
+                                      <td className="px-4 py-3 text-right text-muted-foreground">{a.bidsCount ?? 0}</td>
+                                      <td className="px-4 py-3 text-right text-muted-foreground">{a.weighedCount ?? 0}</td>
+                                      <td className="px-4 py-3 text-right text-muted-foreground">{a.sellerCount}</td>
+                                      <td className="px-4 py-3 text-right font-medium text-foreground">{a.lotCount}</td>
+                                      <td className="px-4 py-3 text-right text-muted-foreground">{a.netWeight}kg</td>
+                                      <td className="px-4 py-3 text-right text-muted-foreground">{a.freightTotal > 0 ? `₹${a.freightTotal.toLocaleString()}` : '—'}</td>
+                                      <td className="px-4 py-3 text-muted-foreground text-xs">{new Date(a.arrivalDatetime).toLocaleDateString()}</td>
+                                      <td className="px-4 py-3 text-center" onClick={e => e.stopPropagation()}>
+                                        <div className="flex items-center justify-center gap-1">
+                                          {can('Arrivals', 'Edit') && (
+                                            <button type="button" onClick={() => handleEditArrival(a)} className="p-1.5 rounded-lg hover:bg-muted text-muted-foreground hover:text-foreground" title="Edit"><Pencil className="w-4 h-4" /></button>
+                                          )}
+                                          {can('Arrivals', 'Delete') && (
+                                            <button type="button" onClick={() => setPendingDelete({ kind: 'arrival', vehicleId: a.vehicleId, label: a.vehicleNumber })} className="p-1.5 rounded-lg hover:bg-red-50 dark:hover:bg-red-950/30 text-muted-foreground hover:text-red-600" title="Delete"><Trash2 className="w-4 h-4" /></button>
+                                          )}
+                                        </div>
+                                      </td>
+                                    </motion.tr>
+                                  );
+                                })}
+                                {paddingBottom > 0 && (
+                                  <tr aria-hidden>
+                                    <td colSpan={12} style={{ height: paddingBottom, padding: 0, border: 0 }} />
+                                  </tr>
+                                )}
+                              </>
+                            );
+                          })()}
                         </tbody>
                       </table>
                     </div>
@@ -4037,7 +4070,7 @@ const ArrivalsPage = () => {
                 </div>
                 <h3 className="text-lg font-bold text-foreground mb-1">No Arrivals Yet</h3>
                 <p className="text-sm text-muted-foreground mb-4">Record your first vehicle arrival to start operations</p>
-                <Button onClick={() => { resetForm(); setShowAdd(true); }} className={cn("rounded-xl", ARRIVALS_SETTLEMENT_BUTTON_GRADIENT)}>
+                <Button onClick={openNewArrivalPanel} className={cn("rounded-xl", ARRIVALS_SETTLEMENT_BUTTON_GRADIENT)}>
                   <Plus className="w-4 h-4 mr-2" /> New Arrival
                 </Button>
               </motion.div>
@@ -4278,11 +4311,6 @@ const ArrivalsPage = () => {
                 {!allStreamsComplete && (
                   <p className="py-2 text-center text-xs text-muted-foreground">
                     {arrivalsStreamingMore ? 'Loading more…' : 'Finishing…'}
-                    {!detailArrivalsComplete && detailArrivalsTotal != null ? (
-                      <span className="mt-1 block text-[10px] tabular-nums text-muted-foreground/90">
-                        Search index {arrivalDetails.length} / {detailArrivalsTotal}
-                      </span>
-                    ) : null}
                   </p>
                 )}
               </>
@@ -5039,10 +5067,10 @@ const ArrivalsPage = () => {
           </AnimatePresence>
 
           {/* Fixed action row: portal to body so z-index wins over BottomNav; sheet stays z-50 so tab bar stays visible */}
-          {showAdd &&
+          {showAdd && !isUnsavedChangesDialogOpen &&
             createPortal(
               <div
-                className="fixed bottom-[calc(3.5rem+env(safe-area-inset-bottom,0px)-2px)] left-0 right-0 z-[55] bg-background/90 backdrop-blur-xl px-3 pt-2.5 pb-2 sm:px-4 sm:pt-3 md:bottom-[calc(3.5rem+env(safe-area-inset-bottom,0px)-0.75rem+1px)] md:px-6 md:pb-[max(0.5rem,env(safe-area-inset-bottom,0px))] lg:bottom-0 lg:pb-3 pointer-events-auto"
+                className="fixed bottom-[calc(3.5rem+env(safe-area-inset-bottom,0px)+0.25rem)] left-0 right-0 z-[55] bg-background/90 backdrop-blur-xl px-3 pt-2.5 pb-2 sm:px-4 sm:pt-3 md:px-6 md:pb-[max(0.5rem,env(safe-area-inset-bottom,0px))] lg:bottom-0 lg:pb-3 pointer-events-auto"
                 aria-label="Arrival actions"
               >
                 <div className="max-w-[480px] md:max-w-full mx-auto">

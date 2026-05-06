@@ -182,5 +182,5 @@ export default function useUnsavedChangesGuard(options: UseUnsavedChangesGuardOp
     saving,
   ]);
 
-  return { confirmIfDirty, UnsavedChangesDialog };
+  return { confirmIfDirty, UnsavedChangesDialog, isOpen };
 }

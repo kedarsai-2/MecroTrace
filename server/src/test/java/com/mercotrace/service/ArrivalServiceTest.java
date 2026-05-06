@@ -4,6 +4,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.mercotrace.domain.FreightCalculation;
@@ -121,19 +124,19 @@ class ArrivalServiceTest {
     @BeforeEach
     void setUp() {
         when(traderContextService.getCurrentTraderId()).thenReturn(1L);
-        when(salesBillLineItemRepository.existsForTraderLotsDeletionScope(anyLong(), anyList(), anyList())).thenReturn(false);
-        when(auctionSelfSaleUnitRepository.existsByLotIdIn(anyList())).thenReturn(false);
-        when(selfSaleClosureRepository.existsActiveByTraderIdAndLotIdIn(anyLong(), anyList())).thenReturn(false);
-        when(cdnItemRepository.existsActiveByLotIdIn(anyList())).thenReturn(false);
-        when(stockPurchaseItemRepository.existsActiveByTraderIdAndLotIdIn(anyLong(), anyList())).thenReturn(false);
-        when(weighingSessionRepository.existsByLotIdIn(anyList())).thenReturn(false);
-        when(writerPadSessionRepository.existsByLotIdIn(anyList())).thenReturn(false);
+        lenient().when(salesBillLineItemRepository.existsForTraderLotsDeletionScope(anyLong(), anyList(), anyList())).thenReturn(false);
+        lenient().when(auctionSelfSaleUnitRepository.existsByLotIdIn(anyList())).thenReturn(false);
+        lenient().when(selfSaleClosureRepository.existsActiveByTraderIdAndLotIdIn(anyLong(), anyList())).thenReturn(false);
+        lenient().when(cdnItemRepository.existsActiveByLotIdIn(anyList())).thenReturn(false);
+        lenient().when(stockPurchaseItemRepository.existsActiveByTraderIdAndLotIdIn(anyLong(), anyList())).thenReturn(false);
+        lenient().when(weighingSessionRepository.existsByLotIdIn(anyList())).thenReturn(false);
+        lenient().when(writerPadSessionRepository.existsByLotIdIn(anyList())).thenReturn(false);
     }
 
     @Test
     void listArrivalsReturnsEmptyPageWhenNoVehicles() {
         Pageable pageable = PageRequest.of(0, 20);
-        when(vehicleRepository.findAllByTraderIdOrderByArrivalDatetimeDesc(anyLong(), any(Pageable.class)))
+        when(vehicleRepository.findAllByTraderIdAndPartiallyCompletedOrderByArrivalDatetimeDesc(anyLong(), any(Boolean.class), any(Pageable.class)))
             .thenReturn(Page.empty(pageable));
 
         Page<?> page = arrivalService.listArrivals(pageable);
@@ -153,7 +156,7 @@ class ArrivalServiceTest {
         vehicle.setArrivalDatetime(Instant.now());
 
         Page<Vehicle> vehiclePage = new PageImpl<>(List.of(vehicle), pageable, 1);
-        when(vehicleRepository.findAllByTraderIdOrderByArrivalDatetimeDesc(anyLong(), any(Pageable.class)))
+        when(vehicleRepository.findAllByTraderIdAndPartiallyCompletedOrderByArrivalDatetimeDesc(anyLong(), any(Boolean.class), any(Pageable.class)))
             .thenReturn(vehiclePage);
 
         VehicleWeight weight = new VehicleWeight();
@@ -204,5 +207,16 @@ class ArrivalServiceTest {
         assertThat(summary.getFreightMethod()).isEqualTo(FreightMethod.BY_WEIGHT);
         assertThat(summary.getArrivalDatetime()).isNotNull();
     }
-}
 
+    @Test
+    void listArrivalsUsesRepositorySearchWhenQueryProvided() {
+        Pageable pageable = PageRequest.of(0, 20);
+        when(vehicleRepository.searchByTraderAndPartiallyCompleted(eq(1L), eq(false), eq("%ka01%"), any(Pageable.class)))
+            .thenReturn(Page.empty(pageable));
+
+        Page<?> page = arrivalService.listArrivals(pageable, null, false, "  KA01  ");
+
+        assertThat(page.getTotalElements()).isZero();
+        verify(vehicleRepository).searchByTraderAndPartiallyCompleted(eq(1L), eq(false), eq("%ka01%"), any(Pageable.class));
+    }
+}

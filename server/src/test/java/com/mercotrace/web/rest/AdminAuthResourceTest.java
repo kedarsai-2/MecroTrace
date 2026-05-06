@@ -37,7 +37,13 @@ import org.springframework.transaction.annotation.Transactional;
  */
 @AutoConfigureMockMvc
 @IntegrationTest
-@TestPropertySource(properties = "application.security.cookie.secure=false")
+@TestPropertySource(
+    properties = {
+        "application.security.cookie.secure=false",
+        "jhipster.security.authentication.jwt.token-validity-in-seconds=86400",
+        "jhipster.security.authentication.jwt.token-validity-in-seconds-for-remember-me=7776000",
+    }
+)
 class AdminAuthResourceTest {
 
     @Autowired
@@ -84,7 +90,9 @@ class AdminAuthResourceTest {
             .andExpect(jsonPath("$.user.user_id").value(admin.getId().toString()))
             .andExpect(jsonPath("$.trader").isEmpty())
             .andExpect(header().string(AUTHORIZATION, not(isEmptyOrNullString())))
-            .andExpect(header().string("Set-Cookie", containsString("ACCESS_TOKEN=")));
+            .andExpect(header().string("Set-Cookie", containsString("ACCESS_TOKEN=")))
+            .andExpect(header().string("Set-Cookie", containsString("Max-Age=86400")))
+            .andExpect(header().string("Set-Cookie", not(containsString("Max-Age=7776000"))));
     }
 
     @Test
@@ -213,4 +221,3 @@ class AdminAuthResourceTest {
         return adminUserRepository.saveAndFlush(user);
     }
 }
-

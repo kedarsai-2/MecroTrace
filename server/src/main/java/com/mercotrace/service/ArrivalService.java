@@ -33,7 +33,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -319,25 +321,35 @@ public class ArrivalService {
 
     @Transactional(readOnly = true)
     public Page<ArrivalSummaryDTO> listArrivals(Pageable pageable) {
-        return listArrivals(pageable, null, null);
+        return listArrivals(pageable, null, null, null);
     }
 
     @Transactional(readOnly = true)
     public Page<ArrivalSummaryDTO> listArrivals(Pageable pageable, String statusFilter) {
-        return listArrivals(pageable, statusFilter, null);
+        return listArrivals(pageable, statusFilter, null, null);
     }
 
     @Transactional(readOnly = true)
     public Page<ArrivalSummaryDTO> listArrivals(Pageable pageable, String statusFilter, Boolean partiallyCompleted) {
+        return listArrivals(pageable, statusFilter, partiallyCompleted, null);
+    }
+
+    @Transactional(readOnly = true)
+    public Page<ArrivalSummaryDTO> listArrivals(Pageable pageable, String statusFilter, Boolean partiallyCompleted, String q) {
         Long traderId = resolveTraderId();
 
         boolean wantPartial = Boolean.TRUE.equals(partiallyCompleted);
-        Page<Vehicle> vehiclePage = vehicleRepository
-            .findAllByTraderIdAndPartiallyCompletedOrderByArrivalDatetimeDesc(traderId, wantPartial, pageable);
+        Pageable effectivePageable = pageable.getSort().isSorted()
+            ? pageable
+            : PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(), Sort.by(Sort.Direction.DESC, "arrivalDatetime"));
+        String search = q == null ? "" : q.trim().toLowerCase();
+        Page<Vehicle> vehiclePage = search.isBlank()
+            ? vehicleRepository.findAllByTraderIdAndPartiallyCompletedOrderByArrivalDatetimeDesc(traderId, wantPartial, effectivePageable)
+            : vehicleRepository.searchByTraderAndPartiallyCompleted(traderId, wantPartial, "%" + search + "%", effectivePageable);
         List<Vehicle> vehicles = vehiclePage.getContent();
 
         if (vehicles.isEmpty()) {
-            return Page.empty(pageable);
+            return new PageImpl<>(List.of(), effectivePageable, vehiclePage.getTotalElements());
         }
 
         List<Long> vehicleIds = vehicles.stream().map(Vehicle::getId).toList();
@@ -422,9 +434,9 @@ public class ArrivalService {
             List<ArrivalSummaryDTO> filtered = content.stream()
                 .filter(dto -> want.equals(arrivalStatusFromDto(dto)))
                 .toList();
-            return new PageImpl<>(filtered, pageable, filtered.size());
+            return new PageImpl<>(filtered, effectivePageable, filtered.size());
         }
-        return new PageImpl<>(content, pageable, vehiclePage.getTotalElements());
+        return new PageImpl<>(content, effectivePageable, vehiclePage.getTotalElements());
     }
 
     /**
@@ -619,7 +631,7 @@ public class ArrivalService {
                     .ifPresent(fc -> freightDistributionRepository.deleteByFreightId(fc.getId()));
                 List<Lot> lotsToRemove = lotRepository.findAllBySellerVehicleIdIn(existingSellerVehicleIds);
                 List<Long> lotIdsToRemove = lotsToRemove.stream().map(Lot::getId).toList();
-                assertLotsNotBlockedForDeletion(traderId, lotIdsToRemove);
+                assertLotsNotBlockedForEdit(traderId, lotIdsToRemove);
                 if (!lotIdsToRemove.isEmpty()) {
                     List<Auction> auctionsForLots = auctionRepository.findAllByLotIdIn(lotIdsToRemove);
                     List<Long> auctionIds = auctionsForLots.stream().map(Auction::getId).toList();
@@ -832,6 +844,22 @@ public class ArrivalService {
     }
 
     private void assertLotsNotBlockedForDeletion(Long traderId, List<Long> lotIds) {
+        assertLotsNotBlocked(
+            traderId,
+            lotIds,
+            "This arrival cannot be deleted while linked data exists in: %s. Remove or adjust those records first."
+        );
+    }
+
+    private void assertLotsNotBlockedForEdit(Long traderId, List<Long> lotIds) {
+        assertLotsNotBlocked(
+            traderId,
+            lotIds,
+            "Seller or lot details cannot be changed because this arrival is already linked in: %s. Remove or adjust those records first, or edit only vehicle, weight, freight, broker, narration, and location fields."
+        );
+    }
+
+    private void assertLotsNotBlocked(Long traderId, List<Long> lotIds, String messageTemplate) {
         List<ArrivalDeletionBlocker> blockers = collectLotDeletionBlockers(traderId, lotIds);
         if (blockers.isEmpty()) {
             return;
@@ -839,7 +867,7 @@ public class ArrivalService {
         List<String> codes = blockers.stream().map(Enum::name).toList();
         String labels = blockers.stream().map(ArrivalDeletionBlocker::displayLabel).collect(Collectors.joining(", "));
         throw new ArrivalDeletionBlockedException(
-            "This arrival cannot be deleted while linked data exists in: " + labels + ". Remove or adjust those records first.",
+            String.format(messageTemplate, labels),
             codes
         );
     }
@@ -1506,4 +1534,3 @@ public class ArrivalService {
         }
     }
 }
-

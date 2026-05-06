@@ -2069,8 +2069,8 @@ const AuctionMobileBidTopRow = memo(function AuctionMobileBidTopRow({
       <div className={cn('min-w-0', isMdViewport && 'flex-[1.35]')}>
         <div
           className={cn(
-            'grid w-full min-w-0 grid-cols-[minmax(0,1fr)_auto] grid-rows-[auto_auto]',
-            isMdViewport ? 'gap-x-3 gap-y-0.5' : 'gap-x-1.5 gap-y-0.5'
+            'min-w-0 grid-cols-[minmax(0,1fr)_auto] grid-rows-[auto_auto]',
+            isMdViewport ? 'inline-grid w-auto gap-x-2 gap-y-0.5' : 'grid w-full gap-x-1.5 gap-y-0.5'
           )}
         >
           <span className="col-start-1 row-start-1 justify-self-center text-center text-[0.93em] font-semibold uppercase tracking-wide text-muted-foreground leading-tight">

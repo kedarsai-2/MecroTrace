@@ -25,6 +25,11 @@ type ContactDto = {
   portal_signup_linked?: boolean;
 };
 
+export type ContactListPage = {
+  contacts: Contact[];
+  total: number;
+};
+
 function mapDtoToContact(dto: ContactDto): Contact {
   const contactId = dto.contact_id ?? dto.id;
   const traderId = dto.trader_id ?? dto.traderId ?? '';
@@ -115,6 +120,30 @@ export const contactApi = {
     });
     const data = await handleResponse<ContactDto[]>(res, 'Failed to load contacts');
     return data.map(mapDtoToContact);
+  },
+
+  async listPage(opts: {
+    scope?: 'registry' | 'participants';
+    page: number;
+    size: number;
+    q?: string;
+  }): Promise<ContactListPage> {
+    const params = new URLSearchParams({
+      scope: opts.scope ?? 'registry',
+      page: String(opts.page),
+      size: String(opts.size),
+    });
+    if (opts.q?.trim()) {
+      params.set('q', opts.q.trim());
+    }
+    const res = await apiFetch(`/contacts?${params.toString()}`, {
+      method: 'GET',
+    });
+    const data = await handleResponse<ContactDto[]>(res, 'Failed to load contacts');
+    return {
+      contacts: data.map(mapDtoToContact),
+      total: Number(res.headers.get('X-Total-Count') ?? data.length),
+    };
   },
 
   async adminList(): Promise<Contact[]> {

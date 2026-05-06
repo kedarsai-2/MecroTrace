@@ -41,7 +41,6 @@ import ContactPortalSettlementsPage from "./pages/ContactPortalSettlementsPage";
 import ContactPortalProfilePage from "./pages/ContactPortalProfilePage";
 
 // Eagerly loaded — all trader routes for instant navigation (no white flash)
-import SplashScreen from "./pages/SplashScreen";
 import OnboardingScreen from "./pages/OnboardingScreen";
 import RegisterScreen from "./pages/RegisterScreen";
 import TraderSetupPage from "./pages/TraderSetupPage";
@@ -130,7 +129,7 @@ const router = createBrowserRouter(
   createRoutesFromElements(
     <Route element={<AppShell />}>
       {/* Public routes */}
-      <Route path="/" element={<SplashScreen />} />
+      <Route path="/" element={<OnboardingScreen />} />
       <Route path="/onboarding" element={<OnboardingScreen />} />
       <Route path="/login" element={<LoginScreen />} />
 

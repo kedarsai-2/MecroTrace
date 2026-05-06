@@ -25,7 +25,7 @@ interface ContactAuthContextType extends ContactAuthState {
   loginWithProfile: (profile: ContactPortalProfile) => void;
   /** Mark the current session as guest with a synthetic profile. */
   loginAsGuest: (phone: string) => void;
-  logout: () => void;
+  logout: () => Promise<void>;
   isLoading: boolean;
   error: string | null;
   clearError: () => void;
@@ -40,7 +40,7 @@ const ContactAuthContext = createContext<ContactAuthContextType>({
   signup: async () => {},
   loginWithProfile: () => {},
   loginAsGuest: () => {},
-  logout: () => {},
+  logout: async () => {},
   isLoading: false,
   error: null,
   clearError: () => {},
@@ -61,17 +61,27 @@ export const ContactAuthProvider: React.FC<{ children: React.ReactNode }> = ({ c
   useEffect(() => {
     let cancelled = false;
 
-    // Only bootstrap when user is in the contact portal URLs.
-    if (typeof window !== 'undefined' && !window.location.pathname.startsWith('/contact')) {
-      setHasBootstrapped(true);
-      return () => {
-        cancelled = true;
-      };
+    // Only bootstrap when user is in the contact portal URLs. Do not match trader /contacts.
+    if (typeof window !== 'undefined') {
+      const pathname = window.location.pathname;
+      const isContactPortalPath = pathname === '/contact' || pathname.startsWith('/contact/');
+      if (!isContactPortalPath) {
+        setHasBootstrapped(true);
+        return () => {
+          cancelled = true;
+        };
+      }
     }
 
     const bootstrap = async () => {
       try {
-        const session: ContactPortalSession | null = await contactPortalAuthApi.getSession();
+        let session: ContactPortalSession | null = await contactPortalAuthApi.getSession();
+        if (!cancelled && !session) {
+          const refreshed = await contactPortalAuthApi.refreshSession();
+          if (refreshed && !cancelled) {
+            session = await contactPortalAuthApi.getSession();
+          }
+        }
         if (!cancelled && session && session.profile) {
           setState({
             isAuthenticated: true,
@@ -135,9 +145,13 @@ export const ContactAuthProvider: React.FC<{ children: React.ReactNode }> = ({ c
     [],
   );
 
-  const logout = useCallback(() => {
-    setState({ isAuthenticated: false, contact: null, isGuest: false });
-    setContactToken(null);
+  const logout = useCallback(async () => {
+    try {
+      await contactPortalAuthApi.logout();
+    } finally {
+      setState({ isAuthenticated: false, contact: null, isGuest: false });
+      await setContactToken(null);
+    }
   }, []);
 
   const loginWithProfile = useCallback((profile: ContactPortalProfile) => {
@@ -185,4 +199,3 @@ export const ContactAuthProvider: React.FC<{ children: React.ReactNode }> = ({ c
     </ContactAuthContext.Provider>
   );
 };
-

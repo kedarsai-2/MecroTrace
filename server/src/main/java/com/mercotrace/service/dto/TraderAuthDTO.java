@@ -18,6 +18,9 @@ public class TraderAuthDTO {
 
     private String token;
 
+    @JsonProperty("refresh_token")
+    private String refreshToken;
+
     /** When true, registration succeeded but auto-login failed; client should prompt sign-in. */
     @JsonProperty("needs_login")
     private Boolean needsLogin;
@@ -42,6 +45,14 @@ public class TraderAuthDTO {
 
     public void setToken(String token) {
         this.token = token;
+    }
+
+    public String getRefreshToken() {
+        return refreshToken;
+    }
+
+    public void setRefreshToken(String refreshToken) {
+        this.refreshToken = refreshToken;
     }
 
     public UserPayload getUser() {
@@ -344,4 +355,3 @@ public class TraderAuthDTO {
         }
     }
 }
-

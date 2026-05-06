@@ -8,6 +8,8 @@ import java.util.Optional;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 /**
@@ -41,6 +43,36 @@ public interface AuctionRepository extends JpaRepository<Auction, Long> {
 
     Page<Auction> findByCompletedAtIsNotNullAndSelfSaleUnitIdIsNull(Pageable pageable);
 
+    @Query(
+        value = """
+            SELECT a
+            FROM Auction a
+            WHERE a.completedAt IS NOT NULL
+              AND a.selfSaleUnitId IS NULL
+              AND a.lotId IN (
+                SELECT l.id
+                FROM Lot l, SellerInVehicle siv, Vehicle v
+                WHERE l.sellerVehicleId = siv.id
+                  AND siv.vehicleId = v.id
+                  AND v.traderId = :traderId
+              )
+            """,
+        countQuery = """
+            SELECT COUNT(a)
+            FROM Auction a
+            WHERE a.completedAt IS NOT NULL
+              AND a.selfSaleUnitId IS NULL
+              AND a.lotId IN (
+                SELECT l.id
+                FROM Lot l, SellerInVehicle siv, Vehicle v
+                WHERE l.sellerVehicleId = siv.id
+                  AND siv.vehicleId = v.id
+                  AND v.traderId = :traderId
+              )
+            """
+    )
+    Page<Auction> findCompletedNormalByTraderId(@Param("traderId") Long traderId, Pageable pageable);
+
     /**
      * Completed auctions for the given lot IDs (used by Settlement sellers list).
      */
@@ -48,4 +80,3 @@ public interface AuctionRepository extends JpaRepository<Auction, Long> {
 
     Page<Auction> findByCompletedAtIsNotNullAndLotIdInAndSelfSaleUnitIdIsNull(java.util.Collection<Long> lotIds, Pageable pageable);
 }
-

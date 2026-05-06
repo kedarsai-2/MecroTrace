@@ -7,4 +7,11 @@ if (Capacitor.isNativePlatform()) {
   document.documentElement.classList.add("capacitor-native");
 }
 
-createRoot(document.getElementById("root")!).render(<App />);
+const rootElement = document.getElementById("root")!;
+
+createRoot(rootElement).render(<App />);
+
+requestAnimationFrame(() => {
+  rootElement.removeAttribute("style");
+  document.body.removeAttribute("style");
+});

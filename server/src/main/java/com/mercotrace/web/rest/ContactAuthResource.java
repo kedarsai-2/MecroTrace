@@ -7,9 +7,12 @@ import static com.mercotrace.security.SecurityUtils.TOKEN_TYPE_CLAIM;
 import static com.mercotrace.security.SecurityUtils.TOKEN_TYPE_CONTACT;
 
 import com.mercotrace.domain.Contact;
+import com.mercotrace.domain.RefreshSession;
 import com.mercotrace.repository.ContactRepository;
 import com.mercotrace.repository.TraderRepository;
 import com.mercotrace.repository.UserRepository;
+import com.mercotrace.service.AuthRefreshSessionService;
+import com.mercotrace.service.AuthRefreshSessionService.InvalidRefreshTokenException;
 import com.mercotrace.service.ContactOtpService;
 import com.mercotrace.service.ContactIdentityService;
 import com.mercotrace.service.dto.ContactDTO;
@@ -24,7 +27,9 @@ import com.mercotrace.web.rest.vm.ContactOtpRequestVM;
 import com.mercotrace.web.rest.vm.ContactOtpVerifyVM;
 import com.mercotrace.web.rest.vm.ContactOtpVerifyResponseVM;
 import com.mercotrace.web.rest.vm.ContactPortalSessionVM;
+import com.mercotrace.web.rest.vm.RefreshTokenVM;
 import jakarta.validation.Valid;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Map;
@@ -51,6 +56,7 @@ import org.springframework.security.oauth2.jwt.JwtEncoderParameters;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
@@ -90,17 +96,24 @@ public class ContactAuthResource {
 
     private final com.mercotrace.admin.identity.AdminUserRepository adminUserRepository;
 
+    private final AuthRefreshSessionService refreshSessionService;
+
     @Value("${jhipster.security.authentication.jwt.token-validity-in-seconds:0}")
     private long tokenValidityInSeconds;
 
     @Value("${jhipster.security.authentication.jwt.token-validity-in-seconds-for-remember-me:0}")
     private long tokenValidityInSecondsForRememberMe;
 
+    @Value("${application.security.access-token-validity-in-seconds:1800}")
+    private long accessTokenValidityInSeconds;
+
     @Value("${application.security.cookie.secure:true}")
     private boolean cookieSecure;
 
     @Value("${otp.fast2sms.api-key:}")
     private String otpApiKey;
+
+    private static final boolean CONTACT_REMEMBER_ME = true;
 
     public ContactAuthResource(
         ContactRepository contactRepository,
@@ -111,7 +124,8 @@ public class ContactAuthResource {
         ContactIdentityService contactIdentityService,
         TraderRepository traderRepository,
         UserRepository userRepository,
-        com.mercotrace.admin.identity.AdminUserRepository adminUserRepository
+        com.mercotrace.admin.identity.AdminUserRepository adminUserRepository,
+        AuthRefreshSessionService refreshSessionService
     ) {
         this.contactRepository = contactRepository;
         this.contactMapper = contactMapper;
@@ -122,6 +136,7 @@ public class ContactAuthResource {
         this.traderRepository = traderRepository;
         this.userRepository = userRepository;
         this.adminUserRepository = adminUserRepository;
+        this.refreshSessionService = refreshSessionService;
     }
 
     /**
@@ -198,8 +213,13 @@ public class ContactAuthResource {
         Contact saved = contactRepository.save(contact);
         ContactDTO dto = contactMapper.toDto(saved);
 
-        String jwt = createContactToken(saved, false, Set.of(new SimpleGrantedAuthority("ROLE_CONTACT")));
-        HttpHeaders headers = buildAuthHeaders(jwt);
+        String jwt = createContactToken(saved, CONTACT_REMEMBER_ME, Set.of(new SimpleGrantedAuthority("ROLE_CONTACT")));
+        HttpHeaders headers = buildAuthHeaders(jwt, CONTACT_REMEMBER_ME);
+        AuthRefreshSessionService.IssuedRefreshSession refreshSession = issueContactRefreshSession(
+            saved,
+            Set.of(new SimpleGrantedAuthority("ROLE_CONTACT"))
+        );
+        refreshSessionService.addRefreshHeaders(headers, refreshSession.rawToken());
 
         return ResponseEntity.status(HttpStatus.CREATED).headers(headers).body(dto);
     }
@@ -252,8 +272,13 @@ public class ContactAuthResource {
             );
         }
 
-        String jwt = createContactToken(contact, false, Set.of(new SimpleGrantedAuthority("ROLE_CONTACT")));
-        HttpHeaders headers = buildAuthHeaders(jwt);
+        String jwt = createContactToken(contact, CONTACT_REMEMBER_ME, Set.of(new SimpleGrantedAuthority("ROLE_CONTACT")));
+        HttpHeaders headers = buildAuthHeaders(jwt, CONTACT_REMEMBER_ME);
+        AuthRefreshSessionService.IssuedRefreshSession refreshSession = issueContactRefreshSession(
+            contact,
+            Set.of(new SimpleGrantedAuthority("ROLE_CONTACT"))
+        );
+        refreshSessionService.addRefreshHeaders(headers, refreshSession.rawToken());
 
         ContactDTO dto = contactMapper.toDto(contact);
         return ResponseEntity.ok().headers(headers).body(dto);
@@ -358,10 +383,15 @@ public class ContactAuthResource {
 
         if (contactOpt.isPresent()) {
             Contact contact = contactOpt.get();
-            String jwt = createContactToken(contact, false, Set.of(new SimpleGrantedAuthority("ROLE_CONTACT")));
-            HttpHeaders headers = buildAuthHeaders(jwt);
+            String jwt = createContactToken(contact, CONTACT_REMEMBER_ME, Set.of(new SimpleGrantedAuthority("ROLE_CONTACT")));
+            HttpHeaders headers = buildAuthHeaders(jwt, CONTACT_REMEMBER_ME);
+            AuthRefreshSessionService.IssuedRefreshSession refreshSession = issueContactRefreshSession(
+                contact,
+                Set.of(new SimpleGrantedAuthority("ROLE_CONTACT"))
+            );
+            refreshSessionService.addRefreshHeaders(headers, refreshSession.rawToken());
             ContactDTO dto = contactMapper.toDto(contact);
-            ContactOtpVerifyResponseVM body = new ContactOtpVerifyResponseVM(false, phone, dto);
+            ContactOtpVerifyResponseVM body = new ContactOtpVerifyResponseVM(false, phone, dto, refreshSession.rawToken());
             return ResponseEntity.ok().headers(headers).body(body);
         } else {
             // If this mobile already belongs to any trader, trader staff user, admin user, or contact,
@@ -380,9 +410,11 @@ public class ContactAuthResource {
                 );
             }
 
-            String jwt = createGuestContactToken(phone);
-            HttpHeaders headers = buildAuthHeaders(jwt);
-            ContactOtpVerifyResponseVM body = new ContactOtpVerifyResponseVM(true, phone, null);
+            String jwt = createGuestContactToken(phone, CONTACT_REMEMBER_ME);
+            HttpHeaders headers = buildAuthHeaders(jwt, CONTACT_REMEMBER_ME);
+            AuthRefreshSessionService.IssuedRefreshSession refreshSession = issueGuestContactRefreshSession(phone);
+            refreshSessionService.addRefreshHeaders(headers, refreshSession.rawToken());
+            ContactOtpVerifyResponseVM body = new ContactOtpVerifyResponseVM(true, phone, null, refreshSession.rawToken());
             return ResponseEntity.ok().headers(headers).body(body);
         }
     }
@@ -467,7 +499,15 @@ public class ContactAuthResource {
      * and will naturally expire according to their validity window.
      */
     @PostMapping("/portal/auth/logout")
-    public ResponseEntity<Void> contactLogout() {
+    public ResponseEntity<Void> contactLogout(
+        HttpServletRequest request,
+        @RequestHeader(
+            value = AuthRefreshSessionService.REFRESH_TOKEN_HEADER,
+            required = false
+        ) String refreshHeader
+    ) {
+        String refreshToken = refreshSessionService.resolveRefreshToken(request, null, refreshHeader);
+        refreshSessionService.revoke(refreshToken);
         ResponseCookie deleteCookie = ResponseCookie
             .from("ACCESS_TOKEN", "")
             .httpOnly(true)
@@ -478,7 +518,38 @@ public class ContactAuthResource {
             .build();
         HttpHeaders headers = new HttpHeaders();
         headers.add(HttpHeaders.SET_COOKIE, deleteCookie.toString());
+        refreshSessionService.addDeleteRefreshCookie(headers);
         return ResponseEntity.noContent().headers(headers).build();
+    }
+
+    @PostMapping("/portal/auth/refresh")
+    public ResponseEntity<Map<String, String>> refresh(
+        HttpServletRequest request,
+        @RequestHeader(
+            value = AuthRefreshSessionService.REFRESH_TOKEN_HEADER,
+            required = false
+        ) String refreshHeader,
+        @RequestBody(required = false) RefreshTokenVM vm
+    ) {
+        String rawRefreshToken = refreshSessionService.resolveRefreshToken(
+            request,
+            vm != null ? vm.getRefreshToken() : null,
+            refreshHeader
+        );
+        try {
+            AuthRefreshSessionService.IssuedRefreshSession rotated = refreshSessionService.rotate(rawRefreshToken, TOKEN_TYPE_CONTACT);
+            String jwt = createContactToken(rotated.session(), CONTACT_REMEMBER_ME);
+            HttpHeaders headers = buildAuthHeaders(jwt, CONTACT_REMEMBER_ME);
+            refreshSessionService.addRefreshHeaders(headers, rotated.rawToken());
+            return ResponseEntity
+                .ok()
+                .headers(headers)
+                .body(Map.of("token", jwt, "refresh_token", rotated.rawToken()));
+        } catch (InvalidRefreshTokenException ex) {
+            HttpHeaders headers = new HttpHeaders();
+            refreshSessionService.addDeleteRefreshCookie(headers);
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).headers(headers).build();
+        }
     }
 
     /**
@@ -547,9 +618,7 @@ public class ContactAuthResource {
         String authoritiesClaim = authorities.stream().map(GrantedAuthority::getAuthority).collect(Collectors.joining(" "));
 
         Instant now = Instant.now();
-        Instant validity = rememberMe
-            ? now.plus(this.tokenValidityInSecondsForRememberMe, ChronoUnit.SECONDS)
-            : now.plus(this.tokenValidityInSeconds, ChronoUnit.SECONDS);
+        Instant validity = now.plus(contactAccessTokenValiditySeconds(rememberMe), ChronoUnit.SECONDS);
 
         JwtClaimsSet claims = JwtClaimsSet
             .builder()
@@ -565,11 +634,30 @@ public class ContactAuthResource {
         return this.jwtEncoder.encode(JwtEncoderParameters.from(jwsHeader, claims)).getTokenValue();
     }
 
-    private String createGuestContactToken(String phone) {
+    private String createContactToken(RefreshSession session, boolean rememberMe) {
+        Instant now = Instant.now();
+        Instant validity = now.plus(contactAccessTokenValiditySeconds(rememberMe), ChronoUnit.SECONDS);
+
+        JwtClaimsSet.Builder claims = JwtClaimsSet
+            .builder()
+            .issuedAt(now)
+            .expiresAt(validity)
+            .subject(session.getSubject())
+            .claim(AUTHORITIES_CLAIM, session.getAuthorities())
+            .claim(TOKEN_TYPE_CLAIM, TOKEN_TYPE_CONTACT);
+        if (session.getContactId() != null) {
+            claims.claim(CONTACT_ID_CLAIM, session.getContactId());
+        }
+
+        JwsHeader jwsHeader = JwsHeader.with(JWT_ALGORITHM).build();
+        return this.jwtEncoder.encode(JwtEncoderParameters.from(jwsHeader, claims.build())).getTokenValue();
+    }
+
+    private String createGuestContactToken(String phone, boolean rememberMe) {
         String authoritiesClaim = "ROLE_CONTACT_GUEST";
 
         Instant now = Instant.now();
-        Instant validity = now.plus(this.tokenValidityInSeconds, ChronoUnit.SECONDS);
+        Instant validity = now.plus(contactAccessTokenValiditySeconds(rememberMe), ChronoUnit.SECONDS);
 
         JwtClaimsSet claims = JwtClaimsSet
             .builder()
@@ -584,18 +672,46 @@ public class ContactAuthResource {
         return this.jwtEncoder.encode(JwtEncoderParameters.from(jwsHeader, claims)).getTokenValue();
     }
 
-    private HttpHeaders buildAuthHeaders(String jwt) {
+    private HttpHeaders buildAuthHeaders(String jwt, boolean rememberMe) {
         HttpHeaders httpHeaders = new HttpHeaders();
         httpHeaders.setBearerAuth(jwt);
+        long cookieMaxAgeSec = contactAccessTokenValiditySeconds(rememberMe);
         ResponseCookie cookie = ResponseCookie
             .from("ACCESS_TOKEN", jwt)
             .httpOnly(true)
             .secure(cookieSecure)
             .sameSite("Lax")
             .path("/")
+            .maxAge(Duration.ofSeconds(cookieMaxAgeSec))
             .build();
         httpHeaders.add(HttpHeaders.SET_COOKIE, cookie.toString());
         return httpHeaders;
     }
-}
 
+    private AuthRefreshSessionService.IssuedRefreshSession issueContactRefreshSession(
+        Contact contact,
+        Set<? extends GrantedAuthority> authorities
+    ) {
+        return refreshSessionService.issue(
+            TOKEN_TYPE_CONTACT,
+            contact.getPhone(),
+            null,
+            contact.getId(),
+            authorities
+        );
+    }
+
+    private AuthRefreshSessionService.IssuedRefreshSession issueGuestContactRefreshSession(String phone) {
+        return refreshSessionService.issue(
+            TOKEN_TYPE_CONTACT,
+            phone,
+            null,
+            null,
+            Set.of(new SimpleGrantedAuthority("ROLE_CONTACT_GUEST"))
+        );
+    }
+
+    private long contactAccessTokenValiditySeconds(boolean rememberMe) {
+        return rememberMe ? accessTokenValidityInSeconds : tokenValidityInSeconds;
+    }
+}

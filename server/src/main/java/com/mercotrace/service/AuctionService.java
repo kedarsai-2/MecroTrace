@@ -880,13 +880,8 @@ public class AuctionService {
     @Transactional(readOnly = true)
     public Page<AuctionResultDTO> listResults(Pageable pageable) {
         Long traderId = resolveTraderId();
-        Page<Lot> traderLots = lotRepository.findAllByTraderId(traderId, Pageable.unpaged());
-        if (traderLots.isEmpty()) {
-            return Page.empty(pageable);
-        }
-        java.util.List<Long> lotIds = traderLots.getContent().stream().map(Lot::getId).toList();
         Pageable sorted = withDefaultCompletedAuctionSort(pageable);
-        Page<Auction> page = auctionRepository.findByCompletedAtIsNotNullAndLotIdInAndSelfSaleUnitIdIsNull(lotIds, sorted);
+        Page<Auction> page = auctionRepository.findCompletedNormalByTraderId(traderId, sorted);
         return buildResultsPage(page, sorted);
     }
 
@@ -929,6 +924,8 @@ public class AuctionService {
         List<Long> auctionIds = auctions.stream().map(Auction::getId).toList();
         List<AuctionEntry> entries = auctionEntryRepository.findAllByAuctionIdIn(auctionIds);
         List<Lot> lots = lotRepository.findAllById(auctions.stream().map(Auction::getLotId).toList());
+        Map<Long, List<AuctionEntry>> entriesByAuctionId = entries.stream().collect(Collectors.groupingBy(AuctionEntry::getAuctionId));
+        Map<Long, Lot> lotById = lots.stream().collect(Collectors.toMap(Lot::getId, l -> l));
 
         Set<Long> sellerVehicleIds = lots.stream().map(Lot::getSellerVehicleId).filter(Objects::nonNull).collect(Collectors.toSet());
         Map<Long, SellerInVehicle> sivById =
@@ -951,8 +948,8 @@ public class AuctionService {
         List<AuctionResultDTO> content = auctions
             .stream()
             .map(a -> {
-                Lot lot = lots.stream().filter(l -> l.getId().equals(a.getLotId())).findFirst().orElse(null);
-                List<AuctionEntry> aEntries = entries.stream().filter(e -> e.getAuctionId().equals(a.getId())).toList();
+                Lot lot = lotById.get(a.getLotId());
+                List<AuctionEntry> aEntries = entriesByAuctionId.getOrDefault(a.getId(), List.of());
                 AuctionResultDTO dto = buildEffectiveLotResultDTO(a, lot, aEntries);
                 applySellerVehicleToAuctionResult(dto, lot, sivById, vehicleById, contactById, resultQtyIndex);
                 return dto;
@@ -1020,6 +1017,10 @@ public class AuctionService {
             dto.setVehicleMark(v.getVehicleMarkAlias().trim());
         } else {
             dto.setVehicleMark(null);
+        }
+        if (v != null) {
+            dto.setOrigin(v.getOrigin());
+            dto.setGodown(v.getGodown());
         }
         if (lot != null && lot.getSellerVehicleId() != null) {
             dto.setSellerTotalQty(qtyIndex.sellerVehicleIdToTotal.get(lot.getSellerVehicleId()));
@@ -1306,6 +1307,8 @@ public class AuctionService {
         if (lot != null) {
             dto.setLotName(lot.getLotName());
             dto.setSellerVehicleId(lot.getSellerVehicleId());
+            dto.setSellerSerial(lot.getSellerSerialNo());
+            dto.setLotNumber(lot.getLotSerialNo());
             if (lot.getCommodityId() != null) {
                 Commodity commodity = commodityRepository.findById(lot.getCommodityId()).orElse(null);
                 dto.setCommodityName(commodity != null ? commodity.getCommodityName() : null);

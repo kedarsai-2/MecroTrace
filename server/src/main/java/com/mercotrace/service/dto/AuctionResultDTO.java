@@ -46,6 +46,22 @@ public class AuctionResultDTO implements Serializable {
     @JsonProperty("sellerTotalQty")
     private Integer sellerTotalQty;
 
+    /** Arrival seller serial persisted on the lot. Used by Print Hub without extra arrival fetches. */
+    @JsonProperty("sellerSerial")
+    private Integer sellerSerial;
+
+    /** Arrival lot serial persisted on the lot. Used by Print Hub without extra arrival fetches. */
+    @JsonProperty("lotNumber")
+    private Integer lotNumber;
+
+    /** Arrival origin. Used by Print Hub stickers/chittis. */
+    @JsonProperty("origin")
+    private String origin;
+
+    /** Arrival godown. Used by Print Hub stickers/chittis. */
+    @JsonProperty("godown")
+    private String godown;
+
     @JsonProperty("commodityName")
     private String commodityName;
 
@@ -144,6 +160,38 @@ public class AuctionResultDTO implements Serializable {
         this.sellerTotalQty = sellerTotalQty;
     }
 
+    public Integer getSellerSerial() {
+        return sellerSerial;
+    }
+
+    public void setSellerSerial(Integer sellerSerial) {
+        this.sellerSerial = sellerSerial;
+    }
+
+    public Integer getLotNumber() {
+        return lotNumber;
+    }
+
+    public void setLotNumber(Integer lotNumber) {
+        this.lotNumber = lotNumber;
+    }
+
+    public String getOrigin() {
+        return origin;
+    }
+
+    public void setOrigin(String origin) {
+        this.origin = origin;
+    }
+
+    public String getGodown() {
+        return godown;
+    }
+
+    public void setGodown(String godown) {
+        this.godown = godown;
+    }
+
     public String getCommodityName() {
         return commodityName;
     }
@@ -192,4 +240,3 @@ public class AuctionResultDTO implements Serializable {
         this.entries = entries;
     }
 }
-

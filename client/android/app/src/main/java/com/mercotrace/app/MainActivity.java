@@ -1,6 +1,7 @@
 package com.mercotrace.app;
 
 import android.content.pm.ActivityInfo;
+import android.content.res.Configuration;
 
 import com.getcapacitor.BridgeActivity;
 
@@ -15,6 +16,7 @@ public class MainActivity extends BridgeActivity {
         // is always available.
         registerPlugin(MercoPrinterPlugin.class);
         registerPlugin(MercoDigitalInkPlugin.class);
+        registerPlugin(MercoSecureStorePlugin.class);
         super.onCreate(savedInstanceState);
         // Reinforce manifest portrait lock (some OEMs / WebView stacks ignore manifest alone).
         applyPortraitOrientationLock();
@@ -23,6 +25,12 @@ public class MainActivity extends BridgeActivity {
     @Override
     public void onResume() {
         super.onResume();
+        applyPortraitOrientationLock();
+    }
+
+    @Override
+    public void onConfigurationChanged(Configuration newConfig) {
+        super.onConfigurationChanged(newConfig);
         applyPortraitOrientationLock();
     }
 

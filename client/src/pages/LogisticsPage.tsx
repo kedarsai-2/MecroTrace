@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useRef, useCallback, useId } from 'react';
-import { useWindowVirtualizer, measureElement } from '@tanstack/react-virtual';
+import { useVirtualizer, useWindowVirtualizer, measureElement } from '@tanstack/react-virtual';
 import type { CSSProperties } from 'react';
-import { motion } from 'framer-motion';
+import { motion, useReducedMotion } from 'framer-motion';
 import {
   ArrowLeft,
   ArrowRightLeft,
@@ -49,7 +49,7 @@ import { useAuctionResults } from '@/hooks/useAuctionResults';
 import { printLogApi, arrivalsApi, logisticsApi, auctionApi } from '@/services/api';
 import type { AuctionBidUpdateRequest } from '@/services/api/auction';
 import { usePermissions } from '@/lib/permissions';
-import type { ArrivalDetail } from '@/services/api/arrivals';
+import type { ArrivalDetail, ArrivalFullDetail } from '@/services/api/arrivals';
 import {
   directPrint,
   generateSalesSticker,
@@ -105,6 +105,11 @@ const migratePoolStableKey = (b: BidInfo): string => {
   }
   return bidKey(b);
 };
+
+const bidStableMutationKey = (b: BidInfo): string =>
+  b.auctionEntryId != null && Number.isFinite(Number(b.auctionEntryId))
+    ? `ae:${b.auctionEntryId}`
+    : bidKey(b);
 
 /** Same grouping key as buyerGroups map (`buyerMark || buyerName`). */
 const logisticsBuyerGroupKey = (b: BidInfo): string =>
@@ -173,6 +178,37 @@ const FILTER_TABS: { key: FilterMode; label: string; icon: typeof Layers; desc: 
 ];
 
 const ARRIVAL_DETAIL_PAGE_SIZE = 100;
+const LOGISTICS_ROW_REVEAL_DELAY_SECONDS = 0.02;
+const LOGISTICS_ROW_REVEAL_MAX_DELAY_SECONDS = 0.12;
+
+const logisticsRowRevealTransition = (index: number) => ({
+  delay: Math.min(index * LOGISTICS_ROW_REVEAL_DELAY_SECONDS, LOGISTICS_ROW_REVEAL_MAX_DELAY_SECONDS),
+});
+
+const virtualPaddingTop = (items: Array<{ start: number }>): number => (items.length > 0 ? items[0].start : 0);
+
+const virtualPaddingBottom = (items: Array<{ end: number }>, totalSize: number): number => {
+  if (items.length === 0) return 0;
+  return Math.max(0, totalSize - items[items.length - 1].end);
+};
+
+const estimateBuyerGroupSize = (
+  group: { buyerMark: string; bids: BidInfo[] } | undefined,
+  collapsed: boolean,
+  isDesktop: boolean,
+): number => {
+  if (!group) return 180;
+  if (collapsed) return 84;
+
+  const rowCount = group.bids.length;
+  if (group.buyerMark === LOGISTICS_UNASSIGNED_BUYER_MARK) {
+    return 118 + rowCount * 42;
+  }
+
+  return isDesktop
+    ? 258 + Math.ceil(rowCount / 2) * 38
+    : 280 + rowCount * 76;
+};
 
 function mergeArrivalDetailsByVehicleId(prev: ArrivalDetail[], chunk: ArrivalDetail[]): ArrivalDetail[] {
   if (chunk.length === 0) return prev;
@@ -182,9 +218,51 @@ function mergeArrivalDetailsByVehicleId(prev: ArrivalDetail[], chunk: ArrivalDet
   return Array.from(m.values());
 }
 
+function positiveNumber(value: unknown): number | undefined {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? n : undefined;
+}
+
+function auctionHasCompletePrintHubMeta(auction: any): boolean {
+  return Boolean(
+    positiveNumber(auction?.sellerSerial ?? auction?.seller_serial ?? auction?.sellerSerialNo ?? auction?.seller_serial_no) &&
+      positiveNumber(auction?.lotNumber ?? auction?.lot_number ?? auction?.lotSerialNo ?? auction?.lot_serial_no) &&
+      String(auction?.commodityName ?? auction?.commodity_name ?? '').trim() &&
+      String(auction?.origin ?? '').trim() &&
+      String(auction?.godown ?? '').trim()
+  );
+}
+
+const EMPTY_AUCTION_RESULTS_SIGNATURE = '__empty__';
+
+function logisticsAuctionDataSignature(auctionData: unknown[]): string {
+  if (!auctionData.length) return EMPTY_AUCTION_RESULTS_SIGNATURE;
+  return auctionData.map((auction: any) => {
+    const entries = Array.isArray(auction?.entries) ? auction.entries : [];
+    const entrySig = entries
+      .map((entry: any) => [
+        entry.auctionEntryId ?? entry.auction_entry_id ?? '',
+        entry.bidNumber ?? '',
+        entry.buyerMark ?? '',
+        entry.buyerName ?? '',
+        entry.quantity ?? '',
+        entry.rate ?? '',
+      ].join(':'))
+      .join(',');
+    return [
+      auction?.auction_id ?? auction?.auctionId ?? '',
+      auction?.lotId ?? '',
+      auction?.completedAt ?? '',
+      entries.length,
+      entrySig,
+    ].join('|');
+  }).join('||');
+}
+
 const LogisticsPage = () => {
   const navigate = useNavigate();
   const isDesktop = useDesktopMode();
+  const reduceMotion = useReducedMotion();
   const { trader, user } = useAuth();
   const [bids, setBids] = useState<BidInfo[]>([]);
   const [printedBidKeys, setPrintedBidKeys] = useState<Set<string>>(() => new Set());
@@ -202,14 +280,27 @@ const LogisticsPage = () => {
     loadingMore: auctionResultsLoadingMore,
     resultsComplete: auctionResultsComplete,
     totalElements: auctionResultsTotal,
-    refetch: refetchAuctions,
   } = useAuctionResults();
   const { can } = usePermissions();
   const canEditAuctionBids = can('Auctions / Sales', 'Edit');
   const [arrivalDetails, setArrivalDetails] = useState<ArrivalDetail[]>([]);
   const [arrivalDetailsComplete, setArrivalDetailsComplete] = useState(false);
+  const auctionDataSignature = useMemo(() => logisticsAuctionDataSignature(auctionData), [auctionData]);
+  const needsArrivalDetails = useMemo(
+    () => auctionData.some((auction: any) => !auctionHasCompletePrintHubMeta(auction)),
+    [auctionData],
+  );
+  const [hydratedAuctionSignature, setHydratedAuctionSignature] = useState('');
+  const bidsHydrating = auctionResultsLoading || hydratedAuctionSignature !== auctionDataSignature;
+  const arrivalFullDetailsByVehicleIdRef = useRef<Map<number, ArrivalFullDetail>>(new Map());
+  const dailySerialAllocationKeyRef = useRef('');
 
   useEffect(() => {
+    if (!needsArrivalDetails) {
+      setArrivalDetailsComplete(true);
+      return;
+    }
+
     let cancelled = false;
     setArrivalDetails([]);
     setArrivalDetailsComplete(false);
@@ -238,7 +329,7 @@ const LogisticsPage = () => {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [needsArrivalDetails]);
 
   // REQ-LOG-004: Load bids from completed auctions; enrich with origin/godown/commodity from arrival full detail; daily serials from API
   useEffect(() => {
@@ -249,8 +340,15 @@ const LogisticsPage = () => {
       // Mapping by vehicle number was missing for some records, so seller/lot serial and godown stayed empty.
       // Build linkage from lotId -> arrival vehicleId first, then fetch full arrivals by vehicleId.
       const auctionLotIds = new Set<string>();
+      const auctionHasPrintHubMetaByLotId = new Map<string, boolean>();
       auctionData.forEach((auction: any) => {
-        if (auction?.lotId != null) auctionLotIds.add(String(auction.lotId));
+        if (auction?.lotId == null) return;
+        const lotId = String(auction.lotId);
+        auctionLotIds.add(lotId);
+        auctionHasPrintHubMetaByLotId.set(
+          lotId,
+          auctionHasCompletePrintHubMeta(auction)
+        );
       });
 
       const lotIdMetaFromList = new Map<
@@ -271,7 +369,9 @@ const LogisticsPage = () => {
           (seller.lots || []).forEach((lot) => {
             const lotId = String(lot.id);
             if (!auctionLotIds.has(lotId)) return;
-            vehicleIdsToFetch.add(arr.vehicleId);
+            if (!auctionHasPrintHubMetaByLotId.get(lotId)) {
+              vehicleIdsToFetch.add(arr.vehicleId);
+            }
             lotIdMetaFromList.set(lotId, {
               sellerName: seller.sellerName,
               lotName: lot.lotName,
@@ -288,157 +388,163 @@ const LogisticsPage = () => {
       const lotIdToCommodity = new Map<string, string>();
       const lotIdToSellerSerial = new Map<string, number>();
       const lotIdToLotSerial = new Map<string, number>();
-      await Promise.all(
-        [...vehicleIdsToFetch].map(async (vehicleId) => {
-          try {
-            const full = await arrivalsApi.getById(vehicleId);
-            (full.sellers || []).forEach((seller) => {
-              (seller.lots || []).forEach((lot) => {
-                const name = (lot as any).commodityName ?? (lot as any).commodity_name ?? '';
-                if (name) lotIdToCommodity.set(String(lot.id), name);
-                const sellerSerial = (seller as any).sellerSerialNumber ?? (seller as any).seller_serial_number;
-                if (sellerSerial != null && sellerSerial > 0) {
-                  lotIdToSellerSerial.set(String(lot.id), sellerSerial);
-                }
-                const lotSerial = (lot as any).lotSerialNumber ?? (lot as any).lot_serial_number;
-                if (lotSerial != null && lotSerial > 0) {
-                  lotIdToLotSerial.set(String(lot.id), lotSerial);
-                }
-              });
+
+      const buildBidsForCurrentData = (): BidInfo[] => {
+        const allBids: BidInfo[] = [];
+        auctionData.forEach((auction: any) => {
+          const selfSaleUnitId =
+            auction.selfSaleUnitId != null && Number(auction.selfSaleUnitId) > 0
+              ? Number(auction.selfSaleUnitId)
+              : null;
+          (auction.entries || []).forEach((entry: any) => {
+            const listMeta = lotIdMetaFromList.get(String(auction.lotId));
+            let sellerName = auction.sellerName || 'Unknown';
+            let vehicleNumber = auction.vehicleNumber || 'Unknown';
+            const fromAuction = auction.commodityName ?? (auction as any).commodity_name ?? '';
+            const commodityName = lotIdToCommodity.get(String(auction.lotId)) || fromAuction;
+            let lotName = auction.lotName || '';
+            let sellerSerial =
+              positiveNumber(auction.sellerSerial ?? auction.seller_serial ?? auction.sellerSerialNo ?? auction.seller_serial_no) ??
+              lotIdToSellerSerial.get(String(auction.lotId)) ??
+              0;
+            let lotNumber =
+              positiveNumber(auction.lotNumber ?? auction.lot_number ?? auction.lotSerialNo ?? auction.lot_serial_no) ??
+              lotIdToLotSerial.get(String(auction.lotId)) ??
+              0;
+            let origin: string | undefined = String(auction.origin ?? '').trim() || undefined;
+            let godown: string | undefined = String(auction.godown ?? '').trim() || undefined;
+            let vehicleMark = String(auction.vehicleMark ?? '').trim();
+            let sellerMark = String(auction.sellerMark ?? '').trim();
+            const apiVTot = Number(auction.vehicleTotalQty);
+            const apiSTot = Number(auction.sellerTotalQty);
+            const auctionVehicleTotalQty = Number.isFinite(apiVTot) && apiVTot > 0 ? apiVTot : undefined;
+            const auctionSellerTotalQty = Number.isFinite(apiSTot) && apiSTot > 0 ? apiSTot : undefined;
+
+            if (listMeta) {
+              sellerName = listMeta.sellerName || sellerName;
+              vehicleNumber = listMeta.vehicleNumber || vehicleNumber;
+              lotName = listMeta.lotName || lotName;
+              origin = origin || listMeta.origin;
+              godown = godown || listMeta.godown;
+              if (!vehicleMark) vehicleMark = String(listMeta.vehicleMark ?? '').trim();
+              if (!sellerMark) sellerMark = String(listMeta.sellerMark ?? '').trim();
+            }
+
+            const rawEntryId =
+              entry.auctionEntryId ??
+              (entry as { auction_entry_id?: number | null }).auction_entry_id;
+            const auctionEntryId =
+              rawEntryId != null && Number.isFinite(Number(rawEntryId))
+                ? Number(rawEntryId)
+                : undefined;
+
+            allBids.push({
+              bidNumber: entry.bidNumber,
+              buyerMark: entry.buyerMark,
+              buyerName: entry.buyerName,
+              quantity: entry.quantity,
+              rate: entry.rate,
+              lotId: String(auction.lotId),
+              lotName,
+              sellerName,
+              sellerSerial,
+              lotNumber,
+              vehicleNumber,
+              commodityName,
+              origin,
+              godown,
+              auctionEntryId,
+              selfSaleUnitId,
+              vehicleMark: vehicleMark || undefined,
+              sellerMark: sellerMark || undefined,
+              auctionVehicleTotalQty,
+              auctionSellerTotalQty,
             });
-          } catch {
-            // ignore per-vehicle errors
-          }
-        })
-      );
-
-      if (cancelled) return;
-
-      const allBids: BidInfo[] = [];
-      auctionData.forEach((auction: any) => {
-        const selfSaleUnitId =
-          auction.selfSaleUnitId != null && Number(auction.selfSaleUnitId) > 0
-            ? Number(auction.selfSaleUnitId)
-            : null;
-        (auction.entries || []).forEach((entry: any) => {
-          const listMeta = lotIdMetaFromList.get(String(auction.lotId));
-          let sellerName = auction.sellerName || 'Unknown';
-          let vehicleNumber = auction.vehicleNumber || 'Unknown';
-          const fromAuction = auction.commodityName ?? (auction as any).commodity_name ?? '';
-          const commodityName = lotIdToCommodity.get(String(auction.lotId)) || fromAuction;
-          let lotName = auction.lotName || '';
-          let sellerSerial = lotIdToSellerSerial.get(String(auction.lotId)) ?? 0;
-          let lotNumber = lotIdToLotSerial.get(String(auction.lotId)) ?? 0;
-          let origin: string | undefined;
-          let godown: string | undefined;
-          let vehicleMark = String(auction.vehicleMark ?? '').trim();
-          let sellerMark = String(auction.sellerMark ?? '').trim();
-          const apiVTot = Number(auction.vehicleTotalQty);
-          const apiSTot = Number(auction.sellerTotalQty);
-          const auctionVehicleTotalQty = Number.isFinite(apiVTot) && apiVTot > 0 ? apiVTot : undefined;
-          const auctionSellerTotalQty = Number.isFinite(apiSTot) && apiSTot > 0 ? apiSTot : undefined;
-
-          if (listMeta) {
-            sellerName = listMeta.sellerName || sellerName;
-            vehicleNumber = listMeta.vehicleNumber || vehicleNumber;
-            lotName = listMeta.lotName || lotName;
-            origin = listMeta.origin;
-            godown = listMeta.godown;
-            if (!vehicleMark) vehicleMark = String(listMeta.vehicleMark ?? '').trim();
-            if (!sellerMark) sellerMark = String(listMeta.sellerMark ?? '').trim();
-          }
-
-          const rawEntryId =
-            entry.auctionEntryId ??
-            (entry as { auction_entry_id?: number | null }).auction_entry_id;
-          const auctionEntryId =
-            rawEntryId != null && Number.isFinite(Number(rawEntryId))
-              ? Number(rawEntryId)
-              : undefined;
-
-          allBids.push({
-            bidNumber: entry.bidNumber,
-            buyerMark: entry.buyerMark,
-            buyerName: entry.buyerName,
-            quantity: entry.quantity,
-            rate: entry.rate,
-            lotId: String(auction.lotId),
-            lotName,
-            sellerName,
-            sellerSerial,
-            lotNumber,
-            vehicleNumber,
-            commodityName,
-            origin,
-            godown,
-            auctionEntryId,
-            selfSaleUnitId,
-            vehicleMark: vehicleMark || undefined,
-            sellerMark: sellerMark || undefined,
-            auctionVehicleTotalQty,
-            auctionSellerTotalQty,
           });
         });
-      });
 
-      if (cancelled) return;
+        const vehicleTotals = new Map<string, number>();
+        const vehicleSellerTotals = new Map<string, number>();
+        allBids.forEach(b => {
+          const vKey = b.vehicleNumber || '';
+          const vsKey = `${vKey}||${b.sellerName}`;
+          vehicleTotals.set(vKey, (vehicleTotals.get(vKey) ?? 0) + b.quantity);
+          vehicleSellerTotals.set(vsKey, (vehicleSellerTotals.get(vsKey) ?? 0) + b.quantity);
+        });
 
-      // REQ-LOG: Compute vehicle total qty / seller qty per vehicle (lot identifier)
-    const vehicleTotals = new Map<string, number>();
-    const vehicleSellerTotals = new Map<string, number>();
-    allBids.forEach(b => {
-      const vKey = b.vehicleNumber || '';
-      const vsKey = `${vKey}||${b.sellerName}`;
-      vehicleTotals.set(vKey, (vehicleTotals.get(vKey) ?? 0) + b.quantity);
-      vehicleSellerTotals.set(vsKey, (vehicleSellerTotals.get(vsKey) ?? 0) + b.quantity);
-    });
-
-    const sellerNames = [...new Set(allBids.map(b => b.sellerName).filter(Boolean))];
-    const lotIds = [...new Set(allBids.map(b => b.lotId).filter(Boolean))];
-    if (sellerNames.length === 0 && lotIds.length === 0) {
-      const withQty = allBids.map(b => {
-        const vKey = b.vehicleNumber || '';
-        const vsKey = `${vKey}||${b.sellerName}`;
-        return {
-          ...b,
-          vehicleTotalQty: b.auctionVehicleTotalQty ?? vehicleTotals.get(vKey) ?? b.quantity,
-          sellerVehicleQty: b.auctionSellerTotalQty ?? vehicleSellerTotals.get(vsKey) ?? b.quantity,
-        };
-      });
-      if (!cancelled) setBids(withQty);
-      return;
-    }
-    logisticsApi.allocateDailySerials({ sellerNames, lotIds })
-      .then((res) => {
-        if (cancelled) return;
-        const withSerials = allBids.map(b => ({
-          ...b,
-          // Seller serial must come from arrival auto-generated serial only.
-          sellerSerial: b.sellerSerial,
-          // Lot serial must come from arrival auto-generated serial only.
-          lotNumber: b.lotNumber,
-          vehicleTotalQty: b.auctionVehicleTotalQty ?? vehicleTotals.get(b.vehicleNumber || '') ?? b.quantity,
-          sellerVehicleQty: b.auctionSellerTotalQty ?? vehicleSellerTotals.get(`${b.vehicleNumber || ''}||${b.sellerName}`) ?? b.quantity,
-        }));
-        setBids(withSerials);
-      })
-      .catch(() => {
-        if (cancelled) return;
-        const withQtyFallback = allBids.map(b => {
+        return allBids.map(b => {
           const vKey = b.vehicleNumber || '';
           const vsKey = `${vKey}||${b.sellerName}`;
           return {
             ...b,
+            // Seller serial and lot serial must come from arrival/auction persisted serials only.
+            sellerSerial: b.sellerSerial,
+            lotNumber: b.lotNumber,
             vehicleTotalQty: b.auctionVehicleTotalQty ?? vehicleTotals.get(vKey) ?? b.quantity,
             sellerVehicleQty: b.auctionSellerTotalQty ?? vehicleSellerTotals.get(vsKey) ?? b.quantity,
           };
         });
-        setBids(withQtyFallback);
-      });
-    })();
+      };
+
+      const setCurrentBids = () => {
+        const nextBids = buildBidsForCurrentData();
+        if (cancelled) return;
+        setBids(nextBids);
+        setHydratedAuctionSignature(auctionDataSignature);
+
+        const sellerNames = [...new Set(nextBids.map(b => b.sellerName).filter(Boolean))];
+        const lotIds = [...new Set(nextBids.map(b => b.lotId).filter(Boolean))];
+        const serialAllocationKey = `${sellerNames.join('\u0001')}::${lotIds.join('\u0001')}`;
+        if ((sellerNames.length > 0 || lotIds.length > 0) && dailySerialAllocationKeyRef.current !== serialAllocationKey) {
+          dailySerialAllocationKeyRef.current = serialAllocationKey;
+          void logisticsApi.allocateDailySerials({ sellerNames, lotIds }).catch(() => {
+            // Serial allocation is persisted server-side for compatibility; persisted arrival serials drive this UI.
+          });
+        }
+      };
+
+      setCurrentBids();
+
+      if (vehicleIdsToFetch.size === 0) return;
+
+      await Promise.all(
+        [...vehicleIdsToFetch].map(async (vehicleId) => {
+          let full = arrivalFullDetailsByVehicleIdRef.current.get(vehicleId);
+          if (!full) {
+            try {
+              full = await arrivalsApi.getById(vehicleId);
+              arrivalFullDetailsByVehicleIdRef.current.set(vehicleId, full);
+            } catch {
+              return;
+            }
+          }
+          (full.sellers || []).forEach((seller) => {
+            (seller.lots || []).forEach((lot) => {
+              const name = (lot as any).commodityName ?? (lot as any).commodity_name ?? '';
+              if (name) lotIdToCommodity.set(String(lot.id), name);
+              const sellerSerial = (seller as any).sellerSerialNumber ?? (seller as any).seller_serial_number;
+              if (sellerSerial != null && sellerSerial > 0) {
+                lotIdToSellerSerial.set(String(lot.id), sellerSerial);
+              }
+              const lotSerial = (lot as any).lotSerialNumber ?? (lot as any).lot_serial_number;
+              if (lotSerial != null && lotSerial > 0) {
+                lotIdToLotSerial.set(String(lot.id), lotSerial);
+              }
+            });
+          });
+        })
+      );
+
+      if (cancelled) return;
+      setCurrentBids();
+    })().catch(() => {
+      if (!cancelled) {
+        setHydratedAuctionSignature(auctionDataSignature);
+      }
+    });
 
     return () => { cancelled = true; };
-  }, [auctionData, arrivalDetails]);
+  }, [auctionData, auctionDataSignature, arrivalDetails]);
 
   const filteredBids = useMemo(() => {
     if (!searchQuery) return bids;
@@ -454,15 +560,13 @@ const LogisticsPage = () => {
     );
   }, [bids, searchQuery]);
 
-  const lotList = useMemo(() => filteredBids, [filteredBids]);
-
   const lotRowVirtualizer = useWindowVirtualizer({
-    count: filterMode === 'LOT' ? lotList.length : 0,
+    count: filterMode === 'LOT' ? filteredBids.length : 0,
     estimateSize: () => 96,
     overscan: 10,
     measureElement,
     getItemKey: (index) => {
-      const bid = lotList[index];
+      const bid = filteredBids[index];
       return bid ? bidListKey(bid, index) : String(index);
     },
   });
@@ -479,6 +583,8 @@ const LogisticsPage = () => {
       buyerMark: mark,
       buyerName: list[0]?.buyerName ?? mark,
       bids: list,
+      totalQty: list.reduce((s, b) => s + b.quantity, 0),
+      totalAmount: list.reduce((s, b) => s + b.quantity * b.rate, 0),
     }));
     rows.sort((a, b) => {
       const aU = a.buyerMark === LOGISTICS_UNASSIGNED_BUYER_MARK ? 0 : 1;
@@ -489,6 +595,19 @@ const LogisticsPage = () => {
     return rows;
   }, [filteredBids]);
 
+  const buyerGroupVirtualizer = useWindowVirtualizer({
+    count: filterMode === 'BUYER' ? buyerGroups.length : 0,
+    estimateSize: (index) =>
+      estimateBuyerGroupSize(
+        buyerGroups[index],
+        buyerChittiCollapsed.has(buyerGroups[index]?.buyerMark ?? ''),
+        isDesktop,
+      ),
+    overscan: 4,
+    measureElement,
+    getItemKey: (index) => buyerGroups[index]?.buyerMark || String(index),
+  });
+
   /** Full list (ignore hub search filter) so migrate stays usable while searching other buyers/lots. */
   const unassignedPoolBids = useMemo(
     () => bids.filter((b) => isLogisticsUnassignedBid(b)),
@@ -498,9 +617,20 @@ const LogisticsPage = () => {
   const loadPrintedBidKeysFromServer = useCallback(async () => {
     try {
       const ids = await printLogApi.listReferenceIds(BUYER_CHITI_BID_REF_TYPE);
-      setPrintedBidKeys(
-        new Set((ids as string[]).filter((x) => typeof x === 'string' && x.length > 0))
-      );
+      const next = new Set((ids as string[]).filter((x) => typeof x === 'string' && x.length > 0));
+      setPrintedBidKeys((prev) => {
+        if (prev.size === next.size) {
+          let same = true;
+          for (const x of next) {
+            if (!prev.has(x)) {
+              same = false;
+              break;
+            }
+          }
+          if (same) return prev;
+        }
+        return next;
+      });
     } catch {
       // keep current set; user may lack PRINT_LOGS_VIEW
     }
@@ -508,7 +638,7 @@ const LogisticsPage = () => {
 
   useEffect(() => {
     void loadPrintedBidKeysFromServer();
-  }, [loadPrintedBidKeysFromServer, bids.length]);
+  }, [loadPrintedBidKeysFromServer]);
 
   useEffect(() => {
     const onVis = () => {
@@ -541,6 +671,7 @@ const LogisticsPage = () => {
   );
   const [migrateBuyerPickOpen, setMigrateBuyerPickOpen] = useState(false);
   const migrateBuyerPickRef = useRef<HTMLDivElement>(null);
+  const migrateListRef = useRef<HTMLUListElement>(null);
 
   useEffect(() => {
     if (!migrateBuyerPickOpen) return;
@@ -568,6 +699,31 @@ const LogisticsPage = () => {
       } else {
         await auctionApi.updateBid(b.lotId, b.auctionEntryId, body);
       }
+    },
+    []
+  );
+
+  const applyLocalBuyerReassignment = useCallback(
+    (changedBids: BidInfo[], buyerName: string, buyerMark: string) => {
+      if (changedBids.length === 0) return;
+      const changedKeys = new Set(changedBids.map(bidStableMutationKey));
+      const changedPrintKeys = new Set(changedBids.map(bidKey));
+
+      setBids((prev) =>
+        prev.map((bid) =>
+          changedKeys.has(bidStableMutationKey(bid))
+            ? { ...bid, buyerName, buyerMark }
+            : bid
+        )
+      );
+      setPrintedBidKeys((prev) => {
+        let changed = false;
+        const next = new Set(prev);
+        changedPrintKeys.forEach((key) => {
+          if (next.delete(key)) changed = true;
+        });
+        return changed ? next : prev;
+      });
     },
     []
   );
@@ -649,6 +805,33 @@ const LogisticsPage = () => {
     );
   }, [migrateCandidateBids, migrateSearch]);
 
+  const migrateResultVirtualizer = useVirtualizer({
+    count: migrateOpen ? migrateSearchResults.length : 0,
+    getScrollElement: () => migrateListRef.current,
+    estimateSize: () => 66,
+    overscan: 8,
+    measureElement,
+    getItemKey: (index) => {
+      const bid = migrateSearchResults[index];
+      return bid ? `${migratePoolStableKey(bid)}-${index}` : String(index);
+    },
+  });
+
+  useEffect(() => {
+    migrateResultVirtualizer.measure();
+  }, [
+    migrateOpen,
+    migrateSearchResults.length,
+    migrateResultVirtualizer,
+  ]);
+
+  const migrateVirtualItems = migrateResultVirtualizer.getVirtualItems();
+  const migratePaddingTop = virtualPaddingTop(migrateVirtualItems);
+  const migratePaddingBottom = virtualPaddingBottom(
+    migrateVirtualItems,
+    migrateResultVirtualizer.getTotalSize(),
+  );
+
   const confirmStageRemoveFromChitti = useCallback(() => {
     if (!stagingRemove || !canEditAuctionBids) {
       setStagingRemove(null);
@@ -699,19 +882,20 @@ const LogisticsPage = () => {
     setMigrateBusy(true);
     try {
       let reassigned = 0;
+      const reassignedBids: BidInfo[] = [];
       for (const k of migrateSelectedKeys) {
         const b = migrateCandidateBids.find((x) => migratePoolStableKey(x) === k);
         if (b && b.auctionEntryId != null) {
           await reassignBidBuyer(b, migrateTarget.buyerName, migrateTarget.buyerMark);
           reassigned += 1;
+          reassignedBids.push(b);
         }
       }
       if (reassigned === 0) {
         toast.error('No bids matched your selection. Change search or refresh, then try again.');
         return;
       }
-      await refetchAuctions();
-      await loadPrintedBidKeysFromServer();
+      applyLocalBuyerReassignment(reassignedBids, migrateTarget.buyerName, migrateTarget.buyerMark);
       setMigrateOpen(false);
       setMigrateTarget(null);
       setMigrateSearch('');
@@ -737,8 +921,7 @@ const LogisticsPage = () => {
     canEditAuctionBids,
     migrateCandidateBids,
     reassignBidBuyer,
-    refetchAuctions,
-    loadPrintedBidKeysFromServer,
+    applyLocalBuyerReassignment,
   ]);
 
   useEffect(() => {
@@ -874,13 +1057,54 @@ const LogisticsPage = () => {
   }, []);
 
   const sellerGroups = useMemo(() => {
-    const bySeller = new Map<string, { name: string; serial: number; bids: BidInfo[] }>();
+    const bySeller = new Map<string, { name: string; serial: number; bids: BidInfo[]; totalQty: number; totalAmount: number }>();
     filteredBids.forEach(b => {
-      if (!bySeller.has(b.sellerName)) bySeller.set(b.sellerName, { name: b.sellerName, serial: b.sellerSerial, bids: [] });
-      bySeller.get(b.sellerName)!.bids.push(b);
+      if (!bySeller.has(b.sellerName)) {
+        bySeller.set(b.sellerName, { name: b.sellerName, serial: b.sellerSerial, bids: [], totalQty: 0, totalAmount: 0 });
+      }
+      const row = bySeller.get(b.sellerName)!;
+      row.bids.push(b);
+      row.totalQty += b.quantity;
+      row.totalAmount += b.quantity * b.rate;
     });
     return Array.from(bySeller.values());
   }, [filteredBids]);
+
+  const sellerGroupVirtualizer = useWindowVirtualizer({
+    count: filterMode === 'SELLER' ? sellerGroups.length : 0,
+    estimateSize: () => 84,
+    overscan: 8,
+    measureElement,
+    getItemKey: (index) => sellerGroups[index]?.name || String(index),
+  });
+
+  useEffect(() => {
+    buyerGroupVirtualizer.measure();
+  }, [
+    buyerChittiCollapsed,
+    buyerChittiPrintRateByMark,
+    pendingRemoveByMark,
+    filterMode,
+    buyerGroups.length,
+    buyerGroupVirtualizer,
+  ]);
+
+  useEffect(() => {
+    sellerGroupVirtualizer.measure();
+  }, [filterMode, sellerGroups.length, sellerGroupVirtualizer]);
+
+  const buyerGroupVirtualItems = buyerGroupVirtualizer.getVirtualItems();
+  const buyerGroupPaddingTop = virtualPaddingTop(buyerGroupVirtualItems);
+  const buyerGroupPaddingBottom = virtualPaddingBottom(
+    buyerGroupVirtualItems,
+    buyerGroupVirtualizer.getTotalSize(),
+  );
+  const sellerGroupVirtualItems = sellerGroupVirtualizer.getVirtualItems();
+  const sellerGroupPaddingTop = virtualPaddingTop(sellerGroupVirtualItems);
+  const sellerGroupPaddingBottom = virtualPaddingBottom(
+    sellerGroupVirtualItems,
+    sellerGroupVirtualizer.getTotalSize(),
+  );
 
   const uniqueLots = useMemo(() => new Set(bids.map(b => b.lotId)).size, [bids]);
   const uniqueBuyers = useMemo(() => new Set(bids.map(b => b.buyerMark || b.buyerName)).size, [bids]);
@@ -932,6 +1156,8 @@ const LogisticsPage = () => {
       }
     }
     const printRate = buyerChittiPrintRateByMark[mark] !== false;
+    let printedBidKeysToMark: string[] = [];
+    let printedBidLogSyncFailed = false;
     if (toPrint.length > 0) {
       toast.info('🖨 Printing Buyer Chiti…');
       const ok = await directPrint(
@@ -981,29 +1207,39 @@ const LogisticsPage = () => {
             })
           )
         );
+        printedBidKeysToMark = toPrint.map(bidKey);
       } catch {
+        printedBidLogSyncFailed = true;
         toast.warning('Chitti printed; some server log entries may be missing. List will refresh.');
       }
     }
     if (pending.size > 0 && canEditAuctionBids) {
       try {
+        const reassignedBids: BidInfo[] = [];
         for (const k of pending) {
           const b = g.bids.find((x) => bidKey(x) === k);
           if (b && b.auctionEntryId != null) {
             await reassignBidBuyer(b, LOGISTICS_UNASSIGNED_BUYER_NAME, LOGISTICS_UNASSIGNED_BUYER_MARK);
+            reassignedBids.push(b);
           }
         }
-        await refetchAuctions();
+        applyLocalBuyerReassignment(reassignedBids, LOGISTICS_UNASSIGNED_BUYER_NAME, LOGISTICS_UNASSIGNED_BUYER_MARK);
       } catch (e) {
         toast.error(e instanceof Error ? e.message : 'Print succeeded but pool move failed. Check auctions.');
         await loadPrintedBidKeysFromServer();
         return;
       }
-    } else if (toPrint.length > 0) {
-      await refetchAuctions().catch(() => {});
     }
     setPendingRemoveByMark((p) => ({ ...p, [mark]: new Set() }));
-    await loadPrintedBidKeysFromServer();
+    if (pending.size > 0 || printedBidLogSyncFailed) {
+      await loadPrintedBidKeysFromServer();
+    } else if (printedBidKeysToMark.length > 0) {
+      setPrintedBidKeys((prev) => {
+        const next = new Set(prev);
+        printedBidKeysToMark.forEach((k) => next.add(k));
+        return next;
+      });
+    }
     if (toPrint.length > 0 && pending.size > 0) {
       toast.success('Chitti printed and staged bids moved to Unassigned.');
     } else if (toPrint.length > 0) {
@@ -1170,21 +1406,21 @@ const LogisticsPage = () => {
         </div>
       )}
 
-      {!isDesktop && (!auctionResultsComplete || !arrivalDetailsComplete) && (bids.length > 0 || auctionResultsLoading) ? (
+      {!isDesktop && (!auctionResultsComplete || !arrivalDetailsComplete || bidsHydrating) && (bids.length > 0 || auctionResultsLoading || bidsHydrating) ? (
         <p className="px-4 mt-1 text-center text-[10px] text-muted-foreground">
           {!auctionResultsComplete
             ? auctionResultsTotal != null && auctionResultsTotal > 0
               ? `Auction results ${auctionData.length} / ${auctionResultsTotal}`
               : 'Loading auction results…'
             : null}
-          {!auctionResultsComplete && !arrivalDetailsComplete ? ' · ' : ''}
-          {!arrivalDetailsComplete ? 'Arrival details…' : null}
+          {!auctionResultsComplete && (!arrivalDetailsComplete || bidsHydrating) ? ' · ' : ''}
+          {!arrivalDetailsComplete || bidsHydrating ? 'Arrival details…' : null}
         </p>
       ) : null}
 
       <div className="px-4 mt-4 space-y-2">
         {bids.length === 0 ? (
-          auctionResultsLoading ? (
+          auctionResultsLoading || bidsHydrating ? (
             <div className="glass-card rounded-2xl p-8 text-center">
               <Printer className="w-10 h-10 text-muted-foreground/30 mx-auto mb-3 animate-pulse" />
               <p className="text-sm text-muted-foreground font-medium">Loading auction results…</p>
@@ -1205,7 +1441,7 @@ const LogisticsPage = () => {
             </div>
           )
         ) : filterMode === 'LOT' ? (
-          lotList.length === 0 ? (
+          filteredBids.length === 0 ? (
             <p className="text-center text-sm text-muted-foreground py-8">No matching lots</p>
           ) : (
             <div
@@ -1216,7 +1452,7 @@ const LogisticsPage = () => {
               }}
             >
               {lotRowVirtualizer.getVirtualItems().map((virtualRow) => {
-                const bid = lotList[virtualRow.index];
+                const bid = filteredBids[virtualRow.index];
                 if (!bid) return null;
                 return (
                   <div
@@ -1271,7 +1507,15 @@ const LogisticsPage = () => {
         ) : filterMode === 'BUYER' ? (
           buyerGroups.length === 0 ? (
             <p className="text-center text-sm text-muted-foreground py-8">No matching buyers</p>
-          ) : buyerGroups.map((g, i) => {
+          ) : (
+            <div className="w-full">
+              {buyerGroupPaddingTop > 0 && (
+                <div aria-hidden="true" style={{ height: `${buyerGroupPaddingTop}px` }} />
+              )}
+              {buyerGroupVirtualItems.map((virtualRow) => {
+            const g = buyerGroups[virtualRow.index];
+            if (!g) return null;
+            const i = virtualRow.index;
             const selectedSet = buyerChittiSelected[g.buyerMark] ?? new Set<string>();
             const unprintedBids = g.bids.filter((b) => !printedBidKeys.has(bidKey(b)));
             const pendingSet = pendingRemoveByMark[g.buyerMark] ?? new Set<string>();
@@ -1302,9 +1546,16 @@ const LogisticsPage = () => {
             const isUnassignedGroup = g.buyerMark === LOGISTICS_UNASSIGNED_BUYER_MARK;
             const chittiListId = `buyer-chitti-list-${g.buyerMark || 'x'}`;
             return (
-            <motion.div key={g.buyerMark}
-              initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: i * 0.02 }}
+            <div
+              key={virtualRow.key}
+              data-index={virtualRow.index}
+              ref={buyerGroupVirtualizer.measureElement}
+              className="w-full pb-2"
+            >
+            <motion.div
+              initial={reduceMotion ? false : { opacity: 0, y: 8 }}
+              animate={reduceMotion ? undefined : { opacity: 1, y: 0 }}
+              transition={reduceMotion ? undefined : logisticsRowRevealTransition(i)}
               className="glass-card rounded-2xl p-3 overflow-hidden">
               <div className="flex items-center gap-2 min-w-0">
                 <button
@@ -1326,9 +1577,9 @@ const LogisticsPage = () => {
                   <div className="flex items-center gap-2 text-[10px] text-muted-foreground mt-0.5 flex-wrap">
                     <span>{g.bids.length} lots</span>
                     <span>•</span>
-                    <span>{g.bids.reduce((s, b) => s + b.quantity, 0)} bags</span>
+                    <span>{g.totalQty} bags</span>
                     <span>•</span>
-                    <span>₹{g.bids.reduce((s, b) => s + b.quantity * b.rate, 0).toLocaleString('en-IN')}</span>
+                    <span>₹{g.totalAmount.toLocaleString('en-IN')}</span>
                   </div>
                 </div>
               </div>
@@ -1851,15 +2102,37 @@ const LogisticsPage = () => {
                 </div>
               )}
             </motion.div>
+            </div>
             );
-          })
+              })}
+              {buyerGroupPaddingBottom > 0 && (
+                <div aria-hidden="true" style={{ height: `${buyerGroupPaddingBottom}px` }} />
+              )}
+            </div>
+          )
         ) : (
           sellerGroups.length === 0 ? (
             <p className="text-center text-sm text-muted-foreground py-8">No matching sellers</p>
-          ) : sellerGroups.map((g, i) => (
-            <motion.div key={g.name}
-              initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: i * 0.02 }}
+          ) : (
+            <div className="w-full">
+              {sellerGroupPaddingTop > 0 && (
+                <div aria-hidden="true" style={{ height: `${sellerGroupPaddingTop}px` }} />
+              )}
+              {sellerGroupVirtualItems.map((virtualRow) => {
+                const g = sellerGroups[virtualRow.index];
+                if (!g) return null;
+                const i = virtualRow.index;
+                return (
+            <div
+              key={virtualRow.key}
+              data-index={virtualRow.index}
+              ref={sellerGroupVirtualizer.measureElement}
+              className="w-full pb-2"
+            >
+            <motion.div
+              initial={reduceMotion ? false : { opacity: 0, y: 8 }}
+              animate={reduceMotion ? undefined : { opacity: 1, y: 0 }}
+              transition={reduceMotion ? undefined : logisticsRowRevealTransition(i)}
               className="glass-card rounded-2xl p-3 overflow-hidden">
               <div className="flex items-center gap-3">
                 <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-amber-500 to-orange-500 flex items-center justify-center shadow-md flex-shrink-0">
@@ -1870,16 +2143,23 @@ const LogisticsPage = () => {
                   <div className="flex items-center gap-2 text-[10px] text-muted-foreground mt-0.5">
                     <span>{g.bids.length} lots</span>
                     <span>•</span>
-                    <span>{g.bids.reduce((s, b) => s + b.quantity, 0)} bags</span>
+                    <span>{g.totalQty} bags</span>
                     <span>•</span>
-                    <span>₹{g.bids.reduce((s, b) => s + b.quantity * b.rate, 0).toLocaleString('en-IN')}</span>
+                    <span>₹{g.totalAmount.toLocaleString('en-IN')}</span>
                   </div>
                 </div>
                 <button onClick={() => handlePrintSellerChiti(g)}
                   className="px-3 py-2 rounded-lg bg-gradient-to-r from-amber-500 to-orange-500 text-white text-[10px] font-bold shadow-sm flex-shrink-0">🖨 Chiti</button>
               </div>
             </motion.div>
-          ))
+            </div>
+                );
+              })}
+              {sellerGroupPaddingBottom > 0 && (
+                <div aria-hidden="true" style={{ height: `${sellerGroupPaddingBottom}px` }} />
+              )}
+            </div>
+          )
         )}
       </div>
 
@@ -2111,15 +2391,27 @@ const LogisticsPage = () => {
               </p>
             ) : (
               <ul
-                className="min-h-0 max-h-[min(42vh,340px)] flex-1 overflow-y-auto space-y-1.5 pr-0.5 py-1"
+                ref={migrateListRef}
+                className="min-h-0 max-h-[min(42vh,340px)] flex-1 overflow-y-auto pr-0.5 py-1"
                 role="list"
               >
-                {migrateSearchResults.map((b, rowIdx) => {
+                {migratePaddingTop > 0 && (
+                  <li aria-hidden="true" style={{ height: `${migratePaddingTop}px` }} />
+                )}
+                {migrateVirtualItems.map((virtualRow) => {
+                  const b = migrateSearchResults[virtualRow.index];
+                  if (!b) return null;
+                  const rowIdx = virtualRow.index;
                   const sk = migratePoolStableKey(b);
                   const selected = migrateSelectedKeys.has(sk);
                   const migDomId = `mig-${sk.replace(/[^a-zA-Z0-9_-]/g, '_')}-${rowIdx}`;
                   return (
-                    <li key={`mig-${sk}-${rowIdx}`}>
+                    <li
+                      key={virtualRow.key}
+                      data-index={virtualRow.index}
+                      ref={migrateResultVirtualizer.measureElement}
+                      className="pb-1.5"
+                    >
                       <div className="flex items-center gap-2 rounded-lg border border-border/60 p-2 hover:bg-foreground/5">
                         <div className="flex h-9 w-10 shrink-0 items-center justify-center">
                           <Checkbox
@@ -2150,6 +2442,9 @@ const LogisticsPage = () => {
                     </li>
                   );
                 })}
+                {migratePaddingBottom > 0 && (
+                  <li aria-hidden="true" style={{ height: `${migratePaddingBottom}px` }} />
+                )}
               </ul>
             )}
 
