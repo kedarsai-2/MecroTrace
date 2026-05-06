@@ -12,6 +12,7 @@ import {
   Printer,
   Save,
   Search,
+  Split,
   Trash2,
   User,
 } from 'lucide-react';
@@ -30,12 +31,23 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { Input } from '@/components/ui/input';
+import { MAX_MARK_LEN } from '@/components/InlineScribblePad';
 import BottomNav from '@/components/BottomNav';
 import { toast } from 'sonner';
 import { useAuth } from '@/context/AuthContext';
 import { useAuctionResults } from '@/hooks/useAuctionResults';
-import { printLogApi, arrivalsApi, logisticsApi } from '@/services/api';
+import { printLogApi, arrivalsApi, logisticsApi, contactApi } from '@/services/api';
 import { auctionApi, type AuctionBidCreateRequest } from '@/services/api/auction';
 import type { ArrivalDetail, ArrivalFullDetail } from '@/services/api/arrivals';
 import {
@@ -52,8 +64,34 @@ import {
   formatLotIdentifierForBid,
 } from '@/utils/printTemplates';
 import type { BidInfo } from '@/utils/printTemplates';
+import type { Contact } from '@/types/models';
 
 export type { BidInfo };
+
+const EXTRACT_PARTICIPANTS_DEBOUNCE_MS = 100;
+
+type ExtractDialogSnapshot = {
+  sourceBuyerMark: string;
+  sourceBuyerName: string;
+  bids: BidInfo[];
+  totalBidsInSourceGroup: number;
+};
+
+function parseContactIdForAuction(contactId: string): number | null {
+  const n = parseInt(contactId, 10);
+  return Number.isFinite(n) ? n : null;
+}
+
+function contactMarkOrName(c: Contact): { buyerMark: string; buyerName: string } {
+  const name = (c.name ?? '').trim();
+  const mark = (c.mark ?? '').trim();
+  const raw = (mark || name).trim();
+  const buyerMark = raw
+    ? raw.toUpperCase().slice(0, MAX_MARK_LEN)
+    : name.toUpperCase().slice(0, MAX_MARK_LEN);
+  const buyerName = name || buyerMark;
+  return { buyerMark: buyerMark || buyerName, buyerName: buyerName || buyerMark };
+}
 
 const bidKey = (b: BidInfo) => `${b.lotId}:${b.bidNumber}`;
 
@@ -368,6 +406,16 @@ const LogisticsPage = () => {
             rawLotBag != null && Number.isFinite(Number(rawLotBag)) && Number(rawLotBag) > 0
               ? Number(rawLotBag)
               : undefined;
+          const completedAtRaw =
+            auction.completedAt ??
+            auction.completed_at ??
+            auction.auctionDatetime ??
+            auction.auction_datetime;
+          let auctionCompletedAtMs = 0;
+          if (completedAtRaw) {
+            const ms = new Date(String(completedAtRaw)).getTime();
+            if (Number.isFinite(ms)) auctionCompletedAtMs = ms;
+          }
           (auction.entries || []).forEach((entry: any) => {
             const entryBuyerMark = String(entry.buyerMark ?? entry.buyer_mark ?? '').trim();
             if (entryBuyerMark === '__M0_UNB__') return;
@@ -377,11 +425,11 @@ const LogisticsPage = () => {
             const fromAuction = auction.commodityName ?? (auction as any).commodity_name ?? '';
             const commodityName = lotIdToCommodity.get(String(auction.lotId)) || fromAuction;
             let lotName = auction.lotName || '';
-            let sellerSerial =
+            const sellerSerial =
               positiveNumber(auction.sellerSerial ?? auction.seller_serial ?? auction.sellerSerialNo ?? auction.seller_serial_no) ??
               lotIdToSellerSerial.get(String(auction.lotId)) ??
               0;
-            let lotNumber =
+            const lotNumber =
               positiveNumber(auction.lotNumber ?? auction.lot_number ?? auction.lotSerialNo ?? auction.lot_serial_no) ??
               lotIdToLotSerial.get(String(auction.lotId)) ??
               0;
@@ -446,6 +494,7 @@ const LogisticsPage = () => {
               buyerId,
               isScribble: Boolean(entry.isScribble ?? entry.is_scribble),
               isSelfSale: Boolean(entry.isSelfSale ?? entry.is_self_sale),
+              auctionCompletedAtMs,
             });
           });
         });
@@ -534,18 +583,28 @@ const LogisticsPage = () => {
   }, [auctionData, auctionDataSignature, arrivalDetails]);
 
   const filteredBids = useMemo(() => {
-    if (!searchQuery) return bids;
-    const q = searchQuery.toLowerCase();
-    return bids.filter(b =>
-      b.buyerMark.toLowerCase().includes(q) ||
-      b.buyerName.toLowerCase().includes(q) ||
-      b.sellerName.toLowerCase().includes(q) ||
-      b.lotName.toLowerCase().includes(q) ||
-      b.vehicleNumber.toLowerCase().includes(q) ||
-      String(b.bidNumber).includes(q) ||
-      formatLotIdentifierForBid(b).toLowerCase().includes(q)
-    );
-  }, [bids, searchQuery]);
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return bids;
+
+    const matches = (value: string | number | null | undefined) =>
+      String(value ?? '').toLowerCase().includes(q);
+
+    return bids.filter((b) => {
+      if (filterMode === 'BUYER') {
+        return matches(b.buyerMark) || matches(b.buyerName);
+      }
+      if (filterMode === 'SELLER') {
+        return matches(b.sellerMark) || matches(b.sellerName);
+      }
+      return matches(b.lotName);
+    });
+  }, [bids, filterMode, searchQuery]);
+
+  const searchPlaceholder = useMemo(() => {
+    if (filterMode === 'BUYER') return 'Search buyer mark or name…';
+    if (filterMode === 'SELLER') return 'Search seller mark or name…';
+    return 'Search lot name…';
+  }, [filterMode]);
 
   const lotRowVirtualizer = useWindowVirtualizer({
     count: filterMode === 'LOT' ? filteredBids.length : 0,
@@ -573,11 +632,39 @@ const LogisticsPage = () => {
       totalQty: list.reduce((s, b) => s + b.quantity, 0),
       totalAmount: list.reduce((s, b) => s + b.quantity * b.rate, 0),
     }));
-    rows.sort((a, b) =>
-      (a.buyerMark || '').localeCompare(b.buyerMark || '', undefined, { sensitivity: 'base' }),
-    );
+    rows.sort((a, b) => {
+      const maxA = Math.max(0, ...a.bids.map((x) => x.auctionCompletedAtMs ?? 0));
+      const maxB = Math.max(0, ...b.bids.map((x) => x.auctionCompletedAtMs ?? 0));
+      if (maxA !== maxB) return maxB - maxA;
+      return (a.buyerMark || '').localeCompare(b.buyerMark || '', undefined, { sensitivity: 'base' });
+    });
     return rows;
   }, [filteredBids]);
+
+  /** All buyers from loaded auction results (unfiltered) — extract / merge targets. */
+  const logisticsAllBuyerGroups = useMemo(() => {
+    const byBuyer = new Map<string, BidInfo[]>();
+    bids.forEach(b => {
+      const key = b.buyerMark || b.buyerName || '';
+      const list = byBuyer.get(key) ?? [];
+      list.push(b);
+      byBuyer.set(key, list);
+    });
+    const rows = Array.from(byBuyer.entries()).map(([mark, list]) => ({
+      buyerMark: mark,
+      buyerName: list[0]?.buyerName ?? mark,
+      bids: list,
+      totalQty: list.reduce((s, b) => s + b.quantity, 0),
+      totalAmount: list.reduce((s, b) => s + b.quantity * b.rate, 0),
+    }));
+    rows.sort((a, b) => {
+      const maxA = Math.max(0, ...a.bids.map((x) => x.auctionCompletedAtMs ?? 0));
+      const maxB = Math.max(0, ...b.bids.map((x) => x.auctionCompletedAtMs ?? 0));
+      if (maxA !== maxB) return maxB - maxA;
+      return (a.buyerMark || '').localeCompare(b.buyerMark || '', undefined, { sensitivity: 'base' });
+    });
+    return rows;
+  }, [bids]);
 
   const buyerGroupVirtualizer = useWindowVirtualizer({
     count: filterMode === 'BUYER' ? buyerGroups.length : 0,
@@ -598,6 +685,46 @@ const LogisticsPage = () => {
   const [buyerChittiPrintRateByMark, setBuyerChittiPrintRateByMark] = useState<Record<string, boolean>>({});
   const chittiPrintRateLabelBase = useId();
   const [chittiPreviewMark, setChittiPreviewMark] = useState<string | null>(null);
+  const [extractDialog, setExtractDialog] = useState<{
+    sourceBuyerMark: string;
+    sourceBuyerName: string;
+    bids: BidInfo[];
+    totalBidsInSourceGroup: number;
+  } | null>(null);
+  const [extractQuery, setExtractQuery] = useState('');
+  const [extractTargetChoice, setExtractTargetChoice] = useState<{
+    buyerMark: string;
+    buyerName: string;
+    buyerId: number | null;
+    isFresh?: boolean;
+  } | null>(null);
+  const [extractTempMarks, setExtractTempMarks] = useState<string[]>([]);
+  const [extractParticipantHits, setExtractParticipantHits] = useState<Contact[]>([]);
+  const [extractParticipantSearchLoading, setExtractParticipantSearchLoading] = useState(false);
+  const [extractParticipantSearchQuery, setExtractParticipantSearchQuery] = useState('');
+  const [extractShowPickList, setExtractShowPickList] = useState(false);
+  const [extractSaving, setExtractSaving] = useState(false);
+  const [extractAllLotsConfirmOpen, setExtractAllLotsConfirmOpen] = useState(false);
+  const extractAllLotsPendingRef = useRef<null | {
+    d: {
+      sourceBuyerMark: string;
+      sourceBuyerName: string;
+      bids: BidInfo[];
+      totalBidsInSourceGroup: number;
+    };
+    target: { buyerMark: string; buyerName: string; buyerId: number | null };
+  }>(null);
+  const extractPickRef = useRef<HTMLDivElement | null>(null);
+  const extractSearchGenRef = useRef(0);
+  /** Sync for blur/timeout handlers (avoid stale extractDialog after Cancel). */
+  const extractSyncRef = useRef({
+    dialog: extractDialog,
+    query: extractQuery,
+    targetChoice: extractTargetChoice,
+  });
+  extractSyncRef.current.dialog = extractDialog;
+  extractSyncRef.current.query = extractQuery;
+  extractSyncRef.current.targetChoice = extractTargetChoice;
 
   const [pendingRemoveBid, setPendingRemoveBid] = useState<BidInfo | null>(null);
   const [removeBidSaving, setRemoveBidSaving] = useState(false);
@@ -627,6 +754,57 @@ const LogisticsPage = () => {
     document.addEventListener('mousedown', onPointerDown);
     return () => document.removeEventListener('mousedown', onPointerDown);
   }, []);
+
+  useEffect(() => {
+    const onPointerDown = (e: MouseEvent) => {
+      if (!extractShowPickList) return;
+      const t = e.target as Node;
+      if (extractPickRef.current?.contains(t)) return;
+      setExtractShowPickList(false);
+    };
+    document.addEventListener('mousedown', onPointerDown);
+    return () => document.removeEventListener('mousedown', onPointerDown);
+  }, [extractShowPickList]);
+
+  useEffect(() => {
+    if (!extractDialog) {
+      setExtractTempMarks([]);
+      setExtractParticipantHits([]);
+      setExtractParticipantSearchLoading(false);
+      setExtractParticipantSearchQuery('');
+      return;
+    }
+    let cancelled = false;
+    void auctionApi.listTemporaryBuyerMarksToday().then((m) => {
+      if (!cancelled) setExtractTempMarks(Array.isArray(m) ? m : []);
+    }).catch(() => {
+      if (!cancelled) setExtractTempMarks([]);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [extractDialog]);
+
+  useEffect(() => {
+    if (!extractDialog) return;
+    const myGen = ++extractSearchGenRef.current;
+    const q = extractQuery.trim();
+    setExtractParticipantSearchLoading(true);
+    const t = window.setTimeout(() => {
+      void contactApi.searchParticipants(q, { limit: 50 }).then((c) => {
+        if (extractSearchGenRef.current !== myGen) return;
+        setExtractParticipantHits(c);
+        setExtractParticipantSearchQuery(q);
+      }).catch(() => {
+        if (extractSearchGenRef.current !== myGen) return;
+        setExtractParticipantHits([]);
+        setExtractParticipantSearchQuery(q);
+      }).finally(() => {
+        if (extractSearchGenRef.current === myGen) setExtractParticipantSearchLoading(false);
+      });
+    }, EXTRACT_PARTICIPANTS_DEBOUNCE_MS);
+    return () => window.clearTimeout(t);
+  }, [extractDialog, extractQuery]);
 
   useEffect(() => {
     setBuyerChittiSelected((prev) => {
@@ -842,6 +1020,7 @@ const LogisticsPage = () => {
     qty: number,
     target: { buyerMark: string; buyerName: string; buyerId?: number | null },
   ): Promise<boolean> => {
+    const newRowIsScribble = target.buyerId == null;
     let usedLotIncrease = false;
     const entryId = bid.auctionEntryId;
     if (entryId == null || !Number.isFinite(Number(entryId))) {
@@ -881,7 +1060,7 @@ const LogisticsPage = () => {
         token_advance: tokM,
         preset_applied: bid.presetApplied ?? 0,
         preset_type: bid.presetType ?? 'PROFIT',
-        is_scribble: bid.isScribble ?? false,
+        is_scribble: newRowIsScribble,
         is_self_sale: true,
       });
       return false;
@@ -928,7 +1107,7 @@ const LogisticsPage = () => {
       token_advance: tokM,
       preset_applied: bid.presetApplied ?? 0,
       preset_type: bid.presetType ?? 'PROFIT',
-      is_scribble: bid.isScribble ?? false,
+      is_scribble: newRowIsScribble,
     };
 
     try {
@@ -943,6 +1122,244 @@ const LogisticsPage = () => {
     }
 
     return usedLotIncrease;
+  };
+
+  const openExtractDialog = useCallback(
+    (g: { buyerMark: string; buyerName: string; bids: BidInfo[] }, selectedBids: BidInfo[]) => {
+      if (selectedBids.length === 0) {
+        toast.error('Select at least one lot');
+        return;
+      }
+      setExtractDialog({
+        sourceBuyerMark: g.buyerMark,
+        sourceBuyerName: g.buyerName,
+        bids: selectedBids,
+        totalBidsInSourceGroup: g.bids.length,
+      });
+      setExtractQuery('');
+      setExtractTargetChoice(null);
+      setExtractShowPickList(true);
+    },
+    [],
+  );
+
+  const commitExtractTypedAsFreshTarget = useCallback(() => {
+    const { dialog: d, query, targetChoice } = extractSyncRef.current;
+    if (!d) return;
+    if (targetChoice) {
+      setExtractShowPickList(false);
+      return;
+    }
+    const trimmed = query.trim();
+    if (!trimmed) return;
+    const m = trimmed.toUpperCase().slice(0, MAX_MARK_LEN);
+    if (!m) return;
+    if (m.toLowerCase() === d.sourceBuyerMark.trim().toLowerCase()) {
+      toast.error('Target mark must differ from the current buyer mark');
+      return;
+    }
+    setExtractTargetChoice({
+      buyerMark: m,
+      buyerName: trimmed.slice(0, 200),
+      buyerId: null,
+      isFresh: true,
+    });
+    setExtractShowPickList(false);
+  }, []);
+
+  const extractFilteredLotBuyers = useMemo(() => {
+    if (!extractDialog) return [];
+    const src = { buyerMark: extractDialog.sourceBuyerMark, buyerName: extractDialog.sourceBuyerName };
+    const q = extractQuery.trim().toLowerCase();
+    return logisticsAllBuyerGroups
+      .filter((g) => {
+        if (sameLogisticsBuyer(g, src)) return false;
+        if (!q) return true;
+        return (
+          (g.buyerMark || '').toLowerCase().includes(q) ||
+          (g.buyerName || '').toLowerCase().includes(q)
+        );
+      })
+      .slice(0, 40);
+  }, [extractDialog, extractQuery, logisticsAllBuyerGroups]);
+
+  const extractFilteredTemps = useMemo(() => {
+    if (!extractDialog) return [];
+    const q = extractQuery.trim().toLowerCase();
+    const sm = extractDialog.sourceBuyerMark.trim().toLowerCase();
+    return extractTempMarks
+      .filter((m) => {
+        if (m.trim().toLowerCase() === sm) return false;
+        if (!q) return true;
+        return m.toLowerCase().includes(q);
+      })
+      .slice(0, 30);
+  }, [extractDialog, extractQuery, extractTempMarks]);
+
+  const extractFilteredContacts = useMemo(() => {
+    if (!extractDialog) return [];
+    const q = extractQuery.trim().toLowerCase();
+    const src = { buyerMark: extractDialog.sourceBuyerMark, buyerName: extractDialog.sourceBuyerName };
+    return extractParticipantHits
+      .filter((c) => {
+        const { buyerMark, buyerName } = contactMarkOrName(c);
+        if (sameLogisticsBuyer({ buyerMark, buyerName }, src)) return false;
+        if (!q) return true;
+        return (
+          buyerName.toLowerCase().includes(q) ||
+          buyerMark.toLowerCase().includes(q) ||
+          (c.phone ?? '').toLowerCase().includes(q)
+        );
+      })
+      .slice(0, 30);
+  }, [extractDialog, extractQuery, extractParticipantHits]);
+
+  const extractFreshTargetDraft = useMemo(() => {
+    if (!extractDialog) return null;
+    const trimmed = extractQuery.trim();
+    if (!trimmed) return null;
+    if (extractParticipantSearchLoading) return null;
+    if (extractParticipantSearchQuery !== trimmed) return null;
+
+    const buyerMark = trimmed.toUpperCase().slice(0, MAX_MARK_LEN);
+    if (!buyerMark) return null;
+    if (buyerMark.toLowerCase() === extractDialog.sourceBuyerMark.trim().toLowerCase()) return null;
+
+    const hasMatches =
+      extractFilteredLotBuyers.length > 0
+      || extractFilteredTemps.length > 0
+      || extractFilteredContacts.length > 0;
+
+    if (hasMatches) return null;
+
+    return {
+      buyerMark,
+      buyerName: trimmed.slice(0, 200),
+      buyerId: null,
+      isFresh: true,
+    };
+  }, [
+    extractDialog,
+    extractFilteredContacts.length,
+    extractFilteredLotBuyers.length,
+    extractFilteredTemps.length,
+    extractParticipantSearchLoading,
+    extractParticipantSearchQuery,
+    extractQuery,
+  ]);
+
+  const executeExtractMigration = async (
+    d: ExtractDialogSnapshot,
+    target: { buyerMark: string; buyerName: string; buyerId: number | null },
+  ) => {
+    setExtractSaving(true);
+    let extracted = 0;
+    let anyLotIncrease = false;
+    const label = `${target.buyerName} (${target.buyerMark})`;
+    try {
+      for (const bid of d.bids) {
+        const rowMax = Math.floor(Number(bid.quantity) || 0);
+        if (rowMax <= 0) continue;
+        const usedIncrease = await migrateOneBidRow(bid, rowMax, target);
+        if (usedIncrease) anyLotIncrease = true;
+        extracted++;
+      }
+      if (extracted === 0) {
+        toast.error('No lots to extract');
+        return;
+      }
+      await refetchAuctionResults({ keepPreviousData: true });
+      setExtractDialog(null);
+      setExtractQuery('');
+      setExtractTargetChoice(null);
+      setExtractShowPickList(false);
+      toast.success(
+        anyLotIncrease
+          ? `${extracted} lot(s) moved to ${label}. Lot bag count was increased where the recorded lot was below sold quantity.`
+          : `${extracted} lot(s) moved to ${label}.`,
+      );
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Extract failed');
+    } finally {
+      setExtractSaving(false);
+    }
+  };
+
+  const runExtractSave = async () => {
+    const d = extractDialog;
+    if (!d) return;
+
+    const source = { buyerMark: d.sourceBuyerMark, buyerName: d.sourceBuyerName };
+
+    let target: { buyerMark: string; buyerName: string; buyerId: number | null };
+
+    if (extractTargetChoice) {
+      target = extractTargetChoice;
+      if (sameLogisticsBuyer(target, source)) {
+        toast.error('Cannot extract to the same buyer');
+        return;
+      }
+    } else {
+      const m = extractQuery.trim().toUpperCase().slice(0, MAX_MARK_LEN);
+      if (!m) {
+        toast.error('Select a buyer from the list or enter a new mark');
+        return;
+      }
+      if (m.toLowerCase() === d.sourceBuyerMark.trim().toLowerCase()) {
+        toast.error('Target mark must differ from the current buyer mark');
+        return;
+      }
+      const norm = m.toLowerCase();
+
+      const mergedFromLots = logisticsAllBuyerGroups.find(
+        g => !sameLogisticsBuyer(g, source) && (g.buyerMark || '').trim().toLowerCase() === norm,
+      );
+      if (mergedFromLots) {
+        const idRaw = mergedFromLots.bids[0]?.buyerId;
+        target = {
+          buyerMark: mergedFromLots.buyerMark,
+          buyerName: mergedFromLots.buyerName,
+          buyerId: idRaw != null && Number.isFinite(Number(idRaw)) ? Number(idRaw) : null,
+        };
+      } else if (extractTempMarks.some(t => t.trim().toLowerCase() === norm)) {
+        target = { buyerMark: m, buyerName: m, buyerId: null };
+      } else {
+        const contactHit = extractParticipantHits.find((c) => {
+          const { buyerMark: bm } = contactMarkOrName(c);
+          return bm.trim().toLowerCase() === norm;
+        });
+        if (contactHit) {
+          const { buyerMark: bm, buyerName: bn } = contactMarkOrName(contactHit);
+          target = {
+            buyerMark: bm,
+            buyerName: bn,
+            buyerId: parseContactIdForAuction(contactHit.contact_id),
+          };
+        } else {
+          const markUsedOnAnyBid = bids.some(b => (b.buyerMark || '').trim().toLowerCase() === norm);
+          const markInTemps = extractTempMarks.some(t => t.trim().toLowerCase() === norm);
+          const markInContacts = extractParticipantHits.some((c) => {
+            const { buyerMark: bm } = contactMarkOrName(c);
+            return bm.trim().toLowerCase() === norm;
+          });
+          if (markUsedOnAnyBid || markInTemps || markInContacts) {
+            toast.error(
+              'This mark already exists. Pick the matching buyer, temp mark, or contact in the list to merge, or enter an unused mark.',
+            );
+            return;
+          }
+          target = { buyerMark: m, buyerName: m, buyerId: null };
+        }
+      }
+    }
+
+    if (d.bids.length > 0 && d.bids.length === d.totalBidsInSourceGroup) {
+      extractAllLotsPendingRef.current = { d, target };
+      setExtractAllLotsConfirmOpen(true);
+      return;
+    }
+
+    await executeExtractMigration(d, target);
   };
 
   const runLogisticsMigrate = async () => {
@@ -1035,7 +1452,8 @@ const LogisticsPage = () => {
       { html: generateSalesSticker(bid), thermalText: generateSalesStickerThermal(bid) },
       { mode: "auto" }
     );
-    ok ? toast.success('Sticker sent to printer!') : toast.error('Printer not connected. Please check printer connection.');
+    if (ok) toast.success('Sticker sent to printer!');
+    else toast.error('Printer not connected. Please check printer connection.');
   };
 
   const handleSavePrintBuyerChitti = async (g: { buyerMark: string; buyerName: string; bids: BidInfo[] }) => {
@@ -1108,7 +1526,8 @@ const LogisticsPage = () => {
       },
       { mode: "auto" }
     );
-    ok ? toast.success('Seller Chiti sent to printer!') : toast.error('Printer not connected.');
+    if (ok) toast.success('Seller Chiti sent to printer!');
+    else toast.error('Printer not connected.');
   };
 
   const handleBulkPrint = async (type: 'SALE_PAD' | 'TENDER_SLIP' | 'DISPATCH') => {
@@ -1129,7 +1548,8 @@ const LogisticsPage = () => {
           ? generateTenderSlip(chitiPrintTraderName)
           : generateDispatchControl(filteredBids);
     const ok = await directPrint(html, { mode: "system" });
-    ok ? toast.success('Sent to printer!') : toast.error('Printer not connected.');
+    if (ok) toast.success('Sent to printer!');
+    else toast.error('Printer not connected.');
   };
 
   // ═══ BID LIST SCREEN ═══
@@ -1154,7 +1574,7 @@ const LogisticsPage = () => {
             </div>
             <div className="relative mb-3">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-white/50" />
-              <input aria-label="Search" placeholder="Search lot, buyer, seller, or 320/320/110-110…"
+              <input aria-label="Search" placeholder={searchPlaceholder}
                 value={searchQuery} onChange={e => setSearchQuery(e.target.value)}
                 className="w-full h-10 pl-10 pr-4 rounded-xl bg-white/20 backdrop-blur text-white placeholder:text-white/50 text-sm border border-white/10 focus:outline-none focus:border-white/30" />
             </div>
@@ -1196,7 +1616,7 @@ const LogisticsPage = () => {
             <div className="flex items-center gap-2">
               <div className="relative w-64">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                <input aria-label="Search" placeholder="Search lot, buyer, seller, or 320/320/110-110…"
+                <input aria-label="Search" placeholder={searchPlaceholder}
                   value={searchQuery} onChange={e => setSearchQuery(e.target.value)}
                   className="w-full h-10 pl-10 pr-4 rounded-xl bg-muted/50 text-foreground text-sm border border-border focus:outline-none focus:border-primary/50" />
               </div>
@@ -1466,6 +1886,20 @@ const LogisticsPage = () => {
                             <Eye className="h-4 w-4 shrink-0" strokeWidth={2.25} aria-hidden />
                             Preview
                           </button>
+                            <button
+                            type="button"
+                            onClick={() => openExtractDialog(g, draftPreviewBids)}
+                            className={cn(
+                              BUYER_CHITTI_BULK_BTN_CLASS,
+                              'h-8 shrink-0 justify-center inline-flex items-center gap-2 px-3',
+                            )}
+                            style={buyerChittiBulkBtnStyle}
+                            title="Move selected lots to a new temporary buyer mark"
+                            disabled={draftPreviewBids.length === 0}
+                          >
+                            <Split className="h-4 w-4 shrink-0" strokeWidth={2.25} aria-hidden />
+                            Extract
+                          </button>
                           <button
                             type="button"
                             className={cn(BUYER_CHITTI_BULK_BTN_CLASS, 'h-8 shrink-0 justify-center inline-flex items-center gap-2 px-3')}
@@ -1491,6 +1925,35 @@ const LogisticsPage = () => {
                               className="shrink-0"
                             />
                           </div>
+                          <div className="flex flex-wrap items-center justify-end gap-2 shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => openMigrateDialog(g)}
+                              className={cn(
+                                BUYER_CHITTI_BULK_BTN_CLASS,
+                                'h-8 shrink-0 inline-flex items-center justify-center gap-2 px-3',
+                              )}
+                              style={buyerChittiBulkBtnStyle}
+                              title="Search and migrate lots into this buyer"
+                            >
+                              <Search className="h-4 w-4 shrink-0" strokeWidth={2.25} aria-hidden />
+                              Migrate
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => openExtractDialog(g, draftPreviewBids)}
+                              className={cn(
+                                BUYER_CHITTI_BULK_BTN_CLASS,
+                                'h-8 shrink-0 inline-flex items-center justify-center gap-2 px-3',
+                              )}
+                              style={buyerChittiBulkBtnStyle}
+                              title="Move selected lots to a new temporary buyer mark"
+                              disabled={draftPreviewBids.length === 0}
+                            >
+                              <Split className="h-4 w-4 shrink-0" strokeWidth={2.25} aria-hidden />
+                              Extract
+                            </button>
+                          </div>
                         </div>
                       </div>
                       <p className="text-[10px] font-semibold text-muted-foreground">
@@ -1502,34 +1965,6 @@ const LogisticsPage = () => {
                           <h3 className="text-[11px] font-bold uppercase tracking-wide text-muted-foreground">
                             Current lots
                           </h3>
-                          <div className="flex flex-wrap items-center justify-end gap-2 shrink-0">
-                          <button
-                            type="button"
-                            onClick={() => openMigrateDialog(g)}
-                            className={cn(
-                              BUYER_CHITTI_BULK_BTN_CLASS,
-                              'md:hidden h-8 shrink-0 inline-flex items-center justify-center gap-2 px-3',
-                            )}
-                            style={buyerChittiBulkBtnStyle}
-                            title="Search and migrate lots into this buyer"
-                          >
-                            <Search className="h-4 w-4 shrink-0" strokeWidth={2.25} aria-hidden />
-                            Migrate
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setChittiPreviewMark(g.buyerMark)}
-                            className={cn(
-                              BUYER_CHITTI_BULK_BTN_CLASS,
-                              'md:hidden h-8 shrink-0 inline-flex items-center justify-center gap-2 px-3',
-                            )}
-                            style={buyerChittiBulkBtnStyle}
-                            title="Print preview"
-                          >
-                            <Eye className="h-4 w-4 shrink-0" strokeWidth={2.25} aria-hidden />
-                            Preview
-                          </button>
-                          </div>
                         </div>
                         <div className="hidden md:block min-w-0 pt-0.5">
                           {(() => {
@@ -1773,7 +2208,19 @@ const LogisticsPage = () => {
                           type="button"
                           className={cn(
                             BUYER_CHITTI_BULK_BTN_CLASS,
-                            'min-h-10 min-w-0 shrink-0 inline-flex items-center justify-center gap-2',
+                            'min-h-10 min-w-0 flex-1 inline-flex items-center justify-center gap-2 px-3',
+                          )}
+                          style={buyerChittiBulkBtnStyle}
+                          onClick={() => setChittiPreviewMark(g.buyerMark)}
+                        >
+                          <Eye className="h-4 w-4 shrink-0" strokeWidth={2.25} aria-hidden />
+                          Preview
+                        </button>
+                        <button
+                          type="button"
+                          className={cn(
+                            BUYER_CHITTI_BULK_BTN_CLASS,
+                            'min-h-10 min-w-0 flex-1 inline-flex items-center justify-center gap-2 px-3',
                           )}
                           style={buyerChittiBulkBtnStyle}
                           disabled={draftPreviewBids.length === 0}
@@ -2320,6 +2767,331 @@ const LogisticsPage = () => {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <Dialog
+        open={extractDialog != null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setExtractDialog(null);
+            setExtractQuery('');
+            setExtractTargetChoice(null);
+            setExtractShowPickList(false);
+            extractAllLotsPendingRef.current = null;
+            setExtractAllLotsConfirmOpen(false);
+          }
+        }}
+      >
+        <DialogContent
+          overlayClassName="z-[95]"
+          className="!z-[110] flex max-h-[min(92dvh,720px)] w-[calc(100vw-1rem)] max-w-lg min-w-0 flex-col gap-3 overflow-x-visible overflow-y-hidden p-4 sm:w-full sm:p-6"
+        >
+          <DialogHeader className="min-w-0 shrink-0 space-y-1.5 text-left">
+            <DialogTitle className="text-base leading-snug sm:text-lg">Extract</DialogTitle>
+            <DialogDescription className="sr-only">
+              Choose target buyer, then confirm extract.
+            </DialogDescription>
+          </DialogHeader>
+          {extractDialog ? (
+            <>
+              <div ref={extractPickRef} className="relative z-10 shrink-0 rounded-xl border border-border/50 bg-background/70 p-3 sm:p-3.5">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between sm:gap-3">
+                  <div className="min-w-0">
+                    <Label htmlFor="logistics-extract-target" className="text-xs font-semibold">
+                      Target buyer
+                    </Label>
+                  </div>
+                  <button
+                    type="button"
+                    className={cn(
+                      BUYER_CHITTI_BULK_BTN_CLASS,
+                      'h-8 min-h-8 shrink-0 self-start px-3 text-[10px]',
+                    )}
+                    style={buyerChittiBulkBtnStyle}
+                    onClick={() => {
+                      setExtractTargetChoice(null);
+                      setExtractQuery('');
+                      setExtractShowPickList(true);
+                    }}
+                  >
+                    Clear
+                  </button>
+                </div>
+                <div className="mt-2.5 grid gap-2">
+                  <div className="w-full min-w-0">
+                    <Input
+                      id="logistics-extract-target"
+                      value={extractQuery}
+                      onChange={(e) => {
+                        setExtractQuery(e.target.value);
+                        setExtractTargetChoice(null);
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key !== 'Enter') return;
+                        e.preventDefault();
+                        commitExtractTypedAsFreshTarget();
+                      }}
+                      onBlur={(e) => {
+                        const rt = e.relatedTarget;
+                        if (rt instanceof Node && extractPickRef.current?.contains(rt)) return;
+                        window.setTimeout(() => {
+                          if (!extractSyncRef.current.dialog) return;
+                          const ae = document.activeElement;
+                          if (ae instanceof Node && extractPickRef.current?.contains(ae)) return;
+                          commitExtractTypedAsFreshTarget();
+                        }, 0);
+                      }}
+                      onFocus={() => setExtractShowPickList(true)}
+                      placeholder="Search buyer or type a new mark"
+                      maxLength={80}
+                      className="h-11 rounded-lg text-sm sm:h-10"
+                      autoComplete="off"
+                    />
+                  </div>
+                  {extractTargetChoice ? (
+                    <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-[11px]">
+                      <span className="max-w-full truncate font-semibold text-foreground">
+                        {extractTargetChoice.buyerName}
+                        <span className="text-muted-foreground"> [{extractTargetChoice.buyerMark}]</span>
+                      </span>
+                      <span className="inline-flex shrink-0 rounded-full border border-border/50 bg-muted/30 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                        {extractTargetChoice.isFresh
+                          ? 'New'
+                          : extractTargetChoice.buyerId == null
+                            ? 'Temp existing'
+                            : 'Existing'}
+                      </span>
+                    </div>
+                  ) : extractParticipantSearchLoading && extractQuery.trim() ? (
+                    <p className="text-[11px] text-muted-foreground">Searching buyers…</p>
+                  ) : null}
+                </div>
+                {extractShowPickList ? (
+                  <div
+                    data-extract-dropdown-panel
+                    className="absolute left-0 right-0 top-full z-40 mt-1 max-h-[min(18rem,40dvh)] overflow-y-auto overscroll-contain rounded-lg border border-border/60 bg-popover text-popover-foreground shadow-xl [-webkit-overflow-scrolling:touch] touch-pan-y"
+                  >
+                    {extractFreshTargetDraft ? (
+                      <>
+                        <div className="border-b border-border/40 px-2 py-1 text-[10px] font-bold uppercase tracking-wide text-muted-foreground">
+                          Create temporary buyer
+                        </div>
+                        <button
+                          type="button"
+                          className="w-full border-b border-border/30 px-3 py-2 text-left text-xs hover:bg-muted/50"
+                          onMouseDown={(e) => e.preventDefault()}
+                          onClick={() => {
+                            setExtractTargetChoice(extractFreshTargetDraft);
+                            setExtractShowPickList(false);
+                          }}
+                        >
+                          <span className="font-semibold text-foreground">{extractFreshTargetDraft.buyerName}</span>
+                          <span className="text-muted-foreground"> · {extractFreshTargetDraft.buyerMark}</span>
+                          <span className="block text-[10px] text-muted-foreground">Auto-selected while no matches are found.</span>
+                        </button>
+                      </>
+                    ) : null}
+                    <div className="border-b border-border/40 px-2 py-1 text-[10px] font-bold uppercase tracking-wide text-muted-foreground">
+                      Buyers with lots
+                    </div>
+                    {extractFilteredLotBuyers.length === 0 ? (
+                      <p className="px-3 py-2 text-[11px] text-muted-foreground">No other buyer in loaded results.</p>
+                    ) : (
+                      extractFilteredLotBuyers.map((g, gi) => {
+                        const idRaw = g.bids[0]?.buyerId;
+                        const buyerId =
+                          idRaw != null && Number.isFinite(Number(idRaw)) ? Number(idRaw) : null;
+                        return (
+                          <button
+                            key={`lot-${g.buyerMark}-${g.buyerName}-${gi}`}
+                            type="button"
+                            className="w-full border-b border-border/30 px-3 py-2 text-left text-xs last:border-b-0 hover:bg-muted/50"
+                            onMouseDown={(e) => e.preventDefault()}
+                            onClick={() => {
+                              setExtractTargetChoice({
+                                buyerMark: g.buyerMark,
+                                buyerName: g.buyerName,
+                                buyerId,
+                                isFresh: false,
+                              });
+                              setExtractQuery(`${g.buyerName} (${g.buyerMark})`);
+                              setExtractShowPickList(false);
+                            }}
+                          >
+                            <span className="font-semibold text-foreground">{g.buyerName}</span>
+                            <span className="text-muted-foreground"> · {g.buyerMark}</span>
+                            <span className="block text-[10px] text-muted-foreground">{g.bids.length} lot(s)</span>
+                          </button>
+                        );
+                      })
+                    )}
+                    <div className="border-b border-border/40 px-2 py-1 text-[10px] font-bold uppercase tracking-wide text-muted-foreground">
+                      Temp marks (today)
+                    </div>
+                    {extractFilteredTemps.length === 0 ? (
+                      <p className="px-3 py-2 text-[11px] text-muted-foreground">No temp mark matches.</p>
+                    ) : (
+                      extractFilteredTemps.map((m) => (
+                        <button
+                          key={`tmp-${m}`}
+                          type="button"
+                          className="w-full border-b border-border/30 px-3 py-2 text-left text-xs font-mono last:border-b-0 hover:bg-muted/50"
+                          onMouseDown={(e) => e.preventDefault()}
+                          onClick={() => {
+                            setExtractTargetChoice({ buyerMark: m, buyerName: m, buyerId: null, isFresh: false });
+                            setExtractQuery(m);
+                            setExtractShowPickList(false);
+                          }}
+                        >
+                          {m}
+                        </button>
+                      ))
+                    )}
+                    <div className="border-b border-border/40 px-2 py-1 text-[10px] font-bold uppercase tracking-wide text-muted-foreground">
+                      Contacts
+                    </div>
+                    {extractParticipantSearchLoading && extractQuery.trim() !== extractParticipantSearchQuery ? (
+                      <p className="px-3 py-2 text-[11px] text-muted-foreground">Searching contacts…</p>
+                    ) : extractFilteredContacts.length === 0 ? (
+                      <p className="px-3 py-2 text-[11px] text-muted-foreground">
+                        No contact matches. Keep typing to use this text as a temporary buyer.
+                      </p>
+                    ) : (
+                      extractFilteredContacts.map((c) => {
+                        const { buyerMark: bm, buyerName: bn } = contactMarkOrName(c);
+                        return (
+                          <button
+                            key={c.contact_id}
+                            type="button"
+                            className="w-full border-b border-border/30 px-3 py-2 text-left text-xs last:border-b-0 hover:bg-muted/50"
+                            onMouseDown={(e) => e.preventDefault()}
+                            onClick={() => {
+                              setExtractTargetChoice({
+                                buyerMark: bm,
+                                buyerName: bn,
+                                buyerId: parseContactIdForAuction(c.contact_id),
+                                isFresh: false,
+                              });
+                              setExtractQuery(`${bn} (${bm})`);
+                              setExtractShowPickList(false);
+                            }}
+                          >
+                            <span className="font-semibold text-foreground">{bn}</span>
+                            <span className="text-muted-foreground"> · {bm}</span>
+                          </button>
+                        );
+                      })
+                    )}
+                  </div>
+                ) : null}
+              </div>
+              <div className="min-h-0 min-w-0 flex-1 overflow-hidden rounded-lg border border-border/50">
+                <div className="max-h-[min(20rem,42dvh)] overflow-auto overscroll-contain [-webkit-overflow-scrolling:touch] sm:max-h-[min(24rem,48dvh)]">
+                  <table className="w-full text-left text-xs">
+                    <caption className="sr-only">Lots to extract</caption>
+                    <thead className="sticky top-0 z-[1] bg-muted/80 backdrop-blur-sm">
+                      <tr className="border-b border-border/50 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                        <th scope="col" className="px-2 py-2 sm:px-3">
+                          Lot
+                        </th>
+                        <th scope="col" className="px-2 py-2 text-right tabular-nums sm:px-3">
+                          Qty
+                        </th>
+                        {buyerChittiPrintRateByMark[extractDialog.sourceBuyerMark] !== false ? (
+                          <th scope="col" className="px-2 py-2 text-right tabular-nums sm:px-3">
+                            Rate
+                          </th>
+                        ) : null}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {extractDialog.bids.map((b, idx) => (
+                        <tr key={bidListKey(b, idx)} className="border-b border-border/40 last:border-b-0">
+                          <td className="max-w-[12rem] px-2 py-2 font-medium text-foreground break-words sm:px-3">
+                            {formatLotIdentifierForBid(b)}
+                          </td>
+                          <td className="px-2 py-2 text-right tabular-nums sm:px-3">{b.quantity}</td>
+                          {buyerChittiPrintRateByMark[extractDialog.sourceBuyerMark] !== false ? (
+                            <td className="px-2 py-2 text-right tabular-nums sm:px-3">₹{Number(b.rate || 0)}</td>
+                          ) : null}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+              <div className="relative z-0 flex min-w-0 shrink-0 flex-col gap-2 sm:flex-row sm:justify-end sm:gap-2">
+                <button
+                  type="button"
+                  className={cn(
+                    BUYER_CHITTI_BULK_BTN_CLASS,
+                    'inline-flex h-10 min-h-10 w-full items-center justify-center gap-2 px-4 sm:w-auto sm:min-w-[7rem]',
+                  )}
+                  style={buyerChittiBulkBtnStyle}
+                  onClick={() => {
+                    setExtractDialog(null);
+                    setExtractQuery('');
+                    setExtractTargetChoice(null);
+                    setExtractShowPickList(false);
+                  }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className={cn(
+                    BUYER_CHITTI_BULK_BTN_CLASS,
+                    'inline-flex h-10 min-h-10 w-full items-center justify-center gap-2 px-4 sm:w-auto sm:min-w-[7rem]',
+                  )}
+                  style={buyerChittiBulkBtnStyle}
+                  disabled={
+                    extractSaving || !extractDialog || (!extractTargetChoice && !extractQuery.trim())
+                  }
+                  onClick={() => void runExtractSave()}
+                >
+                  {extractSaving ? <Loader2 className="h-4 w-4 animate-spin shrink-0" aria-hidden /> : null}
+                  Extract
+                </button>
+              </div>
+            </>
+          ) : null}
+        </DialogContent>
+      </Dialog>
+
+      <AlertDialog
+        open={extractAllLotsConfirmOpen}
+        onOpenChange={(open) => {
+          if (!open) {
+            extractAllLotsPendingRef.current = null;
+            setExtractAllLotsConfirmOpen(false);
+          }
+        }}
+      >
+        <AlertDialogContent
+          overlayClassName="z-[115]"
+          className="z-[120] sm:rounded-lg"
+        >
+          <AlertDialogHeader>
+            <AlertDialogTitle>Move all lots for this buyer?</AlertDialogTitle>
+            <AlertDialogDescription>
+              All lots for this buyer are selected. They will all move to the target buyer.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel type="button">Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              type="button"
+              onClick={() => {
+                const ctx = extractAllLotsPendingRef.current;
+                extractAllLotsPendingRef.current = null;
+                setExtractAllLotsConfirmOpen(false);
+                if (ctx) void executeExtractMigration(ctx.d, ctx.target);
+              }}
+            >
+              Continue
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {!isDesktop && <BottomNav />}
     </div>

@@ -1606,6 +1606,9 @@ public class AuctionService {
         entry.setBuyerId(request.getBuyerId());
         if (entry.getBuyerId() != null) {
             contactService.ensureTraderUsesPortalContact(traderId, entry.getBuyerId());
+            entry.setIsScribble(false);
+        } else {
+            entry.setIsScribble(true);
         }
         LOG.debug("Billing reassigned auction entry id {} to buyer mark {}", entry.getId(), mark);
     }

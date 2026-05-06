@@ -685,14 +685,23 @@ export function generateCombinedSellerChitiHtml(
   }
   const combinedStyles = `
     @page { size: 80mm auto; margin: 2mm; }
-    body { font-family: Arial, sans-serif; margin: 0; padding: 0; font-size: 13px; }
+    html { margin: 0; padding: 0; }
+    body {
+      font-family: Arial, sans-serif;
+      margin: 0;
+      padding: 4px;
+      width: 76mm;
+      max-width: 100%;
+      font-size: 13px;
+      text-align: left;
+      box-sizing: border-box;
+    }
     .seller-chiti-page {
       page-break-after: always;
       break-after: page;
-      width: 76mm;
-      max-width: 100%;
-      margin: 0 auto;
-      padding: 4px;
+      width: 100%;
+      margin: 0;
+      padding: 0;
       box-sizing: border-box;
     }
     .seller-chiti-page:last-of-type {
