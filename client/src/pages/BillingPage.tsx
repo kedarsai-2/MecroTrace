@@ -796,16 +796,14 @@ function validateBill(
   if (!effectiveBillingName) {
     errors.billingName =
       b.buyerIsTemporary === true ? 'Mark or billing name is required' : 'Billing name is required';
-  } else if (effectiveBillingName.length < (b.buyerIsTemporary === true ? 1 : 2)) {
-    errors.billingName = b.buyerIsTemporary === true ? 'Mark is required' : 'Minimum 2 characters';
   } else if (effectiveBillingName.length > 150) {
     errors.billingName = 'Maximum 150 characters';
   }
 
   const v = (b.outboundVehicle ?? '').trim();
   if (v.length > 0) {
-    if (v.length < 2 || v.length > 12) {
-      errors.outboundVehicle = 'Must be 2–12 characters';
+    if (v.length > 12) {
+      errors.outboundVehicle = 'Must be 1–12 characters';
     } else if (v !== v.toUpperCase()) {
       errors.outboundVehicle = 'Must be uppercase';
     }
@@ -1371,11 +1369,11 @@ const BillingPage = () => {
         const arr = await fetchAllAuctionLotsForBrowse(ac.signal);
         if (cancelled || ac.signal.aborted) return;
         addBidBrowseLotsRef.current = arr;
-        if (addBidLotSearchRef.current.trim().length < 2) setAddBidLotOptions(arr);
+        if (addBidLotSearchRef.current.trim().length < 1) setAddBidLotOptions(arr);
       } catch (e) {
         if (isAbortError(e) || cancelled || ac.signal.aborted) return;
         addBidBrowseLotsRef.current = [];
-        if (addBidLotSearchRef.current.trim().length < 2) setAddBidLotOptions([]);
+        if (addBidLotSearchRef.current.trim().length < 1) setAddBidLotOptions([]);
       } finally {
         if (!cancelled && !ac.signal.aborted) setAddBidLotLoading(false);
       }
@@ -1390,7 +1388,7 @@ const BillingPage = () => {
   useEffect(() => {
     if (!canView || !addBidDialogOpen) return;
     const q = addBidLotSearch.trim();
-    if (q.length < 2) {
+    if (q.length < 1) {
       setAddBidLotOptions(addBidBrowseLotsRef.current);
       return;
     }
@@ -4072,11 +4070,6 @@ const BillingPage = () => {
                 autoComplete="off"
               />
               {addBidLotLoading && <p className="text-xs text-muted-foreground">Loading lots…</p>}
-              {!addBidLotLoading && addBidLotSearch.trim().length === 1 && (
-                <p className="text-xs text-muted-foreground">
-                  Add a character to search the full catalog by lot name; one letter still filters the loaded list below.
-                </p>
-              )}
               {!addBidLotLoading && showAddBidLotDropdown && !addBidSelectedLot && (
                 <div
                   className="absolute z-[100] left-0 right-0 top-full mt-1 max-h-[40vh] sm:max-h-48 overflow-y-auto rounded-lg border border-border/50 bg-background shadow-lg"
