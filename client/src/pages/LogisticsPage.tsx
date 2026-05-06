@@ -65,7 +65,7 @@ const buyerChittiRowKey = (b: BidInfo, indexInBuyerBids: number): string => bidL
 
 /**
  * True if the selection set contains any row key that refers to this bid (`ae:*` or `lotId:bidNumber#*`).
- * Used so selection survives row-key rotation when `printedBidKeys` / auction refetch updates the list.
+ * Used so selection survives row-key rotation when auction refetch updates the list.
  */
 const selectionSetHasBid = (set: Set<string>, b: BidInfo): boolean => {
   if (b.auctionEntryId != null && Number.isFinite(Number(b.auctionEntryId))) {
@@ -102,11 +102,6 @@ const buyerChittiTableHeadStyle: CSSProperties = {
 
 const CHITTI_TABLE_HEAD_CELL =
   'py-2 px-2 text-left text-[10px] font-bold uppercase tracking-wide text-[#FFFFFF] border-b border-[rgba(255,255,255,0.2)]';
-
-/**
- * Per-bid buyer Chitti completion (server `print_log.reference_id` = `lotId:bidNumber`).
- */
-const BUYER_CHITI_BID_REF_TYPE = 'BUYER_CHITI_BID';
 
 type FilterMode = 'LOT' | 'BUYER' | 'SELLER';
 
@@ -201,7 +196,6 @@ const LogisticsPage = () => {
   const reduceMotion = useReducedMotion();
   const { trader, user } = useAuth();
   const [bids, setBids] = useState<BidInfo[]>([]);
-  const [printedBidKeys, setPrintedBidKeys] = useState<Set<string>>(() => new Set());
   const [searchQuery, setSearchQuery] = useState('');
   const [filterMode, setFilterMode] = useState<FilterMode>('BUYER');
 
@@ -541,40 +535,6 @@ const LogisticsPage = () => {
     getItemKey: (index) => buyerGroups[index]?.buyerMark || String(index),
   });
 
-  const loadPrintedBidKeysFromServer = useCallback(async () => {
-    try {
-      const ids = await printLogApi.listReferenceIds(BUYER_CHITI_BID_REF_TYPE);
-      const next = new Set((ids as string[]).filter((x) => typeof x === 'string' && x.length > 0));
-      setPrintedBidKeys((prev) => {
-        if (prev.size === next.size) {
-          let same = true;
-          for (const x of next) {
-            if (!prev.has(x)) {
-              same = false;
-              break;
-            }
-          }
-          if (same) return prev;
-        }
-        return next;
-      });
-    } catch {
-      // keep current set; user may lack PRINT_LOGS_VIEW
-    }
-  }, []);
-
-  useEffect(() => {
-    void loadPrintedBidKeysFromServer();
-  }, [loadPrintedBidKeysFromServer]);
-
-  useEffect(() => {
-    const onVis = () => {
-      if (document.visibilityState === 'visible') void loadPrintedBidKeysFromServer();
-    };
-    document.addEventListener('visibilitychange', onVis);
-    return () => document.removeEventListener('visibilitychange', onVis);
-  }, [loadPrintedBidKeysFromServer]);
-
   const prevBidKeysByBuyerRef = useRef<Record<string, string[]>>({});
   const [buyerChittiSelected, setBuyerChittiSelected] = useState<Record<string, Set<string>>>({});
   const [buyerChittiCollapsed, setBuyerChittiCollapsed] = useState<Set<string>>(() => new Set());
@@ -592,29 +552,17 @@ const LogisticsPage = () => {
         prevBidKeysByBuyerRef.current[mark] = rowKeys;
         const prevSel = out[mark];
         if (!prevSel) {
-          out[mark] = new Set(
-            list
-              .map((b, i) => (!printedBidKeys.has(bidKey(b)) ? buyerChittiRowKey(b, i) : null))
-              .filter((x): x is string => x != null)
-          );
+          out[mark] = new Set(list.map((b, i) => buyerChittiRowKey(b, i)));
           continue;
         }
         const next = new Set<string>();
         for (let i = 0; i < list.length; i++) {
           const b = list[i];
           const rk = buyerChittiRowKey(b, i);
-          const bk = bidKey(b);
           const isNew = !prevKeys || !prevKeys.includes(rk);
-          const printed = printedBidKeys.has(bk);
           const wasSelected = prevSel.has(rk) || selectionSetHasBid(prevSel, b);
 
-          if (!printed) {
-            if (isNew) {
-              next.add(rk);
-            } else if (wasSelected) {
-              next.add(rk);
-            }
-          } else if (wasSelected) {
+          if (isNew || wasSelected) {
             next.add(rk);
           }
         }
@@ -622,7 +570,7 @@ const LogisticsPage = () => {
       }
       return out;
     });
-  }, [buyerGroups, printedBidKeys]);
+  }, [buyerGroups]);
 
   useEffect(() => {
     setBuyerChittiPrintRateByMark((prev) => {
@@ -777,8 +725,6 @@ const LogisticsPage = () => {
       return;
     }
     const printRate = buyerChittiPrintRateByMark[mark] !== false;
-    let printedBidKeysToMark: string[] = [];
-    let printedBidLogSyncFailed = false;
     toast.info('🖨 Printing Buyer Chiti…');
     const ok = await directPrint(
       {
@@ -815,31 +761,6 @@ const LogisticsPage = () => {
       });
     } catch {
       // optional
-    }
-    try {
-      await Promise.all(
-        toPrint.map((b) =>
-          printLogApi.create({
-            reference_type: BUYER_CHITI_BID_REF_TYPE,
-            reference_id: bidKey(b),
-            print_type: 'BUYER_CHITI',
-            printed_at: printedAt,
-          })
-        )
-      );
-      printedBidKeysToMark = toPrint.map(bidKey);
-    } catch {
-      printedBidLogSyncFailed = true;
-      toast.warning('Chitti printed; some server log entries may be missing. List will refresh.');
-    }
-    if (printedBidLogSyncFailed) {
-      await loadPrintedBidKeysFromServer();
-    } else if (printedBidKeysToMark.length > 0) {
-      setPrintedBidKeys((prev) => {
-        const next = new Set(prev);
-        printedBidKeysToMark.forEach((k) => next.add(k));
-        return next;
-      });
     }
     toast.success('Buyer Chitti saved and sent to printer.');
   };
@@ -1112,7 +1033,6 @@ const LogisticsPage = () => {
             if (!g) return null;
             const i = virtualRow.index;
             const selectedSet = buyerChittiSelected[g.buyerMark] ?? new Set<string>();
-            const unprintedBids = g.bids.filter((b) => !printedBidKeys.has(bidKey(b)));
             const selectedCount = g.bids.filter((b, idx) => {
               const rk = buyerChittiRowKey(b, idx);
               return selectedSet.has(rk);
@@ -1237,7 +1157,6 @@ const LogisticsPage = () => {
                       </div>
                       <p className="text-[10px] font-semibold text-muted-foreground">
                         {selectedCount}/{g.bids.length} lots selected
-                        {unprintedBids.length < g.bids.length ? ` · ${unprintedBids.length} not yet printed` : ''}
                       </p>
 
                       <section className="min-w-0 w-full rounded-xl border border-border/60 bg-background/40 p-2">
@@ -1352,14 +1271,10 @@ const LogisticsPage = () => {
                                           const rowIdx = indexOffset + i;
                                           const rk = buyerChittiRowKey(b, rowIdx);
                                           const on = selectedSet.has(rk);
-                                          const isPrinted = printedBidKeys.has(bidKey(b));
                                           return (
                                             <tr
                                               key={bidListKey(b, rowIdx)}
-                                              className={cn(
-                                                'border-b border-border/30 align-middle last:border-b-0',
-                                                isPrinted && 'text-muted-foreground/80',
-                                              )}
+                                              className="border-b border-border/30 align-middle last:border-b-0"
                                             >
                                               <td className="p-0 align-middle w-10">
                                                 <div className="flex h-9 w-full items-center justify-center">
@@ -1369,11 +1284,7 @@ const LogisticsPage = () => {
                                                       setBidSelected(g.buyerMark, b, rowIdx, c === true)
                                                     }
                                                     className="h-[18px] w-[18px] rounded-none border-foreground/30"
-                                                    aria-label={
-                                                      isPrinted
-                                                        ? `Lot ${formatLotIdentifierForBid(b)} — printed`
-                                                        : `Select lot ${formatLotIdentifierForBid(b)}`
-                                                    }
+                                                    aria-label={`Select lot ${formatLotIdentifierForBid(b)}`}
                                                   />
                                                 </div>
                                               </td>
@@ -1381,11 +1292,6 @@ const LogisticsPage = () => {
                                                 <span className="font-semibold text-foreground break-words line-clamp-2">
                                                   {formatLotIdentifierForBid(b)}
                                                 </span>
-                                                {isPrinted && (
-                                                  <span className="ml-1 text-[9px] font-bold uppercase text-emerald-600 dark:text-emerald-400">
-                                                    done
-                                                  </span>
-                                                )}
                                               </td>
                                               <td className="py-1.5 text-center whitespace-nowrap tabular-nums align-middle">
                                                 {b.lotNumber && b.lotNumber > 0 ? b.lotNumber : '—'}
@@ -1446,11 +1352,10 @@ const LogisticsPage = () => {
                             {g.bids.map((b, rowIdx) => {
                               const rk = buyerChittiRowKey(b, rowIdx);
                               const on = selectedSet.has(rk);
-                              const isPrinted = printedBidKeys.has(bidKey(b));
                               return (
                                 <li
                                   key={bidListKey(b, rowIdx)}
-                                  className={cn('rounded-xl border border-border/60 p-2.5', isPrinted && 'opacity-75')}
+                                  className="rounded-xl border border-border/60 p-2.5"
                                 >
                                   <div className="flex items-center gap-2">
                                     <div className="flex h-9 w-10 shrink-0 items-center justify-center">
@@ -1471,9 +1376,6 @@ const LogisticsPage = () => {
                                         SL {b.lotNumber && b.lotNumber > 0 ? b.lotNumber : '—'} · {b.godown || '—'}
                                         {printRateOn ? ` · ₹${b.rate}` : ''} · Qty {b.quantity}
                                       </p>
-                                      {isPrinted && (
-                                        <p className="text-[9px] font-bold uppercase text-emerald-600 mt-1">Print done</p>
-                                      )}
                                     </div>
                                   </div>
                                 </li>
