@@ -58,6 +58,8 @@ export interface BidInfo {
   buyerId?: number | null;
   isScribble?: boolean;
   isSelfSale?: boolean;
+  /** Parent auction `completedAt` as epoch ms (logistics: sort buyer groups newest first). */
+  auctionCompletedAtMs?: number;
 }
 
 type ThermalPayload = { html: string; thermalText: string };
@@ -587,27 +589,7 @@ export function generateBuyerChiti(
 }
 
 // ── 3. Seller Chiti (80mm thermal) ───────────────────────
-export function generateSellerChiti(
-  sellerName: string,
-  sellerSerial: number,
-  bids: BidInfo[],
-  stage: 'post-auction' | 'post-weighing' = 'post-auction',
-  traderDisplayName?: string
-): string {
-  const _stage = stage;
-  void _stage;
-  const totalQty = bids.reduce((s, b) => s + b.quantity, 0);
-  const totalLot = bids.length;
-  const headerTitle = escapeStickerHtml((traderDisplayName ?? '').trim() || 'Trader');
-  const rows = bids.map(b => `
-    <tr>
-      <td>${formatLotIdentifierForBid(b)}</td>
-      <td>${b.lotNumber && b.lotNumber > 0 ? b.lotNumber : '—'}</td>
-      <td>${b.quantity}</td>
-      <td>₹${b.rate}</td>
-    </tr>`).join('');
-
-  return `<!DOCTYPE html><html><head><style>
+const SELLER_CHITI_STYLES_SINGLE = `
     @page { size: 80mm auto; margin: 2mm; }
     body { font-family: Arial, sans-serif; margin: 0; padding: 4px; width: 76mm; font-size: 13px; }
     .header { text-align: center; border-bottom: 1px dashed #333; padding-bottom: 4px; margin-bottom: 4px; }
@@ -629,7 +611,27 @@ export function generateSellerChiti(
     .cut-mark .cut-rule { flex: 1; min-width: 0; height: 0; border-bottom: 2px dashed #111; align-self: center; }
     .thermal-tear-space { height: 15mm; min-height: 15mm; margin: 0; padding: 0; }
     @media print { body { margin: 0; } }
-  </style></head><body>
+`;
+
+/** One seller chitti body (no html/head wrapper) — shared by single and combined print. */
+function sellerChitiBodyFragment(
+  sellerName: string,
+  sellerSerial: number,
+  bids: BidInfo[],
+  traderDisplayName?: string
+): string {
+  const totalQty = bids.reduce((s, b) => s + b.quantity, 0);
+  const totalLot = bids.length;
+  const headerTitle = escapeStickerHtml((traderDisplayName ?? '').trim() || 'Trader');
+  const rows = bids.map(b => `
+    <tr>
+      <td>${formatLotIdentifierForBid(b)}</td>
+      <td>${b.lotNumber && b.lotNumber > 0 ? b.lotNumber : '—'}</td>
+      <td>${b.quantity}</td>
+      <td>₹${b.rate}</td>
+    </tr>`).join('');
+
+  return `
     <div class="header"><h3>${headerTitle}</h3></div>
     <div class="seller-info">
       <div class="name">${escapeStickerHtml(sellerName)}</div>
@@ -646,8 +648,98 @@ export function generateSellerChiti(
     <div class="cut-mark" aria-label="Cut here">
       <span class="cut-scissor" aria-hidden="true">&#9986;</span><span class="cut-rule" aria-hidden="true"></span>
     </div>
-    <div class="thermal-tear-space" aria-hidden="true"></div>
-  </body></html>`;
+    <div class="thermal-tear-space" aria-hidden="true"></div>`;
+}
+
+export function generateSellerChiti(
+  sellerName: string,
+  sellerSerial: number,
+  bids: BidInfo[],
+  stage: 'post-auction' | 'post-weighing' = 'post-auction',
+  traderDisplayName?: string
+): string {
+  const _stage = stage;
+  void _stage;
+  const inner = sellerChitiBodyFragment(sellerName, sellerSerial, bids, traderDisplayName);
+  return `<!DOCTYPE html><html><head><style>${SELLER_CHITI_STYLES_SINGLE}</style></head><body>${inner}</body></html>`;
+}
+
+export type SellerChitiChunk = {
+  sellerName: string;
+  sellerSerial: number;
+  bids: BidInfo[];
+};
+
+/**
+ * Multiple seller chittis in one HTML document: each seller starts after a page break (one print dialog).
+ */
+export function generateCombinedSellerChitiHtml(
+  chunks: SellerChitiChunk[],
+  stage: 'post-auction' | 'post-weighing' = 'post-auction',
+  traderDisplayName?: string
+): string {
+  const _stage = stage;
+  void _stage;
+  if (chunks.length === 0) {
+    return `<!DOCTYPE html><html><head><meta charset="utf-8"/></head><body></body></html>`;
+  }
+  const combinedStyles = `
+    @page { size: 80mm auto; margin: 2mm; }
+    body { font-family: Arial, sans-serif; margin: 0; padding: 0; font-size: 13px; }
+    .seller-chiti-page {
+      page-break-after: always;
+      break-after: page;
+      width: 76mm;
+      max-width: 100%;
+      margin: 0 auto;
+      padding: 4px;
+      box-sizing: border-box;
+    }
+    .seller-chiti-page:last-of-type {
+      page-break-after: auto;
+      break-after: auto;
+    }
+    .header { text-align: center; border-bottom: 1px dashed #333; padding-bottom: 4px; margin-bottom: 4px; }
+    .header h3 { margin: 2px 0; font-size: 16px; }
+    .header small { color: #666; font-size: 10px; text-transform: uppercase; letter-spacing: 1px; }
+    .seller-info { background: #f5f5f5; border-radius: 4px; padding: 6px; margin-bottom: 6px; text-align: center; }
+    .seller-info .name { font-size: 15px; font-weight: 800; }
+    .seller-info .mark { font-size: 20px; font-weight: 900; letter-spacing: 2px; margin-top: 2px; }
+    .seller-info .serial { font-size: 12px; color: #666; margin-top: 2px; }
+    table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    th { background: #eee; padding: 3px 2px; text-align: left; font-size: 11px; text-transform: uppercase; }
+    td { padding: 3px 2px; border-bottom: 1px dotted #ddd; }
+    .totals { border-top: 2px solid #333; margin-top: 6px; padding-top: 6px; font-weight: 800; font-size: 13px; }
+    .totals .row { display: flex; justify-content: space-between; padding: 2px 0; }
+    .cut-mark { display: flex; align-items: center; gap: 4px; margin-top: 8px; color: #111; }
+    .cut-mark .cut-scissor { flex-shrink: 0; font-size: 16px; line-height: 1; }
+    .cut-mark .cut-rule { flex: 1; min-width: 0; height: 0; border-bottom: 2px dashed #111; align-self: center; }
+    .thermal-tear-space { height: 15mm; min-height: 15mm; margin: 0; padding: 0; }
+    @media print { body { margin: 0; } }
+  `;
+  const pages = chunks
+    .map(
+      (c) =>
+        `<div class="seller-chiti-page">${sellerChitiBodyFragment(
+          c.sellerName,
+          c.sellerSerial,
+          c.bids,
+          traderDisplayName
+        )}</div>`
+    )
+    .join('');
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"/><style>${combinedStyles}</style></head><body>${pages}</body></html>`;
+}
+
+/** Concatenated thermal payloads (one seller chitti after another). */
+export function generateCombinedSellerChitiThermal(
+  chunks: SellerChitiChunk[],
+  stage: 'post-auction' | 'post-weighing' = 'post-auction',
+  traderDisplayName?: string
+): string {
+  return chunks
+    .map((c) => generateSellerChitiThermal(c.sellerName, c.sellerSerial, c.bids, stage, traderDisplayName))
+    .join('\n');
 }
 
 // ── 4. Sale Pad Print (A5 Portrait) ─────────────────────

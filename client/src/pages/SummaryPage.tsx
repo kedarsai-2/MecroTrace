@@ -18,6 +18,7 @@ import BottomNav from '@/components/BottomNav';
 import { useDesktopMode } from '@/hooks/use-desktop';
 import { cn } from '@/lib/utils';
 import ForbiddenPage from '@/components/ForbiddenPage';
+import { useAuth } from '@/context/AuthContext';
 import { usePermissions } from '@/lib/permissions';
 import { arrivalsApi, auctionApi, billingApi } from '@/services/api';
 import type { LotSummaryDTO } from '@/services/api/auction';
@@ -32,6 +33,7 @@ import {
   aggregateBillingBagsByVehicle,
   buildLotIdToVehicleId,
 } from '@/components/summary/summaryArrivalPipelineMetrics';
+import { printSellerChittiFromArrivalSummary } from '@/components/summary/vehicle-ops/printSellerChittiFromArrivalSummary';
 import { toast } from 'sonner';
 
 const SUMMARY_MODULE = 'SummaryPage' as const;
@@ -66,6 +68,7 @@ function sortArrivalDetails(a: ArrivalDetail, b: ArrivalDetail): number {
 const SummaryPage = () => {
   const navigate = useNavigate();
   const isDesktop = useDesktopMode();
+  const { trader, user } = useAuth();
   const { canAccessModule } = usePermissions();
   const canView = canAccessModule(SUMMARY_MODULE);
   const vehicleRouteMatch = useMatch({ path: '/summary-page/vehicle/:vehicleId', end: true });
@@ -306,6 +309,18 @@ const SummaryPage = () => {
     navigate('/summary-page');
   }, [navigate]);
 
+  const chitiPrintTraderName = useMemo(
+    () => trader?.business_name?.trim() || user?.name?.trim() || 'Trader',
+    [trader?.business_name, user?.name],
+  );
+
+  const onPipelineCardPrint = useCallback(
+    (a: ArrivalSummary) => {
+      void printSellerChittiFromArrivalSummary(a, chitiPrintTraderName);
+    },
+    [chitiPrintTraderName],
+  );
+
   if (!canView) {
     return <ForbiddenPage moduleName={SUMMARY_MODULE} />;
   }
@@ -487,6 +502,7 @@ const SummaryPage = () => {
                       auction={auctionBagsByVehicle.get(String(a.vehicleId))}
                       index={i}
                       onOpenVehicle={onSelectArrival}
+                      onPrint={onPipelineCardPrint}
                     />
                   ))}
                 </div>
@@ -607,6 +623,7 @@ const SummaryPage = () => {
                     auction={auctionBagsByVehicle.get(String(a.vehicleId))}
                     index={i}
                     onOpenVehicle={onSelectArrival}
+                    onPrint={onPipelineCardPrint}
                   />
                 ))}
               </div>

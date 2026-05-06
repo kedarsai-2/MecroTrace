@@ -203,6 +203,8 @@ const SummaryVehicleOperationsView = ({ arrival, isDesktop, onBack }: Props) => 
   const [billingUnbounded, setBillingUnbounded] = useState(false);
   const [loading, setLoading] = useState(true);
   const [arrivalFullDetail, setArrivalFullDetail] = useState<ArrivalFullDetail | null>(null);
+  /** Loaded for seller chitti + RD; always fetched (not gated on preset). */
+  const [auctionResults, setAuctionResults] = useState<AuctionResultDTO[]>([]);
 
   const vid = arrival.vehicleId;
 
@@ -246,9 +248,14 @@ const SummaryVehicleOperationsView = ({ arrival, isDesktop, onBack }: Props) => 
       setLotErr(true);
     }
 
-    if (!canShowRd) {
-      setLoading(false);
-      return;
+    let mergedAuctionResults: AuctionResultDTO[] = [];
+    try {
+      mergedAuctionResults = await fetchAllAuctionResults(12, 100);
+      setAuctionResults(mergedAuctionResults);
+      setAuctionErr(false);
+    } catch {
+      setAuctionResults([]);
+      setAuctionErr(true);
     }
 
     const vn = (arrival.vehicleNumber ?? '').trim().toLowerCase();
@@ -260,57 +267,57 @@ const SummaryVehicleOperationsView = ({ arrival, isDesktop, onBack }: Props) => 
         .map((l) => Number(l.seller_vehicle_id))
         .filter((x) => !Number.isNaN(x) && x > 0),
     );
-    let auctionResults: AuctionResultDTO[] = [];
 
-    try {
-      auctionResults = await fetchAllAuctionResults(12, 100);
+    if (canShowRd) {
       setRdEst(
         svIdsForVehicle.size > 0
-          ? sumEstimatedRdForSellerVehicles(auctionResults, svIdsForVehicle)
+          ? sumEstimatedRdForSellerVehicles(mergedAuctionResults, svIdsForVehicle)
           : 0,
       );
-    } catch {
-      setAuctionErr(true);
-    }
 
-    try {
       if (lotKeys.size === 0) {
+        setRdActual(null);
         setLoading(false);
         return;
       }
 
-      const allBills: SalesBillDTO[] = [];
-      for (let p = 0; p < MAX_BILLING_PAGES; p += 1) {
-        const page = await billingApi.getPage({ page: p, size: BILLS_PAGE_SIZE, sort: 'billDate,desc' });
-        allBills.push(...(page.content ?? []));
-        if (page.content.length < BILLS_PAGE_SIZE) break;
-        if (p === MAX_BILLING_PAGES - 1) {
-          setBillingUnbounded(true);
+      try {
+        const allBills: SalesBillDTO[] = [];
+        for (let p = 0; p < MAX_BILLING_PAGES; p += 1) {
+          const page = await billingApi.getPage({ page: p, size: BILLS_PAGE_SIZE, sort: 'billDate,desc' });
+          allBills.push(...(page.content ?? []));
+          if (page.content.length < BILLS_PAGE_SIZE) break;
+          if (p === MAX_BILLING_PAGES - 1) {
+            setBillingUnbounded(true);
+          }
         }
+        const [commodityList, fullConfigs] = await Promise.all([
+          commodityApi.list().catch(() => [] as Commodity[]),
+          commodityApi.getAllFullConfigs().catch(() => [] as FullCommodityConfigDto[]),
+        ]);
+        const getRate = buildCommodityNameToRateUnit(
+          fullConfigs,
+          Array.isArray(commodityList) ? commodityList : []
+        );
+        const actual = sumActualRateDifferenceForVehicle(
+          mergedAuctionResults,
+          svIdsForVehicle,
+          lotKeys,
+          allBills,
+          getRate,
+          arrival,
+          detail
+        );
+        setRdActual(actual);
+      } catch {
+        setRdActual(null);
       }
-      const [commodityList, fullConfigs] = await Promise.all([
-        commodityApi.list().catch(() => [] as Commodity[]),
-        commodityApi.getAllFullConfigs().catch(() => [] as FullCommodityConfigDto[]),
-      ]);
-      const getRate = buildCommodityNameToRateUnit(
-        fullConfigs,
-        Array.isArray(commodityList) ? commodityList : []
-      );
-      const actual = sumActualRateDifferenceForVehicle(
-        auctionResults,
-        svIdsForVehicle,
-        lotKeys,
-        allBills,
-        getRate,
-        arrival,
-        detail
-      );
-      setRdActual(actual);
-    } catch {
+    } else {
+      setRdEst(null);
       setRdActual(null);
-    } finally {
-      setLoading(false);
     }
+
+    setLoading(false);
   }, [canShowRd, vid, arrival.vehicleNumber, arrival.finalBillableWeight, arrival.totalBags]);
 
   useEffect(() => {
@@ -480,6 +487,7 @@ const SummaryVehicleOperationsView = ({ arrival, isDesktop, onBack }: Props) => 
         {threeCards}
         <VehicleOpsSellerWorkspace
           arrivalDetail={arrivalFullDetail}
+          auctionResults={auctionResults}
           lotSummariesForVehicle={lotRows}
           detailLoading={loading && arrivalFullDetail == null}
           onAuctionDataInvalidate={runLoad}
