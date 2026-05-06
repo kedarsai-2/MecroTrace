@@ -4900,7 +4900,7 @@ const ArrivalsPage = () => {
                                 contentLayoutKey={seller.lots.length}
                                 showScrollAffordanceFooter={seller.lots.length > 0}
                                 scrollAffordanceHint="Scroll for more lots"
-                                className="min-h-[11rem] max-h-[min(28rem,52dvh)] overflow-y-auto overflow-x-visible overscroll-contain [-webkit-overflow-scrolling:touch] touch-auto border-t border-border/30 pb-6"
+                                className="min-h-[11rem] overflow-y-visible overflow-x-visible overscroll-y-auto overscroll-x-contain [-webkit-overflow-scrolling:touch] touch-auto border-t border-border/30 pb-6"
                               >
                                   {seller.lots.length === 0 ? (
                                     <p className="text-xs text-muted-foreground text-center py-3 italic px-3">No lots added yet.</p>
@@ -4938,7 +4938,7 @@ const ArrivalsPage = () => {
                                               }}
                                               data-arrival-mobile-lots-carousel="1"
                                               onScroll={() => handleArrivalLotsCarouselScroll(seller.seller_vehicle_id, seller.lots.length)}
-                                              className="flex w-full max-w-full overflow-x-auto pb-1 [-webkit-overflow-scrolling:touch] snap-x snap-mandatory touch-[pan-x_pan-y] lg:touch-auto"
+                                              className="flex w-full max-w-full overflow-x-auto overscroll-x-contain overscroll-y-auto pb-1 [-webkit-overflow-scrolling:touch] snap-x snap-mandatory touch-[pan-x_pan-y] lg:touch-auto"
                                             >
                                               {Array.from({ length: lotPageCount }, (_, pageIdx) => {
                                                 const start = pageIdx * MOBILE_ARRIVAL_LOTS_PER_PAGE;
