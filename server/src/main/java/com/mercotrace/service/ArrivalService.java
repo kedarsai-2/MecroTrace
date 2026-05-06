@@ -1132,8 +1132,8 @@ public class ArrivalService {
                 throw new IllegalArgumentException("Vehicle number is required for multi-seller arrivals");
             }
             String vn = vehicleNumber.trim();
-            if (vn.length() < 2 || vn.length() > 12) {
-                throw new IllegalArgumentException("Vehicle number must be between 2 and 12 characters");
+            if (vn.length() > 12) {
+                throw new IllegalArgumentException("Vehicle number must be at most 12 characters");
             }
         }
         for (ArrivalSellerDTO seller : sellers) {
