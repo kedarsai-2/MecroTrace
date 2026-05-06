@@ -405,11 +405,11 @@ interface CommodityGroup {
   userFeePercent: number;
   coolieRate: number; // Per-commodity coolie rate
   coolieAmount: number; // Per-commodity coolie amount (rate * qty)
-  /** Persisted bag count for coolie; when unset, qty = sum(line quantities). */
+  /** Persisted bag count for coolie; when unset, effective qty is 0 for charge calc. */
   coolieChargeQty?: number;
   weighmanChargeRate: number; // Per-commodity weighman charge rate
   weighmanChargeAmount: number; // Per-commodity weighman charge amount (rate * qty)
-  /** Persisted bag count for weighman; when unset, qty = sum(line quantities). */
+  /** Persisted bag count for weighman; when unset, effective qty is 0 for charge calc. */
   weighmanChargeQty?: number;
   discount: number; // Per-commodity discount amount or percentage
   discountType: 'PERCENT' | 'AMOUNT'; // Per-commodity discount type
@@ -423,22 +423,18 @@ interface CommodityGroup {
 
 const MAX_COOLIE_WEIGHMAN_CHARGE_QTY = 1_000_000;
 
-function sumGroupItemQuantity(g: Pick<CommodityGroup, 'items'>): number {
-  return g.items.reduce((s, i) => s + (Number(i.quantity) || 0), 0);
-}
-
 function effectiveCoolieChargeQty(g: CommodityGroup): number {
   if (g.coolieChargeQty != null && Number.isFinite(g.coolieChargeQty)) {
     return Math.max(0, Math.round(g.coolieChargeQty));
   }
-  return sumGroupItemQuantity(g);
+  return 0;
 }
 
 function effectiveWeighmanChargeQty(g: CommodityGroup): number {
   if (g.weighmanChargeQty != null && Number.isFinite(g.weighmanChargeQty)) {
     return Math.max(0, Math.round(g.weighmanChargeQty));
   }
-  return sumGroupItemQuantity(g);
+  return 0;
 }
 
 interface BillLineItem {
@@ -871,27 +867,11 @@ function validateBill(
     }
   });
 
-    if (!Number.isFinite(b.outboundFreight) || b.outboundFreight < 0) {
+  if (!Number.isFinite(b.outboundFreight) || b.outboundFreight < 0) {
     errors.outboundFreight = 'Must be a positive number';
   } else if (b.outboundFreight > 100000) {
     errors.outboundFreight = 'Cannot exceed ₹1,00,000';
   }
-
-  // Non-blocking: coolie / weighman effective qty differs from total bid line quantity for this group.
-  b.commodityGroups.forEach((g, gi) => {
-    const lineQty = sumGroupItemQuantity(g);
-    const cEff = effectiveCoolieChargeQty(g);
-    const wEff = effectiveWeighmanChargeQty(g);
-    const label = (g.commodityName || '').trim() || `Commodity ${gi + 1}`;
-    if (cEff !== lineQty) {
-      warnings[`chargeQty.coolie.${gi}`] =
-        `${label}: coolie charge qty (${cEff}) does not match bill line qty (${lineQty}).`;
-    }
-    if (wEff !== lineQty) {
-      warnings[`chargeQty.weighman.${gi}`] =
-        `${label}: weighman charge qty (${wEff}) does not match bill line qty (${lineQty}).`;
-    }
-  });
 
   b.commodityGroups.forEach((group, gi) => {
     group.items.forEach((item, ii) => {
@@ -2378,8 +2358,10 @@ const BillingPage = () => {
           userFeePercent: config?.userFeePercent || 0,
           coolieRate: 0,
           coolieAmount: 0,
+          coolieChargeQty: 0,
           weighmanChargeRate: 0,
           weighmanChargeAmount: 0,
+          weighmanChargeQty: 0,
           discount: 0,
           discountType: 'AMOUNT' as const,
           manualRoundOff: 0,
@@ -2440,8 +2422,10 @@ const BillingPage = () => {
       ...g,
       coolieRate: 0,
       coolieAmount: 0,
+      coolieChargeQty: 0,
       weighmanChargeRate: 0,
       weighmanChargeAmount: 0,
+      weighmanChargeQty: 0,
       discount: 0,
       discountType: 'AMOUNT' as const,
       manualRoundOff: 0,
@@ -5727,8 +5711,6 @@ const BillingPage = () => {
                                     billingSummaryInputClass,
                                     (validationErrors[`coolieQty-${gi}`] || validationErrors[`coolie-${gi}`])
                                       && 'border-destructive ring-1 ring-destructive/30',
-                                    validationWarnings[`chargeQty.coolie.${gi}`]
-                                      && 'ring-1 ring-destructive/50 border-destructive/50',
                                   )}
                                   placeholder="Qty"
                                 />
@@ -5787,8 +5769,6 @@ const BillingPage = () => {
                                     billingSummaryInputClass,
                                     (validationErrors[`weighmanQty-${gi}`] || validationErrors[`weighman-${gi}`])
                                       && 'border-destructive ring-1 ring-destructive/30',
-                                    validationWarnings[`chargeQty.weighman.${gi}`]
-                                      && 'ring-1 ring-destructive/50 border-destructive/50',
                                   )}
                                   placeholder="Qty"
                                 />
