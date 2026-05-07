@@ -1,14 +1,19 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import type { ArrivalFullDetail, ArrivalSellerFullDetail } from '@/services/api/arrivals';
-import type { LotSummaryDTO } from '@/services/api/auction';
+import type { AuctionResultDTO, LotSummaryDTO } from '@/services/api/auction';
 import { cn } from '@/lib/utils';
+import { useAuth } from '@/context/AuthContext';
 import { SellerDetailPanel } from './SellerDetailPanel';
 import { SellerListSidebar } from './SellerListSidebar';
 import { lotSummaryBelongsToSeller, sellerKeyFromArrivalSeller } from './vehicleOpsUtils';
+import { buildSellerChittiBidInfos, resolveSellerChittiSerial } from './buildSellerChittiBidInfos';
+import { printSellerChittiDirect } from './sellerChittiPrintFlow';
 
 export type VehicleOpsSellerWorkspaceProps = {
   arrivalDetail: ArrivalFullDetail | null;
+  /** Completed auctions (same feed as Logistics / RD). */
+  auctionResults: AuctionResultDTO[];
   lotSummariesForVehicle: LotSummaryDTO[];
   /** True while parent is still loading arrival detail */
   detailLoading?: boolean;
@@ -18,12 +23,19 @@ export type VehicleOpsSellerWorkspaceProps = {
 
 export function VehicleOpsSellerWorkspace({
   arrivalDetail,
+  auctionResults,
   lotSummariesForVehicle,
   detailLoading,
   onAuctionDataInvalidate,
 }: VehicleOpsSellerWorkspaceProps) {
+  const { trader, user } = useAuth();
   const [sellerSearch, setSellerSearch] = useState('');
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
+
+  const chitiPrintTraderName = useMemo(
+    () => trader?.business_name?.trim() || user?.name?.trim() || 'Trader',
+    [trader?.business_name, user?.name],
+  );
 
   const sellers = arrivalDetail?.sellers ?? [];
 
@@ -58,9 +70,31 @@ export function VehicleOpsSellerWorkspace({
     return lotSummariesForVehicle.filter((l) => lotSummaryBelongsToSeller(l, selectedSeller));
   }, [lotSummariesForVehicle, selectedSeller]);
 
-  const handlePrint = () => {
-    toast.message('Print', { description: 'Print from vehicle operations is not wired yet.' });
-  };
+  const handlePrint = useCallback(() => {
+    if (!arrivalDetail || !selectedSeller) {
+      toast.error('No arrival detail to print.');
+      return;
+    }
+    const bids = buildSellerChittiBidInfos(
+      auctionResults,
+      arrivalDetail,
+      selectedSeller,
+      lotSummariesForVehicle,
+    );
+    if (bids.length === 0) {
+      toast.error('Nothing to print — no auctioned bags for this seller yet.');
+      return;
+    }
+    const name = (selectedSeller.sellerName ?? '').trim() || 'Unknown';
+    const serial = resolveSellerChittiSerial(selectedSeller, bids);
+    void printSellerChittiDirect({ name, serial, bids }, chitiPrintTraderName);
+  }, [
+    arrivalDetail,
+    selectedSeller,
+    auctionResults,
+    lotSummariesForVehicle,
+    chitiPrintTraderName,
+  ]);
 
   if (detailLoading && !arrivalDetail) {
     return (
@@ -97,7 +131,6 @@ export function VehicleOpsSellerWorkspace({
         <div
           className={cn(
             'grid min-h-0 min-w-0 gap-3',
-            /* Two-column + scroll panes from lg so tablets keep horizontal seller strip (matches SellerListSidebar). */
             'grid-cols-1 lg:grid-cols-[minmax(200px,280px)_minmax(0,1fr)] lg:items-start lg:gap-4',
           )}
         >

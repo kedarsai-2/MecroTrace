@@ -405,11 +405,11 @@ interface CommodityGroup {
   userFeePercent: number;
   coolieRate: number; // Per-commodity coolie rate
   coolieAmount: number; // Per-commodity coolie amount (rate * qty)
-  /** Persisted bag count for coolie; when unset, qty = sum(line quantities). */
+  /** Persisted bag count for coolie; when unset, effective qty is 0 for charge calc. */
   coolieChargeQty?: number;
   weighmanChargeRate: number; // Per-commodity weighman charge rate
   weighmanChargeAmount: number; // Per-commodity weighman charge amount (rate * qty)
-  /** Persisted bag count for weighman; when unset, qty = sum(line quantities). */
+  /** Persisted bag count for weighman; when unset, effective qty is 0 for charge calc. */
   weighmanChargeQty?: number;
   discount: number; // Per-commodity discount amount or percentage
   discountType: 'PERCENT' | 'AMOUNT'; // Per-commodity discount type
@@ -423,22 +423,18 @@ interface CommodityGroup {
 
 const MAX_COOLIE_WEIGHMAN_CHARGE_QTY = 1_000_000;
 
-function sumGroupItemQuantity(g: Pick<CommodityGroup, 'items'>): number {
-  return g.items.reduce((s, i) => s + (Number(i.quantity) || 0), 0);
-}
-
 function effectiveCoolieChargeQty(g: CommodityGroup): number {
   if (g.coolieChargeQty != null && Number.isFinite(g.coolieChargeQty)) {
     return Math.max(0, Math.round(g.coolieChargeQty));
   }
-  return sumGroupItemQuantity(g);
+  return 0;
 }
 
 function effectiveWeighmanChargeQty(g: CommodityGroup): number {
   if (g.weighmanChargeQty != null && Number.isFinite(g.weighmanChargeQty)) {
     return Math.max(0, Math.round(g.weighmanChargeQty));
   }
-  return sumGroupItemQuantity(g);
+  return 0;
 }
 
 interface BillLineItem {
@@ -800,16 +796,14 @@ function validateBill(
   if (!effectiveBillingName) {
     errors.billingName =
       b.buyerIsTemporary === true ? 'Mark or billing name is required' : 'Billing name is required';
-  } else if (effectiveBillingName.length < (b.buyerIsTemporary === true ? 1 : 2)) {
-    errors.billingName = b.buyerIsTemporary === true ? 'Mark is required' : 'Minimum 2 characters';
   } else if (effectiveBillingName.length > 150) {
     errors.billingName = 'Maximum 150 characters';
   }
 
   const v = (b.outboundVehicle ?? '').trim();
   if (v.length > 0) {
-    if (v.length < 2 || v.length > 12) {
-      errors.outboundVehicle = 'Must be 2–12 characters';
+    if (v.length > 12) {
+      errors.outboundVehicle = 'Must be 1–12 characters';
     } else if (v !== v.toUpperCase()) {
       errors.outboundVehicle = 'Must be uppercase';
     }
@@ -871,27 +865,11 @@ function validateBill(
     }
   });
 
-    if (!Number.isFinite(b.outboundFreight) || b.outboundFreight < 0) {
+  if (!Number.isFinite(b.outboundFreight) || b.outboundFreight < 0) {
     errors.outboundFreight = 'Must be a positive number';
   } else if (b.outboundFreight > 100000) {
     errors.outboundFreight = 'Cannot exceed ₹1,00,000';
   }
-
-  // Non-blocking: coolie / weighman effective qty differs from total bid line quantity for this group.
-  b.commodityGroups.forEach((g, gi) => {
-    const lineQty = sumGroupItemQuantity(g);
-    const cEff = effectiveCoolieChargeQty(g);
-    const wEff = effectiveWeighmanChargeQty(g);
-    const label = (g.commodityName || '').trim() || `Commodity ${gi + 1}`;
-    if (cEff !== lineQty) {
-      warnings[`chargeQty.coolie.${gi}`] =
-        `${label}: coolie charge qty (${cEff}) does not match bill line qty (${lineQty}).`;
-    }
-    if (wEff !== lineQty) {
-      warnings[`chargeQty.weighman.${gi}`] =
-        `${label}: weighman charge qty (${wEff}) does not match bill line qty (${lineQty}).`;
-    }
-  });
 
   b.commodityGroups.forEach((group, gi) => {
     group.items.forEach((item, ii) => {
@@ -1391,11 +1369,11 @@ const BillingPage = () => {
         const arr = await fetchAllAuctionLotsForBrowse(ac.signal);
         if (cancelled || ac.signal.aborted) return;
         addBidBrowseLotsRef.current = arr;
-        if (addBidLotSearchRef.current.trim().length < 2) setAddBidLotOptions(arr);
+        if (addBidLotSearchRef.current.trim().length < 1) setAddBidLotOptions(arr);
       } catch (e) {
         if (isAbortError(e) || cancelled || ac.signal.aborted) return;
         addBidBrowseLotsRef.current = [];
-        if (addBidLotSearchRef.current.trim().length < 2) setAddBidLotOptions([]);
+        if (addBidLotSearchRef.current.trim().length < 1) setAddBidLotOptions([]);
       } finally {
         if (!cancelled && !ac.signal.aborted) setAddBidLotLoading(false);
       }
@@ -1410,7 +1388,7 @@ const BillingPage = () => {
   useEffect(() => {
     if (!canView || !addBidDialogOpen) return;
     const q = addBidLotSearch.trim();
-    if (q.length < 2) {
+    if (q.length < 1) {
       setAddBidLotOptions(addBidBrowseLotsRef.current);
       return;
     }
@@ -2378,8 +2356,10 @@ const BillingPage = () => {
           userFeePercent: config?.userFeePercent || 0,
           coolieRate: 0,
           coolieAmount: 0,
+          coolieChargeQty: 0,
           weighmanChargeRate: 0,
           weighmanChargeAmount: 0,
+          weighmanChargeQty: 0,
           discount: 0,
           discountType: 'AMOUNT' as const,
           manualRoundOff: 0,
@@ -2440,8 +2420,10 @@ const BillingPage = () => {
       ...g,
       coolieRate: 0,
       coolieAmount: 0,
+      coolieChargeQty: 0,
       weighmanChargeRate: 0,
       weighmanChargeAmount: 0,
+      weighmanChargeQty: 0,
       discount: 0,
       discountType: 'AMOUNT' as const,
       manualRoundOff: 0,
@@ -4088,11 +4070,6 @@ const BillingPage = () => {
                 autoComplete="off"
               />
               {addBidLotLoading && <p className="text-xs text-muted-foreground">Loading lots…</p>}
-              {!addBidLotLoading && addBidLotSearch.trim().length === 1 && (
-                <p className="text-xs text-muted-foreground">
-                  Add a character to search the full catalog by lot name; one letter still filters the loaded list below.
-                </p>
-              )}
               {!addBidLotLoading && showAddBidLotDropdown && !addBidSelectedLot && (
                 <div
                   className="absolute z-[100] left-0 right-0 top-full mt-1 max-h-[40vh] sm:max-h-48 overflow-y-auto rounded-lg border border-border/50 bg-background shadow-lg"
@@ -4554,7 +4531,7 @@ const BillingPage = () => {
                 </button>
                 {showBuyerSuggestions && !searchBidDialogOpen && (
                   <div className={cn("absolute z-50 top-full mt-1 w-full max-h-56 overflow-y-auto rounded-xl border border-border bg-background shadow-lg", searchBidDialogOpen && "z-[20]")}>
-                    {filteredBuyerOptions.length === 0 ? (
+                    {filteredBuyerOptions.length === 0 && buyerBidMarkInput.trim() ? (
                       <p className="px-3 py-2 text-xs text-muted-foreground">No buyers match your search.</p>
                     ) : (
                       filteredBuyerOptions.map((b, idx) => (
@@ -5727,8 +5704,6 @@ const BillingPage = () => {
                                     billingSummaryInputClass,
                                     (validationErrors[`coolieQty-${gi}`] || validationErrors[`coolie-${gi}`])
                                       && 'border-destructive ring-1 ring-destructive/30',
-                                    validationWarnings[`chargeQty.coolie.${gi}`]
-                                      && 'ring-1 ring-destructive/50 border-destructive/50',
                                   )}
                                   placeholder="Qty"
                                 />
@@ -5787,8 +5762,6 @@ const BillingPage = () => {
                                     billingSummaryInputClass,
                                     (validationErrors[`weighmanQty-${gi}`] || validationErrors[`weighman-${gi}`])
                                       && 'border-destructive ring-1 ring-destructive/30',
-                                    validationWarnings[`chargeQty.weighman.${gi}`]
-                                      && 'ring-1 ring-destructive/50 border-destructive/50',
                                   )}
                                   placeholder="Qty"
                                 />

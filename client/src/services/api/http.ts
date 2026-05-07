@@ -151,6 +151,9 @@ export async function apiFetch(path: string, init: RequestInit = {}): Promise<Re
   if (!shouldAttemptRefresh(path, kind, first)) {
     return first;
   }
+  if (kind === 'admin') {
+    return first;
+  }
 
   const refreshed = await refreshAccessToken(kind);
   if (!refreshed) {

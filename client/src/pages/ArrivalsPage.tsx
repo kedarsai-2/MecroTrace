@@ -1694,7 +1694,7 @@ const ArrivalsPage = () => {
     if (!isMultiSeller) return false;
     const v = vehicleNumber.trim();
     if (!v) return false;
-    return v.length < 2 || v.length > 12;
+    return v.length > 12;
   }, [isMultiSeller, vehicleNumber]);
 
   const isVehicleMarkAliasInvalid = useMemo(() => {
@@ -1707,7 +1707,7 @@ const ArrivalsPage = () => {
   const isGodownInvalid = useMemo(() => {
     const g = godown.trim();
     if (!g) return false;
-    if (g.length < 2 || g.length > 50) return true;
+    if (g.length > 50) return true;
     return !/^[a-zA-Z\s]+$/.test(g);
   }, [godown]);
 
@@ -1721,7 +1721,7 @@ const ArrivalsPage = () => {
   const isBrokerNameInvalid = useMemo(() => {
     const b = brokerName.trim();
     if (!b) return false;
-    if (b.length < 2 || b.length > 100) return true;
+    if (b.length > 100) return true;
     return !/^[a-zA-Z\s]+$/.test(b);
   }, [brokerName]);
 
@@ -1761,7 +1761,7 @@ const ArrivalsPage = () => {
     );
     if (dupIdx >= 0) return 'name must be unique';
     const isDynamic = s.contact_id === '' || Number.isNaN(Number(s.contact_id));
-    if (isDynamic && (n.length < 2 || n.length > 100)) return '2–100 characters';
+    if (isDynamic && n.length > 100) return '1–100 characters';
     return null;
   };
   const isSellerNameInvalid = (s: SellerEntry, sellerIdx?: number) => !!getSellerNameError(s, sellerIdx);
@@ -1769,7 +1769,7 @@ const ArrivalsPage = () => {
   const getSellerMarkError = (s: SellerEntry, sellerIdx?: number): string | null => {
     const m = (s.seller_mark ?? '').trim();
     if (!m) return null;
-    if (m.length < 2 || m.length > 50) return '2–50 characters if set';
+    if (m.length > 50) return '1–50 characters if set';
     const markLower = m.toLowerCase();
     const dupIdx = sellers.findIndex((o, i) => i !== sellerIdx && (o.seller_mark ?? '').trim().toLowerCase() === markLower);
     if (dupIdx >= 0) return 'This mark is already in use by another seller';
@@ -1789,7 +1789,7 @@ const ArrivalsPage = () => {
   const isLotNameInvalid = (l: LotEntry) => {
     const ln = (l.lot_name ?? '').trim();
     if (!ln) return false;
-    if (ln.length < 2 || ln.length > 50) return true;
+    if (ln.length > 50) return true;
     // Lot names are stored and submitted as strings; allow alphanumeric plus common separators.
     return !/^[a-zA-Z0-9][a-zA-Z0-9\s_-]*$/.test(ln);
   };
@@ -3358,7 +3358,7 @@ const ArrivalsPage = () => {
                       <div className="glass-card rounded-2xl p-4 grid grid-cols-1 gap-4 md:grid-cols-2 md:gap-4">
                         <div className="min-w-0">
                           <label className={cn("text-xs font-bold uppercase tracking-wider mb-2 block flex items-center gap-1.5", isVehicleNumberInvalid ? "text-red-500" : "text-blue-600 dark:text-blue-400")}>
-                            <Truck className="w-3.5 h-3.5" /> Vehicle Number {isVehicleNumberInvalid && <span className="font-normal text-red-500">2–12 characters</span>}
+                            <Truck className="w-3.5 h-3.5" /> Vehicle Number {isVehicleNumberInvalid && <span className="font-normal text-red-500">1–12 characters</span>}
                           </label>
                           <Input placeholder="e.g., MH12AB1234" value={vehicleNumber}
                             onChange={e => { setVehicleMarkAliasApiError(null); setVehicleNumber(e.target.value.toUpperCase()); }}
@@ -3445,7 +3445,7 @@ const ArrivalsPage = () => {
                             "text-xs font-bold uppercase tracking-wider mb-2 block leading-snug sm:mb-2 sm:flex sm:min-h-[2.85rem] sm:items-end sm:pb-0.5",
                             isGodownInvalid ? "text-red-500" : "text-muted-foreground",
                           )}>
-                            Godown (optional) {isGodownInvalid && '⚠ 2–50, letters only'}
+                            Godown (optional) {isGodownInvalid && '⚠ 1–50, letters only'}
                           </label>
                           <Input placeholder="Godown name (optional)" value={godown} onChange={e => setGodown(e.target.value)} className={cn("h-11 w-full min-w-0 rounded-xl text-sm", isGodownInvalid && "border-red-500 ring-2 ring-red-500/30 bg-red-50 dark:bg-red-950/20")} maxLength={50} />
                         </div>
@@ -3468,7 +3468,7 @@ const ArrivalsPage = () => {
 
                     <div className="glass-card rounded-2xl p-4">
                       <label className={cn("text-xs font-bold uppercase tracking-wider mb-2 block", isBrokerNameInvalid ? "text-red-500" : "text-muted-foreground")}>
-                        Broker (optional) {isBrokerNameInvalid && '⚠ 2–100, letters + spaces'}
+                        Broker (optional) {isBrokerNameInvalid && '⚠ 1–100, letters + spaces'}
                       </label>
                       <div ref={brokerSearchWrapRef} className="relative">
                         <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
@@ -3624,7 +3624,7 @@ const ArrivalsPage = () => {
                                   </div>
                                   <div className="min-w-0">
                                     <Input
-                                      placeholder="Mark / alias (optional, 2–20)"
+                                      placeholder="Mark / alias (optional, 1–20)"
                                       value={seller.seller_mark}
                                       onChange={e => updateSeller(si, { seller_mark: e.target.value })}
                                       className={cn(
@@ -3633,7 +3633,7 @@ const ArrivalsPage = () => {
                                       )}
                                       maxLength={20}
                                     />
-                                    {isSellerMarkInvalid(seller, si) && <p className="text-[9px] text-red-500 mt-0.5">{getSellerMarkError(seller, si) ?? '2–20 if set'}</p>}
+                                    {isSellerMarkInvalid(seller, si) && <p className="text-[9px] text-red-500 mt-0.5">{getSellerMarkError(seller, si) ?? '1–20 if set'}</p>}
                                   </div>
                                 </div>
                               ) : (
@@ -3645,7 +3645,7 @@ const ArrivalsPage = () => {
                                     }}
                                   >
                                     <Input
-                                      placeholder="Seller name (2–100)"
+                                      placeholder="Seller name (1–100)"
                                       value={seller.seller_name}
                                       onChange={e => updateSellerNameWithSuggestions(si, seller.seller_vehicle_id, e.target.value)}
                                       onFocus={() => {
@@ -3667,12 +3667,12 @@ const ArrivalsPage = () => {
                                       maxLength={100}
                                     />
                                     {isSellerNameInvalid(seller, si) && (
-                                      <p className="text-[9px] text-red-500 mt-0.5">{getSellerNameError(seller, si) ?? '2–100 characters'}</p>
+                                      <p className="text-[9px] text-red-500 mt-0.5">{getSellerNameError(seller, si) ?? '1–100 characters'}</p>
                                     )}
                                   </div>
                                   <div className="min-w-0">
                                     <Input
-                                      placeholder="Mark / alias (optional, 2–20)"
+                                      placeholder="Mark / alias (optional, 1–20)"
                                       value={seller.seller_mark}
                                       onChange={e => updateSeller(si, { seller_mark: e.target.value })}
                                       className={cn(
@@ -3681,7 +3681,7 @@ const ArrivalsPage = () => {
                                       )}
                                       maxLength={20}
                                     />
-                                    {isSellerMarkInvalid(seller, si) && <p className="text-[9px] text-red-500 mt-0.5">{getSellerMarkError(seller, si) ?? '2–20 if set'}</p>}
+                                    {isSellerMarkInvalid(seller, si) && <p className="text-[9px] text-red-500 mt-0.5">{getSellerMarkError(seller, si) ?? '1–20 if set'}</p>}
                                   </div>
                                 </div>
                               )}
@@ -4399,7 +4399,7 @@ const ArrivalsPage = () => {
                       <div className="glass-card rounded-2xl p-4 grid grid-cols-1 gap-4 sm:grid-cols-2 sm:gap-3">
                         <div className="min-w-0">
                           <label className={cn("text-xs font-bold uppercase tracking-wider mb-2 block flex items-center gap-1.5", isVehicleNumberInvalid ? "text-red-500" : "text-blue-600 dark:text-blue-400")}>
-                            <Truck className="w-3.5 h-3.5" /> Vehicle Number {isVehicleNumberInvalid && <span className="font-normal text-red-500">2–12</span>}
+                            <Truck className="w-3.5 h-3.5" /> Vehicle Number {isVehicleNumberInvalid && <span className="font-normal text-red-500">1–12</span>}
                           </label>
                           <Input placeholder="e.g., MH12AB1234" value={vehicleNumber}
                             onChange={e => { setVehicleMarkAliasApiError(null); setVehicleNumber(e.target.value.toUpperCase()); }}
@@ -4486,7 +4486,7 @@ const ArrivalsPage = () => {
                             "text-xs font-bold uppercase tracking-wider mb-2 block leading-snug sm:mb-2 sm:flex sm:min-h-[2.85rem] sm:items-end sm:pb-0.5",
                             isGodownInvalid ? "text-red-500" : "text-muted-foreground",
                           )}>
-                            Godown (optional) {isGodownInvalid && '⚠ 2–50'}
+                            Godown (optional) {isGodownInvalid && '⚠ 1–50'}
                           </label>
                           <Input placeholder="Godown (optional)" value={godown} onChange={e => setGodown(e.target.value)} className={cn("h-12 w-full min-w-0 rounded-xl", isGodownInvalid && "border-red-500 ring-2 ring-red-500/30 bg-red-50 dark:bg-red-950/20")} maxLength={50} />
                         </div>
@@ -4509,7 +4509,7 @@ const ArrivalsPage = () => {
 
                     <div className="glass-card rounded-2xl p-4">
                       <label className={cn("text-xs font-bold uppercase tracking-wider mb-2 block", isBrokerNameInvalid ? "text-red-500" : "text-muted-foreground")}>
-                        Broker (optional) {isBrokerNameInvalid && '⚠ 2–100'}
+                        Broker (optional) {isBrokerNameInvalid && '⚠ 1–100'}
                       </label>
                       <div ref={brokerSearchWrapRef} className="relative">
                         <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
@@ -4660,7 +4660,7 @@ const ArrivalsPage = () => {
                                   </div>
                                   <div className="min-w-0">
                                     <Input
-                                      placeholder="Mark / alias (optional, 2–20)"
+                                      placeholder="Mark / alias (optional, 1–20)"
                                       value={seller.seller_mark}
                                       onChange={e => updateSeller(si, { seller_mark: e.target.value })}
                                       className={cn(
@@ -4669,7 +4669,7 @@ const ArrivalsPage = () => {
                                       )}
                                       maxLength={20}
                                     />
-                                    {isSellerMarkInvalid(seller, si) && <p className="mt-0.5 text-[9px] text-red-500">{getSellerMarkError(seller, si) ?? '2–20 if set'}</p>}
+                                    {isSellerMarkInvalid(seller, si) && <p className="mt-0.5 text-[9px] text-red-500">{getSellerMarkError(seller, si) ?? '1–20 if set'}</p>}
                                   </div>
                                 </div>
                               ) : (
@@ -4681,7 +4681,7 @@ const ArrivalsPage = () => {
                                     }}
                                   >
                                     <Input
-                                      placeholder="Seller name (2–100)"
+                                      placeholder="Seller name (1–100)"
                                       value={seller.seller_name}
                                       onChange={e => updateSellerNameWithSuggestions(si, seller.seller_vehicle_id, e.target.value)}
                                       onFocus={() => {
@@ -4703,12 +4703,12 @@ const ArrivalsPage = () => {
                                       maxLength={100}
                                     />
                                     {isSellerNameInvalid(seller, si) && (
-                                      <p className="mt-0.5 text-[9px] text-red-500">{getSellerNameError(seller, si) ?? '2–100 characters'}</p>
+                                      <p className="mt-0.5 text-[9px] text-red-500">{getSellerNameError(seller, si) ?? '1–100 characters'}</p>
                                     )}
                                   </div>
                                   <div className="min-w-0">
                                     <Input
-                                      placeholder="Mark / alias (optional, 2–20)"
+                                      placeholder="Mark / alias (optional, 1–20)"
                                       value={seller.seller_mark}
                                       onChange={e => updateSeller(si, { seller_mark: e.target.value })}
                                       className={cn(
@@ -4717,7 +4717,7 @@ const ArrivalsPage = () => {
                                       )}
                                       maxLength={20}
                                     />
-                                    {isSellerMarkInvalid(seller, si) && <p className="mt-0.5 text-[9px] text-red-500">{getSellerMarkError(seller, si) ?? '2–20 if set'}</p>}
+                                    {isSellerMarkInvalid(seller, si) && <p className="mt-0.5 text-[9px] text-red-500">{getSellerMarkError(seller, si) ?? '1–20 if set'}</p>}
                                   </div>
                                 </div>
                               )}
@@ -4900,7 +4900,7 @@ const ArrivalsPage = () => {
                                 contentLayoutKey={seller.lots.length}
                                 showScrollAffordanceFooter={seller.lots.length > 0}
                                 scrollAffordanceHint="Scroll for more lots"
-                                className="min-h-[11rem] max-h-[min(28rem,52dvh)] overflow-y-auto overflow-x-visible overscroll-contain [-webkit-overflow-scrolling:touch] touch-auto border-t border-border/30 pb-6"
+                                className="min-h-[11rem] overflow-y-visible overflow-x-visible overscroll-y-auto overscroll-x-contain [-webkit-overflow-scrolling:touch] touch-auto border-t border-border/30 pb-6"
                               >
                                   {seller.lots.length === 0 ? (
                                     <p className="text-xs text-muted-foreground text-center py-3 italic px-3">No lots added yet.</p>
@@ -4938,7 +4938,7 @@ const ArrivalsPage = () => {
                                               }}
                                               data-arrival-mobile-lots-carousel="1"
                                               onScroll={() => handleArrivalLotsCarouselScroll(seller.seller_vehicle_id, seller.lots.length)}
-                                              className="flex w-full max-w-full overflow-x-auto pb-1 [-webkit-overflow-scrolling:touch] snap-x snap-mandatory touch-[pan-x_pan-y] lg:touch-auto"
+                                              className="flex w-full max-w-full overflow-x-auto overscroll-x-contain overscroll-y-auto pb-1 [-webkit-overflow-scrolling:touch] snap-x snap-mandatory touch-[pan-x_pan-y] lg:touch-auto"
                                             >
                                               {Array.from({ length: lotPageCount }, (_, pageIdx) => {
                                                 const start = pageIdx * MOBILE_ARRIVAL_LOTS_PER_PAGE;

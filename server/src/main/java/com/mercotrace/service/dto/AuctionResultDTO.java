@@ -46,6 +46,10 @@ public class AuctionResultDTO implements Serializable {
     @JsonProperty("sellerTotalQty")
     private Integer sellerTotalQty;
 
+    /** Lot bag count (arrival lot size). Last segment of printed lot identifier; not per-buyer line quantity. */
+    @JsonProperty("lotBagCount")
+    private Integer lotBagCount;
+
     /** Arrival seller serial persisted on the lot. Used by Print Hub without extra arrival fetches. */
     @JsonProperty("sellerSerial")
     private Integer sellerSerial;
@@ -158,6 +162,14 @@ public class AuctionResultDTO implements Serializable {
 
     public void setSellerTotalQty(Integer sellerTotalQty) {
         this.sellerTotalQty = sellerTotalQty;
+    }
+
+    public Integer getLotBagCount() {
+        return lotBagCount;
+    }
+
+    public void setLotBagCount(Integer lotBagCount) {
+        this.lotBagCount = lotBagCount;
     }
 
     public Integer getSellerSerial() {
