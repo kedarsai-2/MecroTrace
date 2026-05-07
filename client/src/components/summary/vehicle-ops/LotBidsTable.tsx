@@ -13,6 +13,7 @@ import { ARRIVALS_TABLE_HEADER_GRADIENT } from '@/components/arrivals/arrivalsTa
 import {
   auctionApi,
   type AuctionBidCreateRequest,
+  type AuctionBidUpdateRequest,
   type AuctionEntryDTO,
   type AuctionSessionDTO,
   type LotSummaryDTO,
@@ -30,11 +31,23 @@ const readOnlyBidNumericClass = cn(readOnlyBidTextClass, 'text-right tabular-num
 const numberInputNoSpinnerClass =
   '[appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none';
 
+/** Matches New seller rate `BillingMoneyInput` sizing in wide table. */
+const editableMoneyCellClass =
+  'ml-auto box-border h-8 w-[5.5rem] max-w-full rounded-lg border-border/50 text-right tabular-nums text-sm md:h-7 md:min-w-[5rem] md:w-[5.5rem] md:max-w-none lg:h-8 lg:w-[5.5rem]';
+
 const REF_FORMULA_HINT =
   'Computed from this row: buyer rate − brokerage (extra) − preset margin. Display only — not editable.';
 
 const NEW_SELLER_HINT =
-  'Stored separately from the auction bid and buyer rate. Save writes summary_seller_rate only; Sales Pad bid / buyer totals are unchanged.';
+  'Stored separately from the raw auction bid until you save. Save sends changed summary, rates, and qty together.';
+
+/** Local overrides keyed by `auction_entry_id` — merged with server row for display and save. */
+export type LocalBidEditFields = {
+  rate: number;
+  quantity: number;
+  extra_rate: number;
+  summary_seller_rate: number;
+};
 
 /** Persisted Summary column (defaults from auction bid until you edit here). */
 function serverSummarySellerRate(e: AuctionEntryDTO): number {
@@ -43,12 +56,46 @@ function serverSummarySellerRate(e: AuctionEntryDTO): number {
   return roundMoney2(Number(e.bid_rate ?? e.seller_rate ?? 0));
 }
 
-/** Display-only reference back-out for the row. */
-function refSellerRateDisplay(e: AuctionEntryDTO): number {
-  const buyer = Number(e.buyer_rate ?? e.bid_rate ?? 0);
-  const brokerage = Number(e.extra_rate ?? 0);
+function serverBuyerRate(e: AuctionEntryDTO): number {
+  return roundMoney2(Number(e.buyer_rate ?? e.bid_rate ?? 0));
+}
+
+function serverQuantity(e: AuctionEntryDTO): number {
+  const q = Number(e.quantity ?? 0);
+  if (!Number.isFinite(q)) return 0;
+  return Math.max(0, Math.round(q));
+}
+
+function serverExtraRate(e: AuctionEntryDTO): number {
+  return roundMoney2(Number(e.extra_rate ?? 0));
+}
+
+function mergeEntryDisplay(e: AuctionEntryDTO, edits: Partial<LocalBidEditFields> | undefined) {
+  return {
+    buyer_mark: String(e.buyer_mark ?? ''),
+    quantity: edits?.quantity !== undefined ? edits.quantity : serverQuantity(e),
+    rate: edits?.rate !== undefined ? roundMoney2(edits.rate) : serverBuyerRate(e),
+    extra_rate: edits?.extra_rate !== undefined ? roundMoney2(edits.extra_rate) : serverExtraRate(e),
+    summary_seller_rate:
+      edits?.summary_seller_rate !== undefined ? roundMoney2(edits.summary_seller_rate) : serverSummarySellerRate(e),
+  };
+}
+
+function entryHasDirtyEdits(e: AuctionEntryDTO, edits: Partial<LocalBidEditFields> | undefined): boolean {
+  if (!edits || Object.keys(edits).length === 0) return false;
+  const m = mergeEntryDisplay(e, edits);
+  if (Math.round(m.quantity) !== serverQuantity(e)) return true;
+  if (Math.abs(m.rate - serverBuyerRate(e)) >= 0.005) return true;
+  if (Math.abs(m.extra_rate - serverExtraRate(e)) >= 0.005) return true;
+  if (Math.abs(m.summary_seller_rate - serverSummarySellerRate(e)) >= 0.005) return true;
+  return false;
+}
+
+/** Display-only reference back-out for the row (uses merged buyer rate / brokerage when edited). */
+function refSellerRateDisplayMerged(e: AuctionEntryDTO, edits: Partial<LocalBidEditFields> | undefined): number {
+  const m = mergeEntryDisplay(e, edits);
   const preset = Number(e.preset_margin ?? 0);
-  return roundMoney2(buyer - brokerage - preset);
+  return roundMoney2(m.rate - m.extra_rate - preset);
 }
 
 function roundDisplay(n: number): string {
@@ -69,8 +116,12 @@ export type LotBidsTableProps = {
   lotSummary?: LotSummaryDTO | null;
   /** Refetch vehicle-ops summary (lots, RD, billing slice) after auction writes */
   onAuctionDataInvalidate?: () => void | Promise<void>;
-  /** True while “new seller rate” differs from saved summary_seller_rate (same rule as Save). */
+  /** True while any editable bid field differs from server (same rule as Save). */
   onUnsavedRatesChange?: (hasUnsaved: boolean) => void;
+  /** When seq increments with a valid rate, all rows get this summary_seller_rate in local edits. */
+  applyBulkSellerRate?: number | null;
+  /** Bump (e.g. per commit) so same rate can re-apply; 0 = skip. */
+  applyBulkSellerRateSeq?: number;
 };
 
 /** Form field label styling — matches Billing mobile line-item hints. */
@@ -87,9 +138,11 @@ export function LotBidsTable({
   lotSummary,
   onAuctionDataInvalidate,
   onUnsavedRatesChange,
+  applyBulkSellerRate = null,
+  applyBulkSellerRateSeq = 0,
 }: LotBidsTableProps) {
-  /** Local overrides after BillingMoneyInput commit; cleared when they match server summary_seller_rate. */
-  const [localSummaryByEntryId, setLocalSummaryByEntryId] = useState<Record<number, number>>({});
+  /** Local overrides per entry — cleared when merged values match server. */
+  const [localEditsById, setLocalEditsById] = useState<Record<number, Partial<LocalBidEditFields>>>({});
   const [deleteTarget, setDeleteTarget] = useState<AuctionEntryDTO | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -121,6 +174,19 @@ export function LotBidsTable({
 
   const entries = session?.entries ?? EMPTY_SESSION_ENTRIES;
 
+  useEffect(() => {
+    if (applyBulkSellerRateSeq < 1) return;
+    if (applyBulkSellerRate == null || !Number.isFinite(applyBulkSellerRate) || applyBulkSellerRate < 1) return;
+    const rate = roundMoney2(applyBulkSellerRate);
+    setLocalEditsById((prev) => {
+      const next = { ...prev };
+      for (const e of entries) {
+        next[e.auction_entry_id] = { ...(next[e.auction_entry_id] ?? {}), summary_seller_rate: rate };
+      }
+      return next;
+    });
+  }, [applyBulkSellerRate, applyBulkSellerRateSeq, entries]);
+
   const entryIdsKey = useMemo(() => entries.map((e) => e.auction_entry_id).join(','), [entries]);
 
   const soldBagsForStrips = Number(lotSummary?.sold_bags ?? session?.total_sold_bags ?? 0) || 0;
@@ -130,13 +196,13 @@ export function LotBidsTable({
   );
 
   useEffect(() => {
-    setLocalSummaryByEntryId((prev) => {
+    setLocalEditsById((prev) => {
       const next = { ...prev };
       for (const idStr of Object.keys(next)) {
         const id = Number(idStr);
         const row = entries.find((x) => x.auction_entry_id === id);
         if (!row) delete next[id];
-        else if (Math.abs(roundMoney2(next[id]) - serverSummarySellerRate(row)) < 0.005) delete next[id];
+        else if (!entryHasDirtyEdits(row, next[id])) delete next[id];
       }
       return next;
     });
@@ -333,35 +399,65 @@ export function LotBidsTable({
     ],
   );
 
+  const patchLocalEdit = useCallback((entryId: number, patch: Partial<LocalBidEditFields>) => {
+    setLocalEditsById((p) => ({ ...p, [entryId]: { ...p[entryId], ...patch } }));
+  }, []);
+
   const handleSaveRates = useCallback(async () => {
     if (!session || entries.length === 0) {
       toast.message('Nothing to save', { description: 'Add a bid first or open a lot with entries.' });
       return;
     }
-    setSaving(true);
-    try {
-      const dirty: { entry: AuctionEntryDTO; newSummary: number }[] = [];
-      for (const e of entries) {
-        const srv = serverSummarySellerRate(e);
-        const cur = localSummaryByEntryId[e.auction_entry_id] ?? srv;
-        const neuN = roundMoney2(cur);
-        if (!Number.isFinite(neuN) || neuN < 1) {
+    for (const e of entries) {
+      const edits = localEditsById[e.auction_entry_id];
+      if (!entryHasDirtyEdits(e, edits)) continue;
+      const m = mergeEntryDisplay(e, edits);
+      if (Math.abs(m.summary_seller_rate - serverSummarySellerRate(e)) >= 0.005) {
+        if (!Number.isFinite(m.summary_seller_rate) || m.summary_seller_rate < 1) {
           toast.error(`Invalid new seller rate for ${e.buyer_mark || 'this bid'} (must be at least 1).`);
           return;
         }
-        if (Math.abs(neuN - srv) < 0.005) continue;
-        dirty.push({ entry: e, newSummary: neuN });
       }
-      if (dirty.length === 0) {
+      if (Math.abs(m.rate - serverBuyerRate(e)) >= 0.005) {
+        if (!Number.isFinite(m.rate) || m.rate < 1) {
+          toast.error(`Invalid buyer rate for ${e.buyer_mark || 'this bid'} (must be at least 1).`);
+          return;
+        }
+      }
+      if (Math.round(m.quantity) !== serverQuantity(e)) {
+        const q = Math.round(m.quantity);
+        if (!Number.isFinite(q) || q < 1) {
+          toast.error(`Invalid quantity for ${e.buyer_mark || 'this bid'} (must be at least 1).`);
+          return;
+        }
+      }
+    }
+    setSaving(true);
+    try {
+      const toSave: { entry: AuctionEntryDTO; body: AuctionBidUpdateRequest }[] = [];
+      for (const e of entries) {
+        const edits = localEditsById[e.auction_entry_id];
+        if (!entryHasDirtyEdits(e, edits)) continue;
+        const m = mergeEntryDisplay(e, edits);
+        const body: AuctionBidUpdateRequest = {
+          expected_last_modified_ms: e.last_modified_ms ?? undefined,
+        };
+        if (Math.round(m.quantity) !== serverQuantity(e)) body.quantity = Math.round(m.quantity);
+        if (Math.abs(m.rate - serverBuyerRate(e)) >= 0.005) body.rate = m.rate;
+        if (Math.abs(m.extra_rate - serverExtraRate(e)) >= 0.005) body.extra_rate = m.extra_rate;
+        if (Math.abs(m.summary_seller_rate - serverSummarySellerRate(e)) >= 0.005) {
+          body.summary_seller_rate = m.summary_seller_rate;
+        }
+        if (saveRetryAllowLotIncrease) body.allow_lot_increase = true;
+        toSave.push({ entry: e, body });
+      }
+      if (toSave.length === 0) {
         toast.message('No changes to save');
         return;
       }
-      for (const { entry, newSummary } of dirty) {
+      for (const { entry, body } of toSave) {
         try {
-          const updated = await auctionApi.updateBid(lotId, entry.auction_entry_id, {
-            summary_seller_rate: newSummary,
-            expected_last_modified_ms: entry.last_modified_ms ?? undefined,
-          });
+          const updated = await auctionApi.updateBid(lotId, entry.auction_entry_id, body);
           onSessionUpdated(updated);
         } catch (err: unknown) {
           const ex = err as { isStaleBid?: boolean; isConflict?: boolean; message?: string };
@@ -386,32 +482,21 @@ export function LotBidsTable({
       }
       setSaveRetryAllowLotIncrease(false);
       await onAuctionDataInvalidate?.();
-      toast.success('Summary seller rates saved');
+      toast.success('Bid changes saved');
     } finally {
       setSaving(false);
     }
-  }, [
-    entries,
-    localSummaryByEntryId,
-    lotId,
-    onAuctionDataInvalidate,
-    onSessionUpdated,
-    session,
-  ]);
+  }, [entries, localEditsById, lotId, onAuctionDataInvalidate, onSessionUpdated, session, saveRetryAllowLotIncrease]);
 
   const busy = loading || deleting || saving;
 
   const hasUnsavedRates = useMemo(() => {
     if (!session || entries.length === 0) return false;
     for (const e of entries) {
-      const srv = serverSummarySellerRate(e);
-      const cur = localSummaryByEntryId[e.auction_entry_id] ?? srv;
-      const neuN = roundMoney2(cur);
-      if (!Number.isFinite(neuN) || neuN < 1) return true;
-      if (Math.abs(neuN - srv) >= 0.005) return true;
+      if (entryHasDirtyEdits(e, localEditsById[e.auction_entry_id])) return true;
     }
     return false;
-  }, [entries, localSummaryByEntryId, session]);
+  }, [entries, localEditsById, session]);
 
   useEffect(() => {
     onUnsavedRatesChange?.(hasUnsavedRates);
@@ -444,25 +529,33 @@ export function LotBidsTable({
 
       {showTable ? (
         <>
-          {/* Desktop: unchanged wide table from lg (1024px) — aligns with VehicleOps seller strip / lot carousel. */}
-          <div className="hidden max-w-full overflow-x-auto rounded-xl border border-border/30 bg-background/40 lg:block">
+          {/* Wide table from `md` (768px) — aligns with VehicleOps seller strip / lot layout. */}
+          <div className="hidden max-w-full rounded-xl border border-border/30 bg-background/40 md:block md:overflow-x-auto">
             <Table
               className={cn(
-                'table-fixed border-collapse',
-                'min-w-[880px] w-full text-xs sm:text-sm',
-                '[&_th]:!px-2 [&_th]:!py-2.5 [&_td]:!p-2 [&_th]:align-middle [&_td]:align-middle',
+                'border-collapse',
+                /** Tablet (`md`): auto layout + content width so columns don’t squish; wrapper scrolls horizontally. */
+                'md:table-auto md:w-max',
+                /** Desktop (`lg+`): fixed layout + explicit column widths via colgroup. */
+                'lg:table-fixed lg:w-full lg:min-w-[880px]',
+                'text-xs sm:text-sm md:text-xs lg:text-sm',
+                '[&_th]:!px-2 [&_th]:!py-2.5 [&_td]:!p-2',
+                'md:[&_th]:!h-9 md:[&_th]:!px-1.5 md:[&_th]:!py-1.5 md:[&_td]:!p-1.5',
+                'md:[&_th:last-child]:!w-10 md:[&_td:last-child]:!w-10 md:[&_th:last-child]:!min-w-10 md:[&_td:last-child]:!min-w-10',
+                'lg:[&_th]:!h-12 lg:[&_th]:!px-2 lg:[&_th]:!py-2.5 lg:[&_td]:!p-2',
+                '[&_th]:align-middle [&_td]:align-middle',
               )}
             >
-              <colgroup>
-                <col style={{ width: '2%' }} />
-                <col style={{ width: '16%' }} />
+              {/** Percentage cols only apply at `lg+` — hidden below so `md:table-auto` isn’t forced into 100% width. */}
+              <colgroup className="hidden lg:[display:table-column-group]">
+                <col style={{ width: '12%' }} />
+                <col style={{ width: '7%' }} />
+                <col style={{ width: '11%' }} />
+                <col style={{ width: '12%' }} />
+                <col style={{ width: '10%' }} />
                 <col style={{ width: '8%' }} />
                 <col style={{ width: '12%' }} />
-                <col style={{ width: '14%' }} />
-                <col style={{ width: '11%' }} />
-                <col style={{ width: '9%' }} />
-                <col style={{ width: '14%' }} />
-                <col style={{ width: '14%' }} />
+                <col style={{ width: '12%' }} />
               </colgroup>
           <TableHeader>
             <TableRow
@@ -472,12 +565,11 @@ export function LotBidsTable({
                 'hover:bg-[linear-gradient(90deg,#4B7CF3_0%,#5B8CFF_45%,#7B61FF_100%)] hover:brightness-[1.03]',
               )}
             >
-              <TableHead className="rounded-tl-xl border-b border-white/20 !p-0" aria-hidden />
-              <TableHead className="text-left text-white/95">Mark</TableHead>
-              <TableHead className="text-right text-white/95">Qty</TableHead>
-              <TableHead className="text-right text-white/95">Buyer rate</TableHead>
-              <TableHead className="text-right text-white/95">
-                <span className="inline-flex items-center gap-1">
+              <TableHead className="rounded-tl-xl whitespace-nowrap text-left text-white/95">Mark</TableHead>
+              <TableHead className="whitespace-nowrap text-right text-white/95">Qty</TableHead>
+              <TableHead className="whitespace-nowrap text-right text-white/95">Buyer rate</TableHead>
+              <TableHead className="whitespace-nowrap text-right text-white/95">
+                <span className="inline-flex items-center gap-1 whitespace-nowrap">
                   Ref seller rate
                   <Tooltip>
                     <TooltipTrigger asChild>
@@ -495,10 +587,10 @@ export function LotBidsTable({
                   </Tooltip>
                 </span>
               </TableHead>
-              <TableHead className="text-right text-white/95">Brokerage</TableHead>
-              <TableHead className="text-right text-white/95">Preset</TableHead>
-              <TableHead className="text-right text-white/95">
-                <span className="inline-flex items-center gap-1">
+              <TableHead className="whitespace-nowrap text-right text-white/95">Brokerage</TableHead>
+              <TableHead className="whitespace-nowrap text-right text-white/95">Preset</TableHead>
+              <TableHead className="whitespace-nowrap text-right text-white/95">
+                <span className="inline-flex items-center gap-1 whitespace-nowrap">
                   New seller rate
                   <Tooltip>
                     <TooltipTrigger asChild>
@@ -516,66 +608,97 @@ export function LotBidsTable({
                   </Tooltip>
                 </span>
               </TableHead>
-              <TableHead className="rounded-tr-xl text-center text-white/95 !px-2" aria-label="Actions" />
+              <TableHead
+                className="rounded-tr-xl whitespace-nowrap text-center text-white/95 !px-2"
+                aria-label="Actions"
+              />
             </TableRow>
           </TableHeader>
           <TableBody>
             {entries.map((e) => {
               const id = e.auction_entry_id;
-              const rowAuctioned = entryAuctionedMap.get(id) ?? false;
-              const buyerRate = Number(e.buyer_rate ?? e.bid_rate ?? 0);
-              const brokerage = Number(e.extra_rate ?? 0);
+              const edits = localEditsById[id];
+              const m = mergeEntryDisplay(e, edits);
               const preset = Number(e.preset_margin ?? 0);
-              const summaryVal =
-                localSummaryByEntryId[id] !== undefined ? localSummaryByEntryId[id] : serverSummarySellerRate(e);
               return (
                 <TableRow key={id} className="border-border/30">
-                  <TableCell className="border-border/30 !p-0 align-middle">
-                    <span
-                      className={cn(
-                        'mx-auto block min-h-[2.25rem] w-1.5 max-w-[6px] rounded-sm',
-                        vehicleOpsAuctionStripClass(rowAuctioned),
-                      )}
-                      aria-hidden
-                    />
-                  </TableCell>
-                  <TableCell className="text-left font-medium">{e.buyer_mark || '—'}</TableCell>
-                  <TableCell className="text-right tabular-nums">{e.quantity ?? 0}</TableCell>
-                  <TableCell className="text-right tabular-nums">₹{roundDisplay(buyerRate)}</TableCell>
-                  <TableCell className="text-right">
+                  <TableCell className="max-w-[9rem] whitespace-nowrap text-left font-medium">
                     <Input
                       readOnly
                       tabIndex={-1}
                       aria-readonly
-                      value={`₹${roundDisplay(refSellerRateDisplay(e))}`}
-                      title="Reference seller rate (display only)"
-                      aria-label={`Reference seller rate for ${e.buyer_mark}`}
-                      className={cn(readOnlyBidNumericClass, 'ml-auto box-border h-8 w-[5.5rem] max-w-full')}
+                      value={m.buyer_mark}
+                      title="Buyer mark"
+                      aria-label={`Buyer mark for bid ${e.bid_number}`}
+                      className={cn(readOnlyBidTextClass, 'max-w-[8rem] font-medium')}
                     />
                   </TableCell>
-                  <TableCell className="text-right tabular-nums text-muted-foreground">₹{roundDisplay(brokerage)}</TableCell>
-                  <TableCell className="text-right tabular-nums text-muted-foreground">₹{roundDisplay(preset)}</TableCell>
-                  <TableCell className="text-right">
+                  <TableCell className="whitespace-nowrap text-right">
+                    <BillingMoneyInput
+                      commitMode="blur"
+                      integerOnly
+                      min={1}
+                      disabled={busy}
+                      value={m.quantity}
+                      onCommit={(n) => patchLocalEdit(id, { quantity: Math.max(1, Math.round(n)) })}
+                      title="Quantity (bags)"
+                      className={cn(editableMoneyCellClass, numberInputNoSpinnerClass)}
+                    />
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap text-right">
                     <BillingMoneyInput
                       commitMode="blur"
                       min={1}
                       disabled={busy}
-                      value={summaryVal}
-                      onCommit={(n) =>
-                        setLocalSummaryByEntryId((p) => ({
-                          ...p,
-                          [id]: roundMoney2(n),
-                        }))
-                      }
-                      title={`New seller rate for ${e.buyer_mark}`}
-                      className="ml-auto box-border h-8 w-[5.5rem] max-w-full rounded-lg border-border/50 text-right tabular-nums text-sm"
+                      value={m.rate}
+                      onCommit={(n) => patchLocalEdit(id, { rate: roundMoney2(n) })}
+                      title="Buyer rate"
+                      className={cn(editableMoneyCellClass, numberInputNoSpinnerClass)}
                     />
                   </TableCell>
-                  <TableCell className="text-center">
+                  <TableCell className="whitespace-nowrap text-right">
+                    <Input
+                      readOnly
+                      tabIndex={-1}
+                      aria-readonly
+                      value={`₹${roundDisplay(refSellerRateDisplayMerged(e, edits))}`}
+                      title="Reference seller rate (display only)"
+                      aria-label={`Reference seller rate for ${m.buyer_mark}`}
+                      className={cn(
+                        readOnlyBidNumericClass,
+                        'ml-auto box-border h-8 w-[5.5rem] max-w-full md:h-7 md:min-w-[5rem] md:w-[5.5rem] md:max-w-none lg:h-8 lg:w-[5.5rem]',
+                      )}
+                    />
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap text-right">
+                    <BillingMoneyInput
+                      commitMode="blur"
+                      disabled={busy}
+                      value={m.extra_rate}
+                      onCommit={(n) => patchLocalEdit(id, { extra_rate: roundMoney2(n) })}
+                      title="Brokerage (extra rate)"
+                      className={cn(editableMoneyCellClass, numberInputNoSpinnerClass)}
+                    />
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap text-right tabular-nums text-muted-foreground">
+                    ₹{roundDisplay(preset)}
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap text-right">
+                    <BillingMoneyInput
+                      commitMode="blur"
+                      min={1}
+                      disabled={busy}
+                      value={m.summary_seller_rate}
+                      onCommit={(n) => patchLocalEdit(id, { summary_seller_rate: roundMoney2(n) })}
+                      title={`New seller rate for ${m.buyer_mark}`}
+                      className={cn(editableMoneyCellClass, numberInputNoSpinnerClass)}
+                    />
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap text-center">
                     <button
                       type="button"
                       className={cn(
-                        'inline-flex rounded-lg p-2 text-destructive hover:bg-destructive/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                        'inline-flex rounded-lg p-2 text-destructive hover:bg-destructive/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring md:p-1.5 lg:p-2',
                         busy && 'pointer-events-none opacity-50',
                       )}
                       aria-label={`Delete bid ${e.bid_number}`}
@@ -591,7 +714,7 @@ export function LotBidsTable({
         </Table>
           </div>
 
-          <div className="lg:hidden">
+          <div className="md:hidden">
         {entries.length > 1 && (
           <div className="mb-2 flex items-center justify-center gap-1.5" role="tablist" aria-label="Buyers in this lot">
             {entries.map((e, ei) => (
@@ -618,16 +741,14 @@ export function LotBidsTable({
         <div
           ref={mobileBuyersCarouselRef}
           onScroll={handleBuyersCarouselScroll}
-          className="flex gap-2 overflow-x-auto pb-1 [-webkit-overflow-scrolling:touch] touch-[pan-x_pan-y] lg:touch-auto no-scrollbar snap-x snap-mandatory"
+          className="flex gap-2 overflow-x-auto pb-1 [-webkit-overflow-scrolling:touch] touch-[pan-x_pan-y] md:touch-auto no-scrollbar snap-x snap-mandatory"
         >
           {entries.map((e) => {
             const id = e.auction_entry_id;
             const rowAuctioned = entryAuctionedMap.get(id) ?? false;
-            const buyerRate = Number(e.buyer_rate ?? e.bid_rate ?? 0);
-            const brokerage = Number(e.extra_rate ?? 0);
+            const edits = localEditsById[id];
+            const m = mergeEntryDisplay(e, edits);
             const preset = Number(e.preset_margin ?? 0);
-            const summaryVal =
-              localSummaryByEntryId[id] !== undefined ? localSummaryByEntryId[id] : serverSummarySellerRate(e);
             return (
               <div
                 key={id}
@@ -639,15 +760,19 @@ export function LotBidsTable({
                 />
                 <div className="min-w-0 flex-1 space-y-3 p-3">
                 <div className="flex items-end justify-between gap-2 border-b border-border/30 pb-2">
-                  <div className="min-w-0 flex-1 space-y-1">
-                    <FieldLabel>Mark</FieldLabel>
-                    <Input
-                      readOnly
-                      tabIndex={-1}
-                      aria-readonly
-                      value={e.buyer_mark || '—'}
-                      className={readOnlyBidTextClass}
-                    />
+                  <div className="min-w-0 flex-1 space-y-2">
+                    <div className="min-w-0 space-y-1">
+                      <FieldLabel>Mark</FieldLabel>
+                      <Input
+                        readOnly
+                        tabIndex={-1}
+                        aria-readonly
+                        value={m.buyer_mark}
+                        title="Buyer mark"
+                        aria-label={`Buyer mark for bid ${e.bid_number}`}
+                        className={cn(readOnlyBidTextClass, 'h-10 text-sm')}
+                      />
+                    </div>
                   </div>
                   <button
                     type="button"
@@ -664,32 +789,47 @@ export function LotBidsTable({
                 <div className="grid grid-cols-2 gap-2">
                   <div className="min-w-0 space-y-1">
                     <FieldLabel>Qty</FieldLabel>
-                    <Input
-                      readOnly
-                      tabIndex={-1}
-                      aria-readonly
-                      value={String(e.quantity ?? 0)}
-                      className={readOnlyBidNumericClass}
+                    <BillingMoneyInput
+                      commitMode="blur"
+                      integerOnly
+                      min={1}
+                      disabled={busy}
+                      value={m.quantity}
+                      onCommit={(n) => patchLocalEdit(id, { quantity: Math.max(1, Math.round(n)) })}
+                      title="Quantity (bags)"
+                      className={cn(
+                        'h-10 w-full min-w-0 rounded-lg border-border/50 text-right tabular-nums text-sm',
+                        numberInputNoSpinnerClass,
+                      )}
                     />
                   </div>
                   <div className="min-w-0 space-y-1">
                     <FieldLabel>Buyer rate (₹)</FieldLabel>
-                    <Input
-                      readOnly
-                      tabIndex={-1}
-                      aria-readonly
-                      value={`₹${roundDisplay(buyerRate)}`}
-                      className={readOnlyBidNumericClass}
+                    <BillingMoneyInput
+                      commitMode="blur"
+                      min={1}
+                      disabled={busy}
+                      value={m.rate}
+                      onCommit={(n) => patchLocalEdit(id, { rate: roundMoney2(n) })}
+                      title="Buyer rate"
+                      className={cn(
+                        'h-10 w-full min-w-0 rounded-lg border-border/50 text-right tabular-nums text-sm',
+                        numberInputNoSpinnerClass,
+                      )}
                     />
                   </div>
                   <div className="min-w-0 space-y-1">
                     <FieldLabel>Brokerage (₹)</FieldLabel>
-                    <Input
-                      readOnly
-                      tabIndex={-1}
-                      aria-readonly
-                      value={`₹${roundDisplay(brokerage)}`}
-                      className={readOnlyBidNumericClass}
+                    <BillingMoneyInput
+                      commitMode="blur"
+                      disabled={busy}
+                      value={m.extra_rate}
+                      onCommit={(n) => patchLocalEdit(id, { extra_rate: roundMoney2(n) })}
+                      title="Brokerage (extra rate)"
+                      className={cn(
+                        'h-10 w-full min-w-0 rounded-lg border-border/50 text-right tabular-nums text-sm',
+                        numberInputNoSpinnerClass,
+                      )}
                     />
                   </div>
                   <div className="min-w-0 space-y-1">
@@ -726,9 +866,9 @@ export function LotBidsTable({
                       readOnly
                       tabIndex={-1}
                       aria-readonly
-                      value={`₹${roundDisplay(refSellerRateDisplay(e))}`}
+                      value={`₹${roundDisplay(refSellerRateDisplayMerged(e, edits))}`}
                       title="Reference seller rate (display only)"
-                      aria-label={`Reference seller rate for ${e.buyer_mark}`}
+                      aria-label={`Reference seller rate for ${m.buyer_mark}`}
                       className={cn(readOnlyBidNumericClass, 'h-10 text-sm')}
                     />
                   </div>
@@ -754,15 +894,13 @@ export function LotBidsTable({
                       commitMode="blur"
                       min={1}
                       disabled={busy}
-                      value={summaryVal}
-                      onCommit={(n) =>
-                        setLocalSummaryByEntryId((p) => ({
-                          ...p,
-                          [id]: roundMoney2(n),
-                        }))
-                      }
-                      title={`New seller rate for ${e.buyer_mark}`}
-                      className="h-10 w-full min-w-0 rounded-lg border-border/50 text-right tabular-nums text-sm"
+                      value={m.summary_seller_rate}
+                      onCommit={(n) => patchLocalEdit(id, { summary_seller_rate: roundMoney2(n) })}
+                      title={`New seller rate for ${m.buyer_mark}`}
+                      className={cn(
+                        'h-10 w-full min-w-0 rounded-lg border-border/50 text-right tabular-nums text-sm',
+                        numberInputNoSpinnerClass,
+                      )}
                     />
                   </div>
                 </div>
@@ -775,7 +913,7 @@ export function LotBidsTable({
         </>
       ) : null}
 
-      <div className="mt-3 flex flex-wrap gap-2">
+      <div className="mt-3 flex flex-wrap gap-2 md:mt-2 md:gap-1.5 lg:mt-3 lg:gap-2">
         <Button
           type="button"
           variant="default"

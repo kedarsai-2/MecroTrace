@@ -15,7 +15,7 @@ import {
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import BottomNav from '@/components/BottomNav';
-import { useDesktopMode } from '@/hooks/use-desktop';
+import { useDesktopMode, useMdUp } from '@/hooks/use-desktop';
 import { cn } from '@/lib/utils';
 import ForbiddenPage from '@/components/ForbiddenPage';
 import { useAuth } from '@/context/AuthContext';
@@ -68,6 +68,7 @@ function sortArrivalDetails(a: ArrivalDetail, b: ArrivalDetail): number {
 const SummaryPage = () => {
   const navigate = useNavigate();
   const isDesktop = useDesktopMode();
+  const isMdUp = useMdUp();
   const { trader, user } = useAuth();
   const { canAccessModule } = usePermissions();
   const canView = canAccessModule(SUMMARY_MODULE);
@@ -632,8 +633,8 @@ const SummaryPage = () => {
         </>
       )}
 
-      {isDesktop && showFullVehicleOps && selectedFromUrl && (
-        <div className="max-w-[100vw] overflow-x-hidden px-4 pt-5 pb-6 sm:px-6 sm:pt-5 lg:px-8 lg:pt-5">
+      {(isDesktop || isMdUp) && showFullVehicleOps && selectedFromUrl && (
+        <div className="max-w-[100vw] overflow-x-hidden px-4 pt-5 pb-6 sm:px-6 sm:pt-5 md:px-4 md:pt-4 md:pb-5 lg:px-8 lg:pt-5 lg:pb-6">
           <SummaryVehicleOperationsView
             arrival={selectedFromUrl}
             isDesktop
@@ -642,7 +643,7 @@ const SummaryPage = () => {
         </div>
       )}
 
-      {!isDesktop && showFullVehicleOps && selectedFromUrl && (
+      {!isDesktop && !isMdUp && showFullVehicleOps && selectedFromUrl && (
         <div className="px-0">
           <SummaryVehicleOperationsView arrival={selectedFromUrl} isDesktop={false} onBack={onBackFromOps} />
         </div>

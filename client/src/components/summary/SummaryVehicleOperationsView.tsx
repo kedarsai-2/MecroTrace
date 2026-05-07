@@ -359,8 +359,8 @@ const SummaryVehicleOperationsView = ({ arrival, isDesktop, onBack }: Props) => 
   );
 
   const threeCards = (
-    <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-      <div className="glass-card rounded-2xl border border-border/40 p-4 shadow-sm">
+    <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-2 md:gap-2 lg:grid-cols-3 lg:gap-3">
+      <div className="glass-card rounded-2xl border border-border/40 p-4 shadow-sm md:p-3 lg:p-4">
         <div className={cardTitleRowClass}>
           <Truck className="h-3.5 w-3.5 shrink-0" />
           Vehicle
@@ -374,7 +374,7 @@ const SummaryVehicleOperationsView = ({ arrival, isDesktop, onBack }: Props) => 
         </p>
       </div>
 
-      <div className="glass-card rounded-2xl border border-border/40 p-4 shadow-sm">
+      <div className="glass-card rounded-2xl border border-border/40 p-4 shadow-sm md:p-3 lg:p-4">
         <div className={cardTitleRowClass}>
           <Package className="h-3.5 w-3.5 shrink-0" />
           Bag summary
@@ -389,7 +389,7 @@ const SummaryVehicleOperationsView = ({ arrival, isDesktop, onBack }: Props) => 
       </div>
 
       {canShowRd ? (
-        <div className="glass-card rounded-2xl border border-border/40 p-4 shadow-sm">
+        <div className="glass-card rounded-2xl border border-border/40 p-4 shadow-sm md:p-3 lg:p-4">
           <div className={cardTitleRowClass}>
             <Wallet className="h-3.5 w-3.5 shrink-0" />
             <span>Rate difference (preset)</span>
@@ -403,7 +403,7 @@ const SummaryVehicleOperationsView = ({ arrival, isDesktop, onBack }: Props) => 
               Actual RD may be incomplete; try again after more billing is recorded.
             </p>
           ) : null}
-          <div className="mt-1 space-y-2.5">
+          <div className="mt-1 space-y-2.5 md:space-y-2 lg:space-y-2.5">
             <div className="flex w-full min-w-0 items-center justify-between gap-3 text-sm">
               <div className="flex min-w-0 items-center gap-1.5">
                 <span className="text-muted-foreground">Estimated RD</span>
@@ -463,7 +463,7 @@ const SummaryVehicleOperationsView = ({ arrival, isDesktop, onBack }: Props) => 
     <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} className="min-w-0">
       {!isDesktop ? hero : null}
       {isDesktop ? (
-        <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-start sm:gap-4">
+        <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-start sm:gap-4 md:mb-4 md:gap-2 lg:mb-6 lg:gap-4">
           <Button
             type="button"
             variant="default"

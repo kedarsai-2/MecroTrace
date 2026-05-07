@@ -113,7 +113,7 @@ export function VehicleOpsSellerWorkspace({
   }
 
   return (
-    <div className="mt-2 flex min-w-0 flex-col gap-3">
+    <div className="mt-2 flex min-w-0 flex-col gap-3 md:gap-2 lg:gap-3">
       <div className="relative w-full min-w-0">
         <input
           type="search"
@@ -131,7 +131,7 @@ export function VehicleOpsSellerWorkspace({
         <div
           className={cn(
             'grid min-h-0 min-w-0 gap-3',
-            'grid-cols-1 lg:grid-cols-[minmax(200px,280px)_minmax(0,1fr)] lg:items-start lg:gap-4',
+            'grid-cols-1 md:grid-cols-[minmax(160px,200px)_minmax(0,1fr)] md:items-start md:gap-2 lg:grid-cols-[minmax(200px,280px)_minmax(0,1fr)] lg:gap-4',
           )}
         >
           <div className="min-w-0 self-start">
