@@ -1124,8 +1124,8 @@ function sessionEntryToSaleEntry(e: AuctionEntryDTO): SaleEntry {
     extraRate: Number(e.extra_rate ?? 0),
     presetApplied: Number(e.preset_margin ?? 0),
     presetType: (e.preset_type as PresetType) ?? 'PROFIT',
-    // API: bid_rate = seller bid; preset_margin signed; buyer_rate = buyer-facing total when set.
-    sellerRate: Number(e.bid_rate) + Number(e.preset_margin ?? 0),
+    // Align with billing REQ-BIL-002: effective base = bid_rate − preset_margin (signed).
+    sellerRate: Number(e.bid_rate) - Number(e.preset_margin ?? 0),
     buyerRate: Number(e.buyer_rate ?? e.bid_rate),
     lastModifiedMs: e.last_modified_ms ?? null,
   };
@@ -3668,10 +3668,9 @@ const AuctionsPage = () => {
     return counts;
   }, [availableLots, selfSaleLots, showLotSelector]);
 
-  /** Buyer-facing total = seller bid + signed preset margin (stored on entries / API). */
+  /** Buyer-facing basis = seller bid − signed preset margin (same net as commodity “new rate” base). */
   const calcSellerRate = useCallback((bidRate: number, presetVal: number) => {
-    if (presetVal === 0) return bidRate;
-    return bidRate + presetVal;
+    return bidRate - presetVal;
   }, []);
 
   // REQ-AUC-009: Allow quantity increase with confirmation

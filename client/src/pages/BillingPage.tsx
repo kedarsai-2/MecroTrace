@@ -105,6 +105,14 @@ const billingLoginImage = '/login-bg.webp';
 /** Search & Migrate modal: horizontal inset matches legacy row padding. */
 const searchMigrateBidTableInset = 'px-2 sm:px-2.5';
 
+/**
+ * REQ-BIL-002: Effective bid base after signed preset — (B − P), not B + P.
+ * New rate uses (B − P) + brokerage + buyer other (+/- charges).
+ */
+function netBaseRateAfterPreset(baseRate: number, presetApplied: number): number {
+  return roundMoney2((Number(baseRate) || 0) - (Number(presetApplied) || 0));
+}
+
 /** Commodity line: computed fields (not inputs). Muted + dashed border + not-allowed cursor so they read as read-only. */
 const billingCommodityReadOnlyCellClass =
   'h-10 lg:h-6 px-2 lg:px-1 border border-dashed border-border/70 rounded-md bg-muted/50 text-muted-foreground inline-flex items-center justify-center w-full text-[11px] lg:text-[10px] cursor-not-allowed shadow-inner select-text';
@@ -460,7 +468,7 @@ interface BillLineItem {
   brokerage: number; // BRK
   otherCharges: number; // Buyer dynamic other charges only (not preset)
   sellerOtherCharges: number; // Other (dynamic, appliesTo=SELLER) - read-only for settlement deductions
-  newRate: number; // REQ-BIL-002: NR = B + P + BRK + Other
+  newRate: number; // REQ-BIL-002: NR = (B − P) + BRK + Other
   amount: number;
   /** Token advance for this bid/lot from auction (₹). Bill total = sum of lines. */
   tokenAdvance?: number;
@@ -692,7 +700,8 @@ function normalizeBillFromApi(b: any, fullConfigs?: FullCommodityConfigDto[], co
       const brk = Number(item.brokerage) || 0;
       const other = Number(item.otherCharges) || 0;
       const nr = Number(item.newRate) || 0;
-      const inferredPreset = roundMoney2(nr - base - brk - other);
+      // NR = (B − P) + brk + other ⇒ P = B + brk + other − NR when preset missing on payload.
+      const inferredPreset = roundMoney2(base + brk + other - nr);
       const rawPreset = item.presetApplied ?? item.preset_applied;
       const presetApplied =
         rawPreset != null && Number.isFinite(Number(rawPreset))
@@ -708,7 +717,7 @@ function normalizeBillFromApi(b: any, fullConfigs?: FullCommodityConfigDto[], co
       const weight = Number(item.weight) || 0;
       const qty = Number(item.quantity) || 0;
 
-      const baseNewRateWithoutOther = base + presetApplied + brk;
+      const baseNewRateWithoutOther = roundMoney2(netBaseRateAfterPreset(base, presetApplied) + brk);
       const baseAmount = (weight * baseNewRateWithoutOther) / divisorUsed;
 
       let sellerOtherCharges = 0;
@@ -2257,7 +2266,8 @@ const BillingPage = () => {
 
       const brokerage = 0; // initial; user can edit brokerage/otherCharges afterwards
       const presetApplied = entry.presetApplied ?? 0;
-      const baseNewRateWithoutOther = (entry.rate || 0) + presetApplied + brokerage;
+      const baseNewRateWithoutOther =
+        netBaseRateAfterPreset(entry.rate || 0, presetApplied) + brokerage;
 
       const weight = entry.weight || 0;
       const baseAmount = (weight * baseNewRateWithoutOther) / (divisor > 0 ? divisor : 50);
@@ -2304,7 +2314,8 @@ const BillingPage = () => {
 
       const brokerage = 0; // initial; user can edit brokerage/otherCharges afterwards
       const presetApplied = entry.presetApplied ?? 0;
-      const baseNewRateWithoutOther = (entry.rate || 0) + presetApplied + brokerage;
+      const baseNewRateWithoutOther =
+        netBaseRateAfterPreset(entry.rate || 0, presetApplied) + brokerage;
 
       const weight = entry.weight || 0;
       const baseAmount = (weight * baseNewRateWithoutOther) / (divisor > 0 ? divisor : 50);
@@ -2390,13 +2401,15 @@ const BillingPage = () => {
 
       const group = commodityMap.get(commName)!;
 
-      // REQ-BIL-002: NR = B + P + BRK + Other (preset and buyer dynamic other charges are separate)
+      // REQ-BIL-002: NR = (B − P) + BRK + Other (preset netted against base before brokerage/other)
       const brokerage = 0; // default, can be edited
       const presetApplied = roundMoney2(Number(entry.presetApplied ?? 0));
       const otherCharges = roundMoney2(computeBuyerOtherChargesRateAdd(entry, commName, group.divisor));
       const sellerOtherCharges = computeSellerOtherChargesRateAdd(entry, commName, group.divisor);
       const div = group.divisor > 0 ? group.divisor : 50;
-      const newRate = roundMoney2(entry.rate + brokerage + presetApplied + otherCharges);
+      const newRate = roundMoney2(
+        netBaseRateAfterPreset(entry.rate, presetApplied) + brokerage + otherCharges,
+      );
       const amount = roundMoney2((entry.weight * newRate) / div);
 
       group.items.push({
@@ -3136,7 +3149,8 @@ const BillingPage = () => {
     if (!brokerOk) item.brokerage = 0;
     (item as any)[field] = field === 'brokerage' && !brokerOk ? 0 : v;
     const preset = (item as { presetApplied?: number }).presetApplied ?? 0;
-    item.newRate = roundMoney2(item.baseRate + preset + item.brokerage + item.otherCharges);
+    const netBase = netBaseRateAfterPreset(item.baseRate, preset);
+    item.newRate = roundMoney2(netBase + item.brokerage + item.otherCharges);
     const divisorUsed = group.divisor > 0 ? group.divisor : 50;
     item.amount = roundMoney2((item.weight * item.newRate) / divisorUsed);
 
@@ -3148,7 +3162,7 @@ const BillingPage = () => {
     const dynCharges = fullCfg?.dynamicCharges ?? [];
     const weight = item.weight || 0;
     const qty = item.quantity || 0;
-    const baseNewRateWithoutOther = item.baseRate + preset + item.brokerage;
+    const baseNewRateWithoutOther = roundMoney2(netBase + item.brokerage);
     const baseAmount = (weight * baseNewRateWithoutOther) / divisorUsed;
     let sellerOtherCharges = 0;
     dynCharges.forEach((ch: any) => {
@@ -3228,10 +3242,11 @@ const BillingPage = () => {
       const dynCharges = fullCfg?.dynamicCharges ?? [];
       const items = group.items.map(item => {
         const preset = item.presetApplied ?? 0;
+        const netBase = netBaseRateAfterPreset(item.baseRate, preset);
         const brokerAllowed = billHasBrokerForBrokerage(root);
         const brk = brokerAllowed
           ? (root.brokerageType === 'PERCENT'
-            ? percentOfAmount(item.baseRate + preset, root.brokerageValue)
+            ? percentOfAmount(netBase, root.brokerageValue)
             : roundMoney2(root.brokerageValue))
           : 0;
         const globalOther = roundMoney2(root.globalOtherCharges);
@@ -3239,7 +3254,7 @@ const BillingPage = () => {
           ...item,
           brokerage: brk,
           otherCharges: globalOther,
-          newRate: roundMoney2(item.baseRate + preset + brk + globalOther),
+          newRate: roundMoney2(netBase + brk + globalOther),
           amount: 0,
         };
         newItem.amount = roundMoney2(
@@ -3250,7 +3265,7 @@ const BillingPage = () => {
         const divisorUsed = group.divisor > 0 ? group.divisor : 50;
         const weight = newItem.weight || 0;
         const qty = newItem.quantity || 0;
-        const baseNewRateWithoutOther = newItem.baseRate + preset + newItem.brokerage;
+        const baseNewRateWithoutOther = roundMoney2(netBase + newItem.brokerage);
         const baseAmount = (weight * baseNewRateWithoutOther) / divisorUsed;
         let sellerOtherCharges = 0;
         dynCharges.forEach((ch: any) => {
@@ -5444,7 +5459,7 @@ const BillingPage = () => {
                                         billingCommodityReadOnlyCellClass,
                                         'font-bold text-primary/85 dark:text-primary/75 border-primary/25 bg-primary/[0.07]',
                                       )}
-                                      title="Calculated from bid rate, preset, brokerage, and other charges (not editable)"
+                                      title="Calculated: (base rate − preset) + brokerage + other charges (not editable)"
                                       aria-label={`New rate ₹${formatBillingInr(item.newRate)}, calculated, read-only`}
                                     >
                                       ₹{formatBillingInr(item.newRate)}
