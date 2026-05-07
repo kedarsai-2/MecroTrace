@@ -391,6 +391,20 @@ function settlementPattiCompoundBaseKey(p: PattiDTO): string {
   return m ? m[1].trim() : '';
 }
 
+function parseCompoundBaseFromPattiId(pattiId?: string): string {
+  const raw = String(pattiId ?? '').trim();
+  const m = raw.match(/^(.*)-(\d+)$/);
+  return m ? m[1].trim() : '';
+}
+
+function parseCompoundSeqFromPattiId(pattiId?: string): number | undefined {
+  const raw = String(pattiId ?? '').trim();
+  const m = raw.match(/^(.*)-(\d+)$/);
+  if (!m) return undefined;
+  const n = Number(m[2]);
+  return Number.isFinite(n) && n > 0 ? n : undefined;
+}
+
 /**
  * Key for Saved / In-progress summaries: rows that share compound base merge even if `createdAt` differs
  * (avoids splitting one main patti into two saved cards).
@@ -3603,6 +3617,82 @@ const SettlementPage = () => {
     ]
   );
 
+  /** Same scope as Save Main Patti / Alt+S — single seller when no arrival multi-select. */
+  const getScopeSellersForMainPattiSave = useCallback((): SellerSettlement[] => {
+    if (!selectedSeller) return [];
+    return (
+      selectedArrivalSellerIds.length > 0
+        ? selectedArrivalSellerIds.map(id => sellers.find(s => String(s.sellerId) === String(id)))
+        : [selectedSeller]
+    ).filter((s): s is SellerSettlement => !!s);
+  }, [selectedArrivalSellerIds, selectedSeller, sellers]);
+
+  const ensureSellerInMainPattiScope = useCallback((scope: SellerSettlement[], seller: SellerSettlement): SellerSettlement[] => {
+    if (scope.some(s => s.sellerId === seller.sellerId)) return scope;
+    return [...scope, seller];
+  }, []);
+
+  /**
+   * One shared `pattiBaseNumber` + per-seller sequence for creates — must match Save Main Patti batch and per-card Save Patti.
+   */
+  const resolveMainPattiCreateNumbering = useCallback(
+    async (
+      scopeSellers: SellerSettlement[]
+    ): Promise<
+      | { ok: true; sharedPattiBaseNumber: string; sellerSequenceBySellerId: Record<string, number> }
+      | { ok: false }
+    > => {
+      const sellersNeedingCreate = scopeSellers.filter(s => existingPattiIdBySellerId[s.sellerId] == null);
+      const sellerSequenceBySellerId: Record<string, number> = {};
+      if (sellersNeedingCreate.length === 0) {
+        return { ok: true, sharedPattiBaseNumber: '', sellerSequenceBySellerId };
+      }
+      let sharedPattiBaseNumber: string | null = draftMainPattiNo.trim() || null;
+      for (const s of sellersNeedingCreate) {
+        const seq = parseCompoundSeqFromPattiId(draftPattiNoBySellerId[s.sellerId]);
+        if (seq != null) sellerSequenceBySellerId[s.sellerId] = seq;
+      }
+      const scopedSids = new Set(scopeSellers.map(s => String(s.sellerId)));
+      const scopedSaved = savedPattis.filter(p => scopedSids.has(String(p.sellerId ?? '').trim()));
+      const existingBase =
+        scopedSaved.map(p => String(p.pattiBaseNumber ?? '').trim()).find(v => v.length > 0) ||
+        scopedSaved.map(p => parseCompoundBaseFromPattiId(p.pattiId)).find(v => v.length > 0) ||
+        '';
+      if (!sharedPattiBaseNumber && existingBase) {
+        sharedPattiBaseNumber = existingBase;
+      } else if (!sharedPattiBaseNumber) {
+        try {
+          sharedPattiBaseNumber = await settlementApi.reserveNextPattiBaseNumber(sellersNeedingCreate[0]?.sellerId);
+        } catch {
+          return { ok: false };
+        }
+      }
+      if (!sharedPattiBaseNumber) {
+        return { ok: false };
+      }
+      let seqCounter = Object.values(sellerSequenceBySellerId).reduce((mx, n) => Math.max(mx, n), 0);
+      for (const p of scopedSaved) {
+        const pBase =
+          String(p.pattiBaseNumber ?? '').trim() ||
+          parseCompoundBaseFromPattiId(p.pattiId);
+        if (!pBase || pBase !== sharedPattiBaseNumber) continue;
+        const seqRaw = p.sellerSequenceNumber;
+        const seqNum =
+          typeof seqRaw === 'number' && Number.isFinite(seqRaw) && seqRaw > 0
+            ? seqRaw
+            : parseCompoundSeqFromPattiId(p.pattiId) ?? null;
+        if (seqNum != null) seqCounter = Math.max(seqCounter, seqNum);
+      }
+      for (const seller of sellersNeedingCreate) {
+        if (sellerSequenceBySellerId[seller.sellerId] != null) continue;
+        seqCounter += 1;
+        sellerSequenceBySellerId[seller.sellerId] = seqCounter;
+      }
+      return { ok: true, sharedPattiBaseNumber, sellerSequenceBySellerId };
+    },
+    [draftMainPattiNo, draftPattiNoBySellerId, savedPattis, existingPattiIdBySellerId]
+  );
+
   const getSellerValidationError = useCallback(
     (seller: SellerSettlement): string | null => {
       const form = sellerFormById[seller.sellerId] ?? defaultSellerForm(seller);
@@ -3705,10 +3795,44 @@ const SettlementPage = () => {
       try {
         const silent = options?.silent === true;
         const showPrintAfterSave = options?.showPrintAfterSave === true;
-        const payload = computePattiSavePayloadForSeller(seller, {
-          pattiBaseNumber: options?.pattiBaseNumber,
-          sellerSequenceNumber: options?.sellerSequenceNumber,
-        });
+        const sid = seller.sellerId;
+        const existingDbId = existingPattiIdBySellerId[sid];
+        const inProgressDbId = (() => {
+          if (options?.inProgress !== true) return undefined;
+          for (const d of inProgressPattiDrafts) {
+            const n = d.dbPattiIdsBySellerId?.[String(sid)];
+            if (n != null && Number(n) > 0) return Number(n);
+          }
+          return undefined;
+        })();
+        const dbId = existingDbId ?? inProgressDbId;
+
+        let numbering: { pattiBaseNumber?: string; sellerSequenceNumber?: number } = {};
+        if (dbId == null) {
+          if (options?.pattiBaseNumber != null) {
+            numbering = {
+              pattiBaseNumber: options.pattiBaseNumber,
+              sellerSequenceNumber: options.sellerSequenceNumber,
+            };
+          } else {
+            const rawScope = getScopeSellersForMainPattiSave();
+            const scopeSellers = rawScope.length > 0 ? ensureSellerInMainPattiScope(rawScope, seller) : [seller];
+            const resolved = await resolveMainPattiCreateNumbering(scopeSellers);
+            if (!resolved.ok) {
+              if (!silent) toast.error('Failed to reserve Sales Patti number.');
+              return false;
+            }
+            const pb = resolved.sharedPattiBaseNumber;
+            const seq = resolved.sellerSequenceBySellerId[sid];
+            if (!pb || seq == null) {
+              if (!silent) toast.error('Failed to resolve Sales Patti numbering.');
+              return false;
+            }
+            numbering = { pattiBaseNumber: pb, sellerSequenceNumber: seq };
+          }
+        }
+
+        const payload = computePattiSavePayloadForSeller(seller, numbering);
         if (!payload) return false;
         const validationError = getSellerValidationError(seller);
         if (validationError) {
@@ -3722,8 +3846,6 @@ const SettlementPage = () => {
           return false;
         }
         payload.inProgress = options?.inProgress === true;
-        const sid = seller.sellerId;
-        const existingDbId = existingPattiIdBySellerId[sid];
         const sessionOrig = sessionOriginalSnapshotJsonBySellerIdRef.current[sid];
         if (existingDbId == null && sessionOrig) {
           payload.originalSnapshotJson = sessionOrig;
@@ -3735,15 +3857,6 @@ const SettlementPage = () => {
         ) {
           payload.originalSnapshotJson = sessionOrig;
         }
-        const inProgressDbId = (() => {
-          if (!payload.inProgress) return undefined;
-          for (const d of inProgressPattiDrafts) {
-            const n = d.dbPattiIdsBySellerId?.[String(sid)];
-            if (n != null && Number(n) > 0) return Number(n);
-          }
-          return undefined;
-        })();
-        const dbId = existingDbId ?? inProgressDbId;
         const actionWord = dbId != null ? 'updated' : 'saved';
         if (!can('Settlement', dbId != null ? 'Edit' : 'Create')) {
           if (!silent) toast.error('You do not have permission to save settlements.');
@@ -3793,6 +3906,13 @@ const SettlementPage = () => {
             if (created.id != null) {
               setExistingPattiIdBySellerId(prev => ({ ...prev, [sid]: created.id! }));
             }
+            const baseFromDto = String(created.pattiBaseNumber ?? '').trim();
+            const mainBase = baseFromDto || parseCompoundBaseFromPattiId(created.pattiId);
+            if (mainBase) setDraftMainPattiNo(mainBase);
+            setDraftPattiNoBySellerId(prev => ({
+              ...prev,
+              [sid]: String(created.pattiId ?? '').trim() || prev[sid],
+            }));
             const at = created.createdAt ?? new Date().toISOString();
             applySavedToPrimaryUi(payload, created.pattiId, at);
             setPattiDetailDto(created);
@@ -3842,17 +3962,16 @@ const SettlementPage = () => {
       getSellerValidationError,
       setArrivalSummaryTab,
       setSettlementFormMode,
+      getScopeSellersForMainPattiSave,
+      ensureSellerInMainPattiScope,
+      resolveMainPattiCreateNumbering,
     ]
   );
 
   const savePatti = async (): Promise<boolean> => {
     if (!selectedSeller || !pattiData) return false;
     if (pattiSaveBusyRef.current) return false;
-    const scopeSellers = (
-      selectedArrivalSellerIds.length > 0
-        ? selectedArrivalSellerIds.map(id => sellers.find(s => String(s.sellerId) === String(id)))
-        : [selectedSeller]
-    ).filter((s): s is SellerSettlement => !!s);
+    const scopeSellers = getScopeSellersForMainPattiSave();
     const failingPreview = scopeSellers
       .map(s => ({ s, err: getSellerValidationError(s) }))
       .filter((x): x is { s: SellerSettlement; err: string } => x.err != null);
@@ -3875,67 +3994,17 @@ const SettlementPage = () => {
     setPattiSaveBusy(true);
     try {
       const failures: string[] = [];
+      let sharedPattiBaseNumber = '';
+      let sellerSequenceBySellerId: Record<string, number> = {};
       const sellersNeedingCreate = scopeSellers.filter(s => existingPattiIdBySellerId[s.sellerId] == null);
-      let sharedPattiBaseNumber: string | null = draftMainPattiNo || null;
-      const sellerSequenceBySellerId: Record<string, number> = {};
-      const parseSeqFromPattiId = (pid?: string): number | undefined => {
-        const m = String(pid ?? '').trim().match(/^(.*)-(\d+)$/);
-        if (!m) return undefined;
-        const n = Number(m[2]);
-        return Number.isFinite(n) && n > 0 ? n : undefined;
-      };
-      for (const s of sellersNeedingCreate) {
-        const seq = parseSeqFromPattiId(draftPattiNoBySellerId[s.sellerId]);
-        if (seq != null) sellerSequenceBySellerId[s.sellerId] = seq;
-      }
       if (sellersNeedingCreate.length > 0) {
-        const scopedSids = new Set(scopeSellers.map(s => String(s.sellerId)));
-        const scopedSaved = savedPattis.filter(p => scopedSids.has(String(p.sellerId ?? '').trim()));
-        const parseBaseFromPattiId = (pid?: string): string => {
-          const raw = String(pid ?? '').trim();
-          const m = raw.match(/^(.*)-(\d+)$/);
-          return m ? m[1] : '';
-        };
-        const parseSequenceFromPattiId = (pid?: string): number | null => {
-          const raw = String(pid ?? '').trim();
-          const m = raw.match(/^(.*)-(\d+)$/);
-          if (!m) return null;
-          const n = Number(m[2]);
-          return Number.isFinite(n) ? n : null;
-        };
-        const existingBase =
-          scopedSaved.map(p => String(p.pattiBaseNumber ?? '').trim()).find(v => v.length > 0) ||
-          scopedSaved.map(p => parseBaseFromPattiId(p.pattiId)).find(v => v.length > 0) ||
-          '';
-        if (!sharedPattiBaseNumber && existingBase) {
-          sharedPattiBaseNumber = existingBase;
-        } else if (!sharedPattiBaseNumber) {
-          try {
-            sharedPattiBaseNumber = await settlementApi.reserveNextPattiBaseNumber(sellersNeedingCreate[0]?.sellerId);
-          } catch {
-            toast.error('Failed to reserve Sales Patti number.');
-            return false;
-          }
+        const resolved = await resolveMainPattiCreateNumbering(scopeSellers);
+        if (!resolved.ok) {
+          toast.error('Failed to reserve Sales Patti number.');
+          return false;
         }
-
-        let seqCounter = Object.values(sellerSequenceBySellerId).reduce((mx, n) => Math.max(mx, n), 0);
-        for (const p of scopedSaved) {
-          const pBase =
-            String(p.pattiBaseNumber ?? '').trim() ||
-            parseBaseFromPattiId(p.pattiId);
-          if (!pBase || pBase !== sharedPattiBaseNumber) continue;
-          const seqRaw = p.sellerSequenceNumber;
-          const seqNum =
-            typeof seqRaw === 'number' && Number.isFinite(seqRaw) && seqRaw > 0
-              ? seqRaw
-              : parseSequenceFromPattiId(p.pattiId);
-          if (seqNum != null) seqCounter = Math.max(seqCounter, seqNum);
-        }
-        for (const seller of sellersNeedingCreate) {
-          if (sellerSequenceBySellerId[seller.sellerId] != null) continue;
-          seqCounter += 1;
-          sellerSequenceBySellerId[seller.sellerId] = seqCounter;
-        }
+        sharedPattiBaseNumber = resolved.sharedPattiBaseNumber;
+        sellerSequenceBySellerId = resolved.sellerSequenceBySellerId;
       }
       for (const seller of scopeSellers) {
         const needsCreate = existingPattiIdBySellerId[seller.sellerId] == null;
