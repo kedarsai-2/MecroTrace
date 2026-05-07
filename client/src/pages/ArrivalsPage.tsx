@@ -3592,7 +3592,7 @@ const ArrivalsPage = () => {
                         <div className="w-6 h-6 rounded-lg bg-gradient-to-br from-emerald-500 to-teal-500 flex items-center justify-center">
                           <Users className="w-3 h-3 text-white" />
                         </div>
-                        <h3 className="text-sm font-bold text-foreground">Sellers & Lots</h3>
+                        <h3 className="text-sm font-bold text-foreground">Sellers & Lots{vehicleTotalBags > 0 ? ` (${vehicleTotalBags})` : ''}</h3>
                         <div className="flex-1 h-px bg-border/30" />
                       </div>
                     )}
@@ -4631,7 +4631,7 @@ const ArrivalsPage = () => {
                         <div className="w-6 h-6 rounded-lg bg-gradient-to-br from-emerald-500 to-teal-500 flex items-center justify-center">
                           <Users className="w-3 h-3 text-white" />
                         </div>
-                        <h3 className="text-sm font-bold text-foreground">Sellers & Lots</h3>
+                        <h3 className="text-sm font-bold text-foreground">Sellers & Lots{vehicleTotalBags > 0 ? ` (${vehicleTotalBags})` : ''}</h3>
                         <div className="flex-1 h-px bg-border/30" />
                       </div>
                     )}
