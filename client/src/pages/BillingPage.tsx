@@ -511,6 +511,11 @@ function isBackendBillId(billId: string): boolean {
   return /^\d+$/.test(billId);
 }
 
+/** Saved bill list / issued bill number (excludes Bill In Progress drafts). */
+function isNumberedSavedBill(bill: BillData | null | undefined): boolean {
+  return !!bill && isBackendBillId(String(bill.billId)) && !!String(bill.billNumber ?? '').trim();
+}
+
 /** Sum of per-line token advances (auction bid tokens). */
 function sumLineTokenAdvances(b: { commodityGroups: CommodityGroup[] }): number {
   return roundMoney2(
@@ -1246,7 +1251,12 @@ const BillingPage = () => {
     const isUpdate = !!(bill.billId && isBackendBillId(bill.billId));
     return isUpdate ? canEdit : canCreate;
   }, [bill, can]);
-  const billSaveActionEnabled = billValidation.isValid && canPersistSalesBill;
+  /** Numbered bills open view-only until Edit / Alt+E (same idea as settlement Alt+M). */
+  const billFormReadOnly = useMemo(
+    () => isNumberedSavedBill(bill) && editLocked,
+    [bill, editLocked],
+  );
+  const billSaveActionEnabled = billValidation.isValid && canPersistSalesBill && !billFormReadOnly;
 
   const commodityTaxConfigByName = useMemo(() => {
     const map = new Map<string, { hasTax: boolean; defaultMode: 'GST' | 'IGST' | 'NONE' }>();
@@ -1545,22 +1555,13 @@ const BillingPage = () => {
         e.preventDefault();
       }
       if (k === 'x') {
-        void (async () => {
-          if (!(await billingTabConfirmIfDirtyRef.current())) return;
-          setBillingMainTab('create');
-        })();
+        setBillingMainTab('create');
       }
       if (k === 'y') {
-        void (async () => {
-          if (!(await billingTabConfirmIfDirtyRef.current())) return;
-          setBillingMainTab('progress');
-        })();
+        setBillingMainTab('progress');
       }
       if (k === 'z') {
-        void (async () => {
-          if (!(await billingTabConfirmIfDirtyRef.current())) return;
-          setBillingMainTab('saved');
-        })();
+        setBillingMainTab('saved');
       }
       if (k === 'l') {
         e.preventDefault();
@@ -1572,10 +1573,17 @@ const BillingPage = () => {
       if (!bill || showPrint) return;
       const isUpdate = bill.billId && isBackendBillId(bill.billId);
       if (k === 'e' && isUpdate) {
-        setEditLocked(false);
+        if (!can('Billing', 'Edit')) {
+          toast.error('You do not have permission to edit bills.');
+          return;
+        }
+        if (isNumberedSavedBill(bill) && editLocked) {
+          setEditLocked(false);
+        }
       }
       if (k === 's') {
         if (!bill) return;
+        if (isNumberedSavedBill(bill) && editLocked) return;
         const { isValid } = validateBill(bill, commodityAvgWeightBounds);
         const upd = bill.billId && isBackendBillId(bill.billId);
         const okPerm = (upd && can('Billing', 'Edit')) || (!upd && can('Billing', 'Create'));
@@ -1599,7 +1607,7 @@ const BillingPage = () => {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [isDesktop, bill, showPrint, commodityAvgWeightBounds, can]);
+  }, [isDesktop, bill, showPrint, commodityAvgWeightBounds, can, editLocked]);
 
   const openContactFromBilling = async () => {
     if (!canCreateContact) {
@@ -2220,8 +2228,10 @@ const BillingPage = () => {
       return group;
     });
     if (!mutated) return;
-    setBill(recalcGrandTotal({ ...bill, commodityGroups: nextGroups }));
-  }, [bill, commodityTaxConfigByName, recalcGrandTotal]);
+    const next = recalcGrandTotal({ ...bill, commodityGroups: nextGroups });
+    billDirtyBaselineRef.current = serializeBillForDirty(next);
+    setBill(next);
+  }, [bill, commodityTaxConfigByName, recalcGrandTotal, serializeBillForDirty]);
 
   // Generate Bill (commodity config from API)
   const generateBill = useCallback((buyer: BuyerPurchase) => {
@@ -3449,6 +3459,7 @@ const BillingPage = () => {
 
   const handleSaveDraft = async () => {
     if (!bill) return;
+    if (isNumberedSavedBill(bill) && editLocked) return;
     const result = await persistBill();
     if (!result) return;
     const persistedHasNoBillNumber = !String(result.billNumber ?? '').trim();
@@ -3483,7 +3494,7 @@ const BillingPage = () => {
     if (!bill || showPrint) return false;
     if (!billDirtyBaselineRef.current) return false;
     if (serializeBillForDirty(bill) === billDirtyBaselineRef.current) return false;
-    if (isBackendBillId(bill.billId) && editLocked) return false;
+    if (isNumberedSavedBill(bill) && editLocked) return false;
     return true;
   }, [bill, showPrint, serializeBillForDirty, editLocked]);
   const handleBillingPartialSave = async (): Promise<boolean> => {
@@ -3513,10 +3524,7 @@ const BillingPage = () => {
   billingTabConfirmIfDirtyRef.current = confirmIfDirty;
 
   const requestBillingMainTab = useCallback((next: BillingMainTab) => {
-    void (async () => {
-      if (!(await billingTabConfirmIfDirtyRef.current())) return;
-      setBillingMainTab(next);
-    })();
+    setBillingMainTab(next);
   }, []);
 
   /** Opens print preview only — does not persist. Use Save/Update first. */
@@ -3781,10 +3789,16 @@ const BillingPage = () => {
         entries: [],
         tokenAdvanceTotal: 0,
       });
-      setBill(recalcGrandTotal(normalizeBillFromApi(b, fullConfigs, commodities) as BillData));
+      const normalized = recalcGrandTotal(normalizeBillFromApi(b, fullConfigs, commodities) as BillData);
+      // Sync dirty baseline before setState so billHasUnsavedEditsSinceSave (useMemo) does not read
+      // the previous bill's baseline until a follow-up render (Print + Alt+P stayed disabled).
+      const dirtyId = String(normalized.billId ?? '');
+      billDirtyIdentityRef.current = dirtyId;
+      billDirtyBaselineRef.current = serializeBillForDirty(normalized);
+      setBill(normalized);
       setHasSavedOnce(isBackendBillId(String(b.billId)));
       setSelectedPrintVersion('latest');
-      setEditLocked(false);
+      setEditLocked(isNumberedSavedBill(normalized));
       setBillingMainTab('create');
     })();
   };
@@ -4500,7 +4514,7 @@ const BillingPage = () => {
       <div className="px-4 mt-4 space-y-2">
         {billingMainTab === 'create' && (
           <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="glass-card rounded-2xl p-4 sm:p-5 space-y-4 overflow-visible relative z-30">
-            <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto_auto_auto] gap-2">
+            <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto_auto_auto_auto] gap-2">
               <div ref={buyerSelectRef} className="relative">
                 <Input
                   value={buyerBidMarkInput}
@@ -4570,6 +4584,20 @@ const BillingPage = () => {
                 className={cn(arrSolidLg, 'sm:self-end')}
               >
                 Create New Bill
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setAddBidDialogOpen(true)}
+                disabled={!bill || !selectedBuyer}
+                title={!bill || !selectedBuyer ? 'Open a buyer bill first' : undefined}
+                className={cn(
+                  arrSolidLg,
+                  'sm:self-end',
+                  addBidDialogOpen && 'ring-2 ring-[#6075FF] ring-offset-2 ring-offset-background',
+                )}
+              >
+                Add New Bid
               </Button>
             </div>
             <p className="text-xs text-muted-foreground leading-relaxed">
@@ -4664,6 +4692,10 @@ const BillingPage = () => {
 
         {billingMainTab === 'create' && bill && selectedBuyer && (
           <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="space-y-3">
+            <fieldset
+              disabled={billFormReadOnly}
+              className="min-w-0 space-y-3 border-0 p-0 m-0"
+            >
             <div className={cn("glass-card rounded-2xl p-3 sm:p-4 space-y-3 overflow-visible", searchBidDialogOpen ? "z-[20]" : "z-[20]")}>
               <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                 <div className="flex items-start gap-2 min-w-0 flex-1">
@@ -4737,14 +4769,6 @@ const BillingPage = () => {
                         )}
                       </div>
                     </div>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      className={cn(arrSolidMd, 'w-full sm:w-auto shrink-0', addBidDialogOpen && 'ring-2 ring-[#6075FF] ring-offset-2 ring-offset-background')}
-                      onClick={() => setAddBidDialogOpen(true)}
-                    >
-                      Add New Bid
-                    </Button>
                   </div>
                 </div>
               </div>
@@ -6280,6 +6304,7 @@ const BillingPage = () => {
                 </div>
               </div>
             </motion.div>
+            </fieldset>
 
             <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }}
               className="glass-card rounded-2xl p-4 border-2 border-emerald-500/30">
@@ -6331,8 +6356,28 @@ const BillingPage = () => {
                       type="button"
                       variant="outline"
                       className={cn(arrSolidMd, 'gap-1.5')}
-                      onClick={() => setEditLocked(false)}
-                      disabled={!isBackendBillId(bill.billId)}
+                      onClick={() => {
+                        if (!can('Billing', 'Edit')) {
+                          toast.error('You do not have permission to edit bills.');
+                          return;
+                        }
+                        setEditLocked(false);
+                      }}
+                      disabled={
+                        !isBackendBillId(bill.billId)
+                        || !isNumberedSavedBill(bill)
+                        || !billFormReadOnly
+                        || !can('Billing', 'Edit')
+                      }
+                      title={
+                        !can('Billing', 'Edit')
+                          ? 'You do not have permission to edit bills.'
+                          : !isNumberedSavedBill(bill)
+                            ? 'View-only mode applies to saved bills that have a bill number.'
+                            : !billFormReadOnly
+                              ? 'Bill is already editable.'
+                              : 'Enable editing (Alt+E)'
+                      }
                     >
                       <Edit3 className="w-4 h-4" /> Edit{tabHint('Alt E')}
                     </Button>
@@ -6343,11 +6388,13 @@ const BillingPage = () => {
                       onClick={() => void handleSaveDraft()}
                       disabled={billPersisting || !billSaveActionEnabled}
                       title={
-                        !canPersistSalesBill
-                          ? 'You do not have permission to save this bill.'
-                          : !billValidation.isValid
-                            ? 'Fix the highlighted validation errors before saving or updating.'
-                            : undefined
+                        billFormReadOnly
+                          ? 'Press Edit (Alt+E) to enable changes before saving.'
+                          : !canPersistSalesBill
+                            ? 'You do not have permission to save this bill.'
+                            : !billValidation.isValid
+                              ? 'Fix the highlighted validation errors before saving or updating.'
+                              : undefined
                       }
                     >
                       {billPersisting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
