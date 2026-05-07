@@ -57,7 +57,7 @@ import {
   generateSalesBillPrintHTMLForCopies,
   type BillPrintData,
 } from '@/utils/printDocumentTemplates';
-import { formatAuctionLotIdentifier } from '@/utils/auctionLotIdentifier';
+import { formatAuctionLotIdentifier, lotBagCountForIdentifier } from '@/utils/auctionLotIdentifier';
 import {
   billGroupSubtotalWithTaxAndCharges,
   commodityPreRoundTotalRupees,
@@ -598,20 +598,20 @@ function roundBillMoneyValues(b: BillData): BillData {
   };
 }
 
-/** Lot identifier for billing rows (same pattern as Sales Pad / Logistics). */
+/** Lot identifier for billing rows (same pattern as Sales Pad / Logistics). Final segment = lot bag count only. */
 function formatLotIdentifierForBillEntry(entry: BillEntry | BillLineItem): string {
   const e = entry as any;
   const lineQty = Number(e.quantity ?? 0) || 0;
-  const rawLt = e.lotTotalQty;
-  const lotQty =
-    rawLt != null && Number.isFinite(Number(rawLt)) && Number(rawLt) > 0 ? Number(rawLt) : lineQty;
-  const lotName = String(e.lotName || lotQty || '');
+  const lotBagCount = lotBagCountForIdentifier(e.lotTotalQty);
+  const lotName =
+    String(e.lotName || '').trim() || (lotBagCount > 0 ? String(lotBagCount) : '');
+  const qtyFallback = lotBagCount > 0 ? lotBagCount : lineQty;
   const rawVt = e.vehicleTotalQty;
   const vTotal =
-    rawVt != null && Number.isFinite(Number(rawVt)) && Number(rawVt) > 0 ? Number(rawVt) : lotQty;
+    rawVt != null && Number.isFinite(Number(rawVt)) && Number(rawVt) > 0 ? Number(rawVt) : qtyFallback;
   const rawSv = e.sellerVehicleQty;
   const sTotal =
-    rawSv != null && Number.isFinite(Number(rawSv)) && Number(rawSv) > 0 ? Number(rawSv) : lotQty;
+    rawSv != null && Number.isFinite(Number(rawSv)) && Number(rawSv) > 0 ? Number(rawSv) : qtyFallback;
   const vm = String(e.vehicleMark ?? '').trim();
   const sm = String(e.sellerMark ?? '').trim();
   return formatAuctionLotIdentifier({
@@ -620,7 +620,7 @@ function formatLotIdentifierForBillEntry(entry: BillEntry | BillLineItem): strin
     sellerMark: sm,
     sellerTotalQty: sTotal,
     lotName,
-    lotQty,
+    lotQty: lotBagCount,
   });
 }
 
@@ -738,7 +738,13 @@ function normalizeBillFromApi(b: any, fullConfigs?: FullCommodityConfigDto[], co
       });
 
       const tok = Number(item.tokenAdvance) || 0;
-      return { ...item, presetApplied, sellerOtherCharges, tokenAdvance: tok };
+      return {
+        ...item,
+        lotTotalQty: lotBagCountForIdentifier(item.lotTotalQty ?? item.lot_total_qty) || undefined,
+        presetApplied,
+        sellerOtherCharges,
+        tokenAdvance: tok,
+      };
     }),
   };
   });
@@ -1427,17 +1433,18 @@ const BillingPage = () => {
   }, [canView, addBidDialogOpen, addBidLotSearch]);
 
   const getAddBidLotIdentifier = useCallback((lot: LotSummaryDTO): string => {
-    const lotQty = Number(lot.bag_count) || 0;
-    const lotName = lot.lot_name || String(lotQty);
-    const vTotal = Number(lot.vehicle_total_qty ?? lotQty) || lotQty;
-    const sTotal = Number(lot.seller_total_qty ?? lotQty) || lotQty;
+    const rawBags = Number(lot.bag_count) || 0;
+    const lotBagCount = lotBagCountForIdentifier(lot.bag_count);
+    const lotName = lot.lot_name || String(rawBags || '');
+    const vTotal = Number(lot.vehicle_total_qty ?? rawBags) || rawBags;
+    const sTotal = Number(lot.seller_total_qty ?? rawBags) || rawBags;
     return formatAuctionLotIdentifier({
       vehicleMark: lot.vehicle_mark,
       vehicleTotalQty: vTotal,
       sellerMark: lot.seller_mark,
       sellerTotalQty: sTotal,
       lotName,
-      lotQty,
+      lotQty: lotBagCount,
     });
   }, []);
 
@@ -1959,7 +1966,7 @@ const BillingPage = () => {
   // Load buyer data from completed auctions (arrivals from API; weighing from API)
   useEffect(() => {
     const buyerMap = new Map<string, BuyerPurchase>();
-    const lotTotalsByLotId = new Map<string, number>();
+    const lotBagCountByLotId = new Map<string, number>();
 
     // Compute vehicle & seller totals (same logic as Auctions/Logistics)
     const vehicleTotals = new Map<string, number>();
@@ -1968,12 +1975,12 @@ const BillingPage = () => {
       const vKey = auction.vehicleNumber || '';
       const sKey = `${vKey}||${auction.sellerName || ''}`;
       const lotKey = String(auction.lotId ?? '');
-      const lotTotal = (auction.entries || []).reduce((s: number, e: any) => {
-        if (e.isSelfSale) return s;
-        return s + (Number(e.quantity) || 0);
-      }, 0);
-      if (!lotTotalsByLotId.has(lotKey)) {
-        lotTotalsByLotId.set(lotKey, lotTotal);
+      if (!lotBagCountByLotId.has(lotKey)) {
+        const rawBag = auction.lotBagCount ?? auction.lot_bag_count ?? auction.bag_count;
+        const bn = Number(rawBag);
+        if (Number.isFinite(bn) && bn > 0) {
+          lotBagCountByLotId.set(lotKey, Math.floor(bn));
+        }
       }
       (auction.entries || []).forEach((entry: any) => {
         if (entry.isSelfSale) return;
@@ -2040,7 +2047,7 @@ const BillingPage = () => {
           lotName,
           auctionEntryId: entry.auctionEntryId ?? null,
           selfSaleUnitId: auction.selfSaleUnitId != null ? Number(auction.selfSaleUnitId) : null,
-          lotTotalQty: lotTotalsByLotId.get(String(auction.lotId ?? '')) ?? entry.quantity,
+          lotTotalQty: lotBagCountByLotId.get(String(auction.lotId ?? '')),
           sellerName,
           commodityName,
           rate: entry.rate,
@@ -2398,7 +2405,7 @@ const BillingPage = () => {
         lotId: String(entry.lotId ?? ''),
         auctionEntryId: entry.auctionEntryId ?? null,
         selfSaleUnitId: entry.selfSaleUnitId ?? null,
-        lotTotalQty: (entry as any).lotTotalQty ?? entry.quantity,
+        lotTotalQty: lotBagCountForIdentifier((entry as any).lotTotalQty) || undefined,
         sellerName: entry.sellerName,
         quantity: roundMoney2(entry.quantity),
         weight: roundMoney2(entry.weight),
@@ -2756,7 +2763,7 @@ const BillingPage = () => {
         auctionEntryId: matchedAuction.auction_entry_id ?? null,
         selfSaleUnitId: null,
         lotName: addBidSelectedLot.lot_name || String(addBidSelectedLot.bag_count || ''),
-        lotTotalQty: session.lot?.bag_count ?? addBidSelectedLot.bag_count ?? matchedAuction.quantity,
+        lotTotalQty: session.lot?.bag_count ?? addBidSelectedLot.bag_count,
         sellerName: addBidSelectedLot.seller_name || 'Unknown',
         commodityName: addBidSelectedLot.commodity_name || 'Unknown',
         rate: Number(matchedAuction.bid_rate) || 0,

@@ -56,7 +56,7 @@ import type { Contact } from '@/types/models';
 import { toast } from 'sonner';
 import ForbiddenPage from '@/components/ForbiddenPage';
 import { usePermissions } from '@/lib/permissions';
-import { formatAuctionLotIdentifier } from '@/utils/auctionLotIdentifier';
+import { formatAuctionLotIdentifier, lotBagCountForIdentifier } from '@/utils/auctionLotIdentifier';
 
 /** API may send snake_case or camelCase; normalize for lot identifier. */
 function pickVehicleMarkFromDto(dto: { vehicle_mark?: string; vehicleMark?: string }): string | undefined {
@@ -978,7 +978,7 @@ function formatLotDisplayName(lot: {
   const vTotal = lot.vehicle_total_qty ?? lot.bag_count;
   const sTotal = lot.seller_total_qty ?? lot.bag_count;
   const lotName = lot.lot_name ?? String(lot.bag_count);
-  const lotQty = lot.bag_count;
+  const lotQty = lotBagCountForIdentifier(lot.bag_count);
   return formatAuctionLotIdentifier({
     vehicleMark: pickVehicleMarkFromDto(lot),
     vehicleTotalQty: vTotal,

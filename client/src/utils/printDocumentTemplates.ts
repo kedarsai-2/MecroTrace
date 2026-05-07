@@ -2,7 +2,7 @@
 // Same format as client_origin; used with directPrint() + printLogApi.
 
 import { formatBillingInr, gstComponentRupees, percentOfAmount, roundMoney2 } from '@/utils/billingMoney';
-import { formatAuctionLotIdentifier } from '@/utils/auctionLotIdentifier';
+import { formatAuctionLotIdentifier, lotBagCountForIdentifier } from '@/utils/auctionLotIdentifier';
 
 const PRINT_STYLES = `
   body { font-family: system-ui, sans-serif; margin: 0; padding: 12px; font-size: 12px; color: #111; }
@@ -209,29 +209,29 @@ function commodityNetTotal(group: BillPrintData['commodityGroups'][number]): num
 }
 
 /**
- * Lot identifier — mirrors BillingPage `formatLotIdentifierForBillEntry`.
+ * Lot identifier — final segment is lot bag count only ({@link lotBagCountForIdentifier}).
  */
 function formatLotIdentifierForPrint(
   item: BillPrintData['commodityGroups'][number]['items'][number],
 ): string {
   const lineQty = Number(item.quantity ?? 0) || 0;
-  const rawLt = item.lotTotalQty;
-  const lotQty =
-    rawLt != null && Number.isFinite(Number(rawLt)) && Number(rawLt) > 0 ? Number(rawLt) : lineQty;
-  const lotName = String(item.lotName || String(lotQty || ''));
+  const lotBagCount = lotBagCountForIdentifier(item.lotTotalQty);
+  const lotName =
+    String(item.lotName || '').trim() || (lotBagCount > 0 ? String(lotBagCount) : '');
+  const qtyFallback = lotBagCount > 0 ? lotBagCount : lineQty;
   const rawVt = item.vehicleTotalQty;
   const vTotal =
-    rawVt != null && Number.isFinite(Number(rawVt)) && Number(rawVt) > 0 ? Number(rawVt) : lotQty;
+    rawVt != null && Number.isFinite(Number(rawVt)) && Number(rawVt) > 0 ? Number(rawVt) : qtyFallback;
   const rawSv = item.sellerVehicleQty;
   const sTotal =
-    rawSv != null && Number.isFinite(Number(rawSv)) && Number(rawSv) > 0 ? Number(rawSv) : lotQty;
+    rawSv != null && Number.isFinite(Number(rawSv)) && Number(rawSv) > 0 ? Number(rawSv) : qtyFallback;
   return formatAuctionLotIdentifier({
     vehicleMark: item.vehicleMark,
     vehicleTotalQty: vTotal,
     sellerMark: item.sellerMark,
     sellerTotalQty: sTotal,
     lotName,
-    lotQty,
+    lotQty: lotBagCount,
   });
 }
 
