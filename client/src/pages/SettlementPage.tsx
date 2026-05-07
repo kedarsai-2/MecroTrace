@@ -345,6 +345,67 @@ function uniqueArrivalSellerCount(sellerIds: string[] | undefined): number {
   return set.size;
 }
 
+/** Saved / New / In-progress cards: primary seller plus “(+N more)” when row bundles multiple sellers. */
+function formatArrivalSellerListLabel(
+  sellerIds: string[],
+  sellerById: Map<string, SellerSettlement>,
+  fallbackName?: string
+): string {
+  const first = firstArrivalSellerLabel(sellerIds, sellerById, fallbackName);
+  const n = uniqueArrivalSellerCount(sellerIds);
+  if (n <= 1) return first;
+  return `${first} (+${n - 1} more)`;
+}
+
+/** Group pattis onto one arrival vehicle row — use `vehicleId` when known so duplicate plates on different trips do not collide. */
+function arrivalVehicleGroupSegment(vehicleNumber: string, seller?: SellerSettlement): string {
+  const vid = seller?.vehicleId;
+  if (vid != null && Number.isFinite(Number(vid))) return `vid:${Number(vid)}`;
+  return `plate:${(vehicleNumber || '').trim().toLowerCase()}`;
+}
+
+/**
+ * Sellers in current patti workspace. Prefer explicit ids; never fall back to everyone on normalized plate string.
+ */
+function sellersForSettlementArrivalScope(
+  sellers: SellerSettlement[],
+  selectedSeller: SellerSettlement,
+  selectedArrivalSellerIds: string[]
+): SellerSettlement[] {
+  if (selectedArrivalSellerIds.length > 0) {
+    const idSet = new Set(selectedArrivalSellerIds.map(String));
+    const scoped = sellers.filter(s => idSet.has(String(s.sellerId)));
+    if (scoped.length > 0) return scoped;
+    const lone = sellers.find(s => String(s.sellerId) === String(selectedSeller.sellerId));
+    return lone ? [lone] : [selectedSeller];
+  }
+  return [selectedSeller];
+}
+
+/** Sales Patti “compound” identity: links seller-1 … seller-N rows (`pattiBaseNumber` or part of `BASE-SEQ`). */
+function settlementPattiCompoundBaseKey(p: PattiDTO): string {
+  const raw = String(p.pattiBaseNumber ?? '').trim();
+  if (raw) return raw;
+  const pid = String(p.pattiId ?? '').trim();
+  const m = pid.match(/^(.*)-(\d+)$/);
+  return m ? m[1].trim() : '';
+}
+
+/**
+ * Key for Saved / In-progress summaries: rows that share compound base merge even if `createdAt` differs
+ * (avoids splitting one main patti into two saved cards).
+ */
+function settlementPattiListGroupKey(p: PattiDTO, seller: SellerSettlement | undefined): string {
+  const vehicleNumber = (p.vehicleNumber || '').trim();
+  const fromLocation = (p.fromLocation || '').trim();
+  const dateRaw = (p.date ?? p.createdAt ?? '').toString();
+  const vseg = arrivalVehicleGroupSegment(vehicleNumber, seller);
+  const flo = fromLocation.toLowerCase();
+  const compound = settlementPattiCompoundBaseKey(p);
+  if (compound) return `compound:${compound}|${vseg}|${flo}`;
+  return `legacy:${vseg}|${flo}|${dateRaw}`;
+}
+
 function totalBagsFromPattiRateClusters(p: PattiDTO): number {
   let s = 0;
   for (const c of p.rateClusters ?? []) {
@@ -2782,10 +2843,9 @@ const SettlementPage = () => {
     const groupMap = new Map<string, PattiDTO[]>();
     for (const p of inProgressPattiDtos) {
       if (p.id == null) continue;
-      const vehicleNumber = (p.vehicleNumber || '').trim();
-      const fromLocation = (p.fromLocation || '').trim();
-      const dateRaw = (p.date ?? p.createdAt ?? '').toString();
-      const gKey = [vehicleNumber.toLowerCase(), fromLocation.toLowerCase(), dateRaw].join('|');
+      const sidForGroup = String(p.sellerId ?? '').trim();
+      const sellerRow = sidForGroup ? sellerById.get(sidForGroup) : undefined;
+      const gKey = settlementPattiListGroupKey(p, sellerRow);
       const arr = groupMap.get(gKey);
       if (arr) arr.push(p);
       else groupMap.set(gKey, [p]);
@@ -2842,7 +2902,7 @@ const SettlementPage = () => {
           }
         }
       }
-      const sellerNames = firstArrivalSellerLabel(sellerIds, sellerById, repPatti.sellerName);
+      const sellerNames = formatArrivalSellerListLabel(sellerIds, sellerById, repPatti.sellerName);
       rows.push({
         key: `db:group:${gKey}|${[...sellerIds].sort().join(',')}`,
         updatedAt: updatedMs ? new Date(updatedMs).toISOString() : String(repPatti.createdAt ?? ''),
@@ -4032,7 +4092,16 @@ const SettlementPage = () => {
   });
 
   saveMainPattiShortcutRef.current = () => {
-    if (selectedSeller && !isSettlementFormReadOnly) void savePatti();
+    if (!selectedSeller || !pattiData) return;
+    if (isSettlementFormReadOnly) {
+      toast.message(
+        isOriginalReferenceMode
+          ? 'Leave original view (Alt+M) before saving with Alt+S.'
+          : 'Enable editing (Alt+M) to save the main patti with Alt+S.'
+      );
+      return;
+    }
+    void savePatti();
   };
 
   useEffect(() => {
@@ -4204,7 +4273,7 @@ const SettlementPage = () => {
       const dateRaw = seller.createdAt ?? seller.date ?? '';
       const dateObj = dateRaw ? new Date(dateRaw) : null;
       const dateLabel = dateObj && !Number.isNaN(dateObj.getTime()) ? dateObj.toLocaleDateString() : '-';
-      const key = [v.toLowerCase(), from.toLowerCase(), dateRaw].join('|');
+      const key = [arrivalVehicleGroupSegment(v, seller), from.toLowerCase(), dateRaw].join('|');
       const existing = groups.get(key);
       const lots = getSellerLots(seller);
       const bids = getSellerBids(seller);
@@ -4236,7 +4305,7 @@ const SettlementPage = () => {
       const first = pickFirstArrivalSeller(row.sellerIds, eligibleById) ?? row.representativeSeller;
       return {
         ...row,
-        sellerNames: firstArrivalSellerLabel(row.sellerIds, eligibleById),
+        sellerNames: formatArrivalSellerListLabel(row.sellerIds, eligibleById),
         representativeSeller: first,
         serialNo: first.sellerSerialNo ?? row.serialNo,
       };
@@ -4253,10 +4322,10 @@ const SettlementPage = () => {
       const dateRaw = (p.date ?? p.createdAt ?? '').toString();
       const dateObj = dateRaw ? new Date(dateRaw) : null;
       const dateLabel = dateObj && !Number.isNaN(dateObj.getTime()) ? dateObj.toLocaleDateString() : '-';
-      const key = [vehicleNumber.toLowerCase(), fromLocation.toLowerCase(), dateRaw].join('|');
-      const existing = groups.get(key);
       const sid = p.sellerId ? String(p.sellerId) : '';
       const seller = sid ? sellerById.get(sid) : undefined;
+      const key = settlementPattiListGroupKey(p, seller);
+      const existing = groups.get(key);
       const lots = seller ? getSellerLots(seller) : 0;
       const bids = seller ? getSellerBids(seller) : 0;
       const weighed = seller ? getSellerWeighed(seller) : 0;
@@ -4297,7 +4366,7 @@ const SettlementPage = () => {
       const first = pickFirstArrivalSeller(rest.sellerIds, sellerById);
       return {
         ...rest,
-        sellerNames: firstArrivalSellerLabel(rest.sellerIds, sellerById, _fallbackName),
+        sellerNames: formatArrivalSellerListLabel(rest.sellerIds, sellerById, _fallbackName),
         serialNo: first?.sellerSerialNo ?? rest.serialNo,
       };
     });
@@ -4307,9 +4376,7 @@ const SettlementPage = () => {
   const vehicleFormDetails = useMemo(() => {
     if (!selectedSeller || !pattiData) return null;
 
-    const vKey = normalizeVehicleKey(selectedSeller.vehicleNumber);
-    const sameVehicleSellers = vKey ? sellers.filter(s => normalizeVehicleKey(s.vehicleNumber) === vKey) : [];
-    const scope = sameVehicleSellers.length > 0 ? sameVehicleSellers : [selectedSeller];
+    const scope = sellersForSettlementArrivalScope(sellers, selectedSeller, selectedArrivalSellerIds);
     const pattiNetWeight = scope.reduce((sum, seller) => {
       const removed = new Set(removedLotsBySellerId[seller.sellerId] ?? []);
       const ov = lotSalesOverridesBySellerId[seller.sellerId];
@@ -4332,6 +4399,7 @@ const SettlementPage = () => {
     const arrivalQty = scope.reduce((acc, s) => acc + totalArrivalBagsForSeller(s), 0);
     const salesPadNetWeight = scope.reduce((acc, s) => acc + totalBillingNetWeightForSeller(s), 0);
 
+    const vKey = normalizeVehicleKey(selectedSeller.vehicleNumber);
     return {
       vKey,
       sellersCount: vKey ? scope.length : null,
@@ -4344,6 +4412,7 @@ const SettlementPage = () => {
     sellers,
     selectedSeller,
     pattiData,
+    selectedArrivalSellerIds,
     removedLotsBySellerId,
     lotSalesOverridesBySellerId,
     extraBidLotsBySellerId,
@@ -4353,14 +4422,7 @@ const SettlementPage = () => {
   /** All sellers on the same vehicle as the current settlement (arrival scope). */
   const arrivalSellersForPatti = useMemo(() => {
     if (!selectedSeller || !pattiData) return [];
-    if (selectedArrivalSellerIds.length > 0) {
-      const scoped = sellers.filter(s => selectedArrivalSellerIds.includes(s.sellerId));
-      if (scoped.length > 0) return scoped;
-    }
-    const vKey = normalizeVehicleKey(selectedSeller.vehicleNumber);
-    if (!vKey) return [selectedSeller];
-    const scope = sellers.filter(s => normalizeVehicleKey(s.vehicleNumber) === vKey);
-    return scope.length > 0 ? scope : [selectedSeller];
+    return sellersForSettlementArrivalScope(sellers, selectedSeller, selectedArrivalSellerIds);
   }, [sellers, selectedSeller, pattiData, selectedArrivalSellerIds]);
 
   /** First seller on the vehicle — main patti print header (no “+N others”). */
