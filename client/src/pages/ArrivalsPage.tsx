@@ -936,7 +936,6 @@ const ArrivalsPage = () => {
   const [expandedDetail, setExpandedDetail] = useState<ArrivalFullDetail | null>(null);
   const [expandedDetailLoading, setExpandedDetailLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
-  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('');
   const summaryMode: 'arrivals' | 'sellers' | 'lots' = 'arrivals';
   type StatusFilter = 'ALL' | ArrivalStatus;
   const SUMMARY_STATUS_FILTERS: StatusFilter[] = ['ALL', 'PENDING', 'WEIGHED', 'AUCTIONED', 'SETTLED', 'PARTIALLY_COMPLETED'];
@@ -1869,13 +1868,6 @@ const ArrivalsPage = () => {
   );
   const totalNetWeightTons = useMemo(() => (totalNetWeightKg > 0 ? totalNetWeightKg / 1000 : 0), [totalNetWeightKg]);
 
-  useEffect(() => {
-    const id = window.setTimeout(() => {
-      setDebouncedSearchQuery(searchQuery.trim());
-    }, 250);
-    return () => window.clearTimeout(id);
-  }, [searchQuery]);
-
   const filteredArrivals = useMemo(() => {
     const source =
       statusFilter === 'PARTIALLY_COMPLETED'
@@ -1887,8 +1879,20 @@ const ArrivalsPage = () => {
     if (statusFilter === 'PENDING' || statusFilter === 'WEIGHED' || statusFilter === 'AUCTIONED' || statusFilter === 'SETTLED') {
       result = result.filter(a => getArrivalStatus(a) === statusFilter);
     }
+    const q = searchQuery.trim().toLowerCase();
+    if (q) {
+      result = result.filter(a =>
+        String(a.vehicleId ?? '').toLowerCase().includes(q) ||
+        (a.vehicleNumber ?? '').toLowerCase().includes(q) ||
+        (a.vehicleMarkAlias ?? '').toLowerCase().includes(q) ||
+        (a.primarySellerName ?? '').toLowerCase().includes(q) ||
+        (a.origin ?? '').toLowerCase().includes(q) ||
+        (a.godown ?? '').toLowerCase().includes(q) ||
+        (a.gatepassNumber ?? '').toLowerCase().includes(q)
+      );
+    }
     return result;
-  }, [apiArrivals, partialArrivals, statusFilter]);
+  }, [apiArrivals, partialArrivals, searchQuery, statusFilter]);
 
   const statusCounts = useMemo(() => {
     const counts: Record<StatusFilter, number> = {
@@ -1906,9 +1910,9 @@ const ArrivalsPage = () => {
     if (s === 'PARTIALLY_COMPLETED') return 'Partially Completed';
     return s.charAt(0) + s.slice(1).toLowerCase();
   };
-  const isSearchDebouncing = searchQuery.trim() !== debouncedSearchQuery.trim();
-  const activeArrivalsLoading =
-    isSearchDebouncing ||
+  const hasLoadedArrivalRows = apiArrivals.length > 0 || partialArrivals.length > 0;
+  const hasArrivalSearch = searchQuery.trim().length > 0;
+  const activeArrivalsLoading = !hasLoadedArrivalRows &&
     (statusFilter === 'ALL'
       ? apiArrivalsLoading || partialArrivalsLoading
       : statusFilter === 'PARTIALLY_COMPLETED'
@@ -2038,9 +2042,6 @@ const ArrivalsPage = () => {
     setCompletedArrivalsComplete(false);
     setPartialArrivalsTotal(null);
     setPartialArrivalsComplete(false);
-    setApiArrivals([]);
-    setPartialArrivals([]);
-    const q = debouncedSearchQuery.trim();
 
     const mergeSummaryMap = (map: Map<string, ArrivalSummary>, items: ArrivalSummary[]) => {
       for (const it of items) map.set(String(it.vehicleId), it);
@@ -2058,7 +2059,6 @@ const ArrivalsPage = () => {
               size: ARRIVALS_PAGE_SIZE,
               sort: ARRIVAL_LIST_SORT,
               partiallyCompleted: false,
-              q,
             },
             { signal }
           );
@@ -2107,7 +2107,6 @@ const ArrivalsPage = () => {
               size: ARRIVALS_PAGE_SIZE,
               sort: ARRIVAL_LIST_SORT,
               partiallyCompleted: true,
-              q,
             },
             { signal }
           );
@@ -2151,7 +2150,7 @@ const ArrivalsPage = () => {
         setPartialArrivalsLoading(false);
       });
     }
-  }, [debouncedSearchQuery]);
+  }, []);
 
   const loadContactsFromApi = useCallback(async () => {
     try {
@@ -3103,7 +3102,16 @@ const ArrivalsPage = () => {
                     )}
                     {summaryMode === 'arrivals' && (
                       filteredArrivals.length === 0 ? (
-                        statusFilter !== 'ALL' ? (
+                        hasArrivalSearch ? (
+                          <div className="glass-card p-12 rounded-2xl text-center">
+                            <Search className="w-12 h-12 text-muted-foreground/50 mx-auto mb-4" />
+                            <h3 className="text-lg font-bold text-foreground mb-1">No results found</h3>
+                            <p className="text-sm text-muted-foreground mb-4">Try a different search term or filter.</p>
+                            <Button onClick={() => { setSearchQuery(''); setStatusFilter('ALL'); }} variant="outline" className="rounded-xl">
+                              Clear Filters
+                            </Button>
+                          </div>
+                        ) : statusFilter !== 'ALL' ? (
                           <div className="glass-card p-12 rounded-2xl text-center">
                             <Filter className="w-12 h-12 text-muted-foreground/50 mx-auto mb-4" />
                             <h3 className="text-lg font-bold text-foreground mb-1">No {statusLabel(statusFilter)} arrivals</h3>
@@ -4051,7 +4059,16 @@ const ArrivalsPage = () => {
                 <p className="text-muted-foreground">Loading arrivals…</p>
               </div>
             ) : filteredArrivals.length === 0 ? (
-              statusFilter !== 'ALL' ? (
+              hasArrivalSearch ? (
+                <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="glass-card p-8 rounded-2xl text-center">
+                  <Search className="w-12 h-12 text-muted-foreground/50 mx-auto mb-4" />
+                  <h3 className="text-lg font-bold text-foreground mb-1">No results found</h3>
+                  <p className="text-sm text-muted-foreground mb-4">Try a different search term or filter.</p>
+                  <Button onClick={() => { setSearchQuery(''); setStatusFilter('ALL'); }} variant="outline" className="rounded-xl">
+                    Clear Filters
+                  </Button>
+                </motion.div>
+              ) : statusFilter !== 'ALL' ? (
                 <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="glass-card p-8 rounded-2xl text-center">
                   <Filter className="w-12 h-12 text-muted-foreground/50 mx-auto mb-4" />
                   <h3 className="text-lg font-bold text-foreground mb-1">No {statusLabel(statusFilter)} arrivals</h3>
