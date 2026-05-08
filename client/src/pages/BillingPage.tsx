@@ -95,7 +95,7 @@ const billingSummaryValueClass =
   'text-[10px] font-semibold text-foreground tabular-nums shrink-0 whitespace-nowrap text-right min-w-[5.25rem]';
 /** Commodity column body cells — minimum width so inputs + ₹ totals are not clipped on tablet. */
 const billingSummaryCommodityTdClass =
-  'min-w-[168px] sm:min-w-[172px] px-2 py-1.5 align-top border-b border-border/30 border-l border-border/50 dark:border-border/70 bg-white text-foreground dark:text-neutral-900 dark:[&_.text-muted-foreground]:text-neutral-500';
+  'min-w-[168px] sm:min-w-[172px] px-2 py-1.5 align-top border-b border-border/30 border-l border-border/50 dark:border-border/70 bg-white dark:bg-card text-foreground';
 /** Inputs left, calculated ₹ right (same column alignment for Indian manual cross-check). */
 const billingSummaryCellOuterClass =
   'flex w-full min-w-0 items-center justify-between gap-x-2 gap-y-1';
@@ -6423,7 +6423,7 @@ const BillingPage = () => {
                     </tr>
                     <tr className="border-t border-border/30">
                       <td className="sticky left-0 z-20 px-2 py-1.5 text-[10px] font-semibold text-foreground bg-background dark:bg-slate-900 border-r border-border/50 whitespace-normal min-w-[110px] max-w-[110px] w-[110px]">Outbound Freight (Rate/Value)</td>
-                      <td colSpan={bill.commodityGroups.length} className="px-2 py-1.5 bg-white text-foreground dark:text-neutral-900 border-l border-border/30 border-b border-border/30 border-r border-border/30 dark:border-border/70 dark:[&_.text-muted-foreground]:text-neutral-500">
+                      <td colSpan={bill.commodityGroups.length} className="px-2 py-1.5 bg-white dark:bg-card text-foreground border-l border-border/30 border-b border-border/30 border-r border-border/30 dark:border-border/70">
                         <div className="flex items-center justify-between gap-2 flex-wrap">
                           <BillingMoneyInput
                             value={bill.outboundFreight || 0}
@@ -6440,7 +6440,7 @@ const BillingPage = () => {
                     </tr>
                     <tr className="border-t border-border/30">
                       <td className="sticky left-0 z-20 px-2 py-1.5 text-[10px] font-semibold text-foreground bg-background dark:bg-slate-900 border-r border-border/50 whitespace-normal min-w-[110px] max-w-[110px] w-[110px]">Outbound Vehicle #</td>
-                      <td colSpan={bill.commodityGroups.length} className="px-2 py-1.5 bg-white text-foreground dark:text-neutral-900 border-l border-border/30 border-b border-border/30 border-r border-border/30 dark:border-border/70">
+                      <td colSpan={bill.commodityGroups.length} className="px-2 py-1.5 bg-white dark:bg-card text-foreground border-l border-border/30 border-b border-border/30 border-r border-border/30 dark:border-border/70">
                         <Input
                           value={bill.outboundVehicle}
                           onChange={e => {
