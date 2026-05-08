@@ -92,6 +92,10 @@ export interface SellerSettlementDTO {
   /** Arrivals `vehicle.id` — load freight via GET /arrivals/:id without list scan. */
   vehicleId?: number;
   vehicleNumber: string;
+  /** Arrivals `vehicle.vehicle_mark_alias` — segment 1 of auction/billing lot identifier. */
+  vehicleMark?: string;
+  /** Sum of lot bag counts on this vehicle (all sellers). Segment 1 qty of auction/billing lot identifier. */
+  vehicleTotalQty?: number;
   /** Arrivals: Σ bag counts for this seller's lots. */
   arrivalTotalBags?: number;
   /** Arrivals: vehicle net billable kg (net − deducted) from weighing; shared across sellers on same vehicle. */

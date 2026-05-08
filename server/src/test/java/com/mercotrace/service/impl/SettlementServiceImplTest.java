@@ -52,9 +52,6 @@ class SettlementServiceImplTest {
     private com.mercotrace.repository.PattiRepository pattiRepository;
 
     @Mock
-    private com.mercotrace.repository.WeighingSessionRepository weighingSessionRepository;
-
-    @Mock
     private com.mercotrace.repository.SellerInVehicleRepository sellerInVehicleRepository;
 
     @Mock
@@ -112,7 +109,6 @@ class SettlementServiceImplTest {
             lotRepository,
             auctionService,
             pattiRepository,
-            weighingSessionRepository,
             sellerInVehicleRepository,
             contactRepository,
             vehicleRepository,

@@ -12,6 +12,14 @@ import org.springframework.stereotype.Repository;
 @Repository
 public interface SalesBillLineItemRepository extends JpaRepository<SalesBillLineItem, Long> {
 
+    @Query(
+        "SELECT i.lotId, i.bidNumber, COALESCE(SUM(i.weight), 0) FROM SalesBillLineItem i " +
+        "JOIN i.commodityGroup g JOIN g.salesBill b " +
+        "WHERE b.traderId = :traderId AND i.lotId IS NOT NULL AND i.lotId IN :lotIds " +
+        "GROUP BY i.lotId, i.bidNumber"
+    )
+    List<Object[]> sumWeightGroupedByLotIdAndBidNumber(@Param("traderId") Long traderId, @Param("lotIds") Collection<String> lotIds);
+
     /**
      * Sum persisted billing line weights per lot (commodity group line items), trader-scoped.
      * Used by Settlement Sales Pad net weight vs Arrivals.

@@ -271,6 +271,15 @@ public final class SettlementDTOs {
         /** Arrivals vehicle PK; used to load freight without scanning the arrivals list. */
         private Long vehicleId;
         private String vehicleNumber;
+        /**
+         * {@link com.mercotrace.domain.Vehicle#getVehicleMarkAlias()} — same segment as Auction / Billing lot identifier.
+         */
+        private String vehicleMark;
+        /**
+         * Sum of {@link Lot#getBagCount()} for all lots on this vehicle (arrivals). Used with {@link #vehicleMark} for
+         * {@code formatAuctionLotIdentifier}-style labels.
+         */
+        private Integer vehicleTotalQty;
         /** Sum of {@link Lot#getBagCount()} for this seller's lots (Arrivals). */
         private Integer arrivalTotalBags;
         /**
@@ -301,6 +310,10 @@ public final class SettlementDTOs {
         public void setVehicleId(Long vehicleId) { this.vehicleId = vehicleId; }
         public String getVehicleNumber() { return vehicleNumber; }
         public void setVehicleNumber(String vehicleNumber) { this.vehicleNumber = vehicleNumber; }
+        public String getVehicleMark() { return vehicleMark; }
+        public void setVehicleMark(String vehicleMark) { this.vehicleMark = vehicleMark; }
+        public Integer getVehicleTotalQty() { return vehicleTotalQty; }
+        public void setVehicleTotalQty(Integer vehicleTotalQty) { this.vehicleTotalQty = vehicleTotalQty; }
         public Integer getArrivalTotalBags() { return arrivalTotalBags; }
         public void setArrivalTotalBags(Integer arrivalTotalBags) { this.arrivalTotalBags = arrivalTotalBags; }
         public BigDecimal getVehicleArrivalNetBillableKg() { return vehicleArrivalNetBillableKg; }

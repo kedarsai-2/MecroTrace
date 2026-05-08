@@ -48,6 +48,7 @@ import {
   generateSalesPattiPrintHTMLPages,
   type PattiPrintData,
 } from '@/utils/printDocumentTemplates';
+import { formatAuctionLotIdentifier, lotBagCountForIdentifier } from '@/utils/auctionLotIdentifier';
 import { useAuth } from '@/context/AuthContext';
 import ForbiddenPage from '@/components/ForbiddenPage';
 import { usePermissions } from '@/lib/permissions';
@@ -149,6 +150,10 @@ interface SellerSettlement {
   /** Arrivals vehicle id (from settlement API) for direct arrival freight lookup. */
   vehicleId?: number;
   vehicleNumber: string;
+  /** Same as Billing/Auction `formatAuctionLotIdentifier` vehicle mark segment. */
+  vehicleMark?: string;
+  /** Total bags on vehicle (all sellers); identifier segment. */
+  vehicleTotalQty?: number;
   /** Arrivals: Σ lot bag counts for this seller. */
   arrivalTotalBags?: number;
   /** Arrivals: vehicle net billable kg from weighing (shared per vehicle). */
@@ -162,6 +167,24 @@ interface SellerSettlement {
   createdAt?: string;
   date?: string;
   lots: SettlementLot[];
+}
+
+/** Canonical `VM-VTOT/SM-STOT/lotName/lotQty` — same util as Auction, Billing, PrintHub. */
+function formatSettlementAuctionLotIdentifier(seller: SellerSettlement, lot: SettlementLot): string {
+  const rawBags = Number(lot.arrivalBagCount) || 0;
+  const lotBagCount = lotBagCountForIdentifier(lot.arrivalBagCount);
+  const lotName = String(lot.lotName || '').trim() || String(rawBags || '');
+  const vTotal =
+    Number(seller.vehicleTotalQty ?? seller.arrivalTotalBags ?? rawBags) || rawBags;
+  const sTotal = Number(seller.arrivalTotalBags ?? rawBags) || rawBags;
+  return formatAuctionLotIdentifier({
+    vehicleMark: seller.vehicleMark,
+    vehicleTotalQty: vTotal,
+    sellerMark: seller.sellerMark,
+    sellerTotalQty: sTotal,
+    lotName,
+    lotQty: lotBagCount,
+  });
 }
 
 interface SettlementLot {
@@ -1078,12 +1101,10 @@ interface AddVoucherRowState {
 /** Distribute total lot weight across entries (billing total or sum of entry weights). */
 function distributeLotEntryWeights(lot: SettlementLot, totalW: number): number[] {
   const sumEw = lot.entries.reduce((s, e) => s + (Number(e.weight) || 0), 0);
-  const qty = lot.entries.reduce((s, e) => s + (Number(e.quantity) || 0), 0);
   return lot.entries.map(e => {
     const ew = Number(e.weight) || 0;
-    const q = Number(e.quantity) || 0;
     if (sumEw > 0) return (ew / sumEw) * totalW;
-    if (qty > 0) return (q / qty) * totalW;
+    // No qty-based fallback; if no billing weight exists, entries stay at 0.
     return 0;
   });
 }
@@ -1100,8 +1121,8 @@ function lotBaseSalesRow(
   const qty = lot.entries.reduce((s, e) => s + (Number(e.quantity) || 0), 0);
   const sumEntryW = lot.entries.reduce((s, e) => s + (Number(e.weight) || 0), 0);
   const bw = lot.billingWeightKg;
-  const useBilling = bw != null && Number.isFinite(Number(bw)) && Number(bw) > 0;
-  const weight = useBilling ? Number(bw) : sumEntryW;
+  // Weight comes strictly from billing. Prefer lot-level aggregate if > 0, else sum of billing-sourced entries.
+  const weight = bw != null && Number(bw) > 0 ? Number(bw) : sumEntryW;
   const itemLabel = lot.lotName || lot.commodityName || '—';
   if (qty <= 0 || weight <= 0) {
     return {
@@ -1203,7 +1224,7 @@ function settlementLotFromExtraBid(e: ExtraBidLot): SettlementLot {
 }
 
 type SettlementSalesTableRow =
-  | { lot: SettlementLot; sid: string; isExtraBid: false }
+  | { lot: SettlementLot; sid: string; isExtraBid: false; entryIndex: number }
   | { lot: SettlementLot; sid: string; isExtraBid: true; extraBid: ExtraBidLot };
 
 const PATTI_EXTENSION_JSON_VERSION = 1 as const;
@@ -1310,12 +1331,13 @@ function parsePattiExtensionJson(
 }
 
 /** Merge API lot totals with optional user overrides. Amount = (weight × rate per bag) / divisor. */
-function mergeLotDisplayRow(
+function mergeLotDisplayRowLegacy(
   lot: SettlementLot,
   o: LotSalesOverride | undefined,
   divisor: number,
   settlementRateMode: 'original' | 'modified' = 'modified'
 ) {
+  // dummy
   const base = lotBaseSalesRow(lot, divisor, settlementRateMode);
   if (!hasLotSalesOverride(o)) return base;
   const qty =
@@ -1333,6 +1355,161 @@ function mergeLotDisplayRow(
     avg,
     ratePerBag,
     amount,
+  };
+}
+
+function mergeLotDisplayRow(
+  lot: SettlementLot,
+  sid: string,
+  lotOv: Record<string, LotSalesOverride> | undefined,
+  divisor: number,
+  settlementRateMode: 'original' | 'modified' = 'modified'
+) {
+  const entries = lot.entries ?? [];
+  const lotOverride = lotOv?.[sid];
+  const hasOtherOverrides = entries.some((_, i) => i > 0 && lotOv?.[`${sid}::${i}`]);
+
+  if (lotOverride && !hasOtherOverrides) {
+    return mergeLotDisplayRowLegacy(lot, lotOverride, divisor, settlementRateMode);
+  }
+
+  // Independent mode: sum up entries (which might have their own overrides)
+  let totalQty = 0;
+  let totalWeight = 0;
+  let totalAmount = 0;
+  let firstRate: number | undefined;
+
+  entries.forEach((_, i) => {
+    const row = mergeLotEntryDisplayRow(undefined as any, lot, i, lotOv, sid, divisor, settlementRateMode);
+    totalQty += row.qty;
+    totalWeight += row.weight;
+    totalAmount += row.amount;
+    if (firstRate === undefined) firstRate = row.ratePerBag;
+  });
+
+  if (entries.length === 0) {
+    return mergeLotDisplayRowLegacy(lot, lotOverride, divisor, settlementRateMode);
+  }
+
+  const avg = totalQty > 0 ? totalWeight / totalQty : 0;
+  return {
+    qty: totalQty,
+    weight: totalWeight,
+    avg,
+    ratePerBag: firstRate ?? 0,
+    amount: totalAmount,
+    divisor,
+  };
+}
+
+/** Split merged lot quantity across bids in proportion to arrival quantities (matches weight distribution idea). */
+function distributeMergedQtyAcrossEntries(lot: SettlementLot, totalQty: number): number[] {
+  const entries = lot.entries ?? [];
+  const n = entries.length;
+  if (n === 0) return [];
+  const rounded = Math.max(0, Math.round(Number(totalQty) || 0));
+  if (rounded <= 0) return entries.map(() => 0);
+  const q0 = entries.map(e => Math.max(0, Math.round(Number(e.quantity) || 0)));
+  const sum0 = q0.reduce((a, b) => a + b, 0);
+  if (sum0 <= 0) {
+    const base = Math.floor(rounded / n);
+    let rem = rounded - base * n;
+    return entries.map((_, i) => base + (i < rem ? 1 : 0));
+  }
+  const raw = q0.map(q => (q / sum0) * rounded);
+  const fl = raw.map(x => Math.floor(x));
+  let rem = rounded - fl.reduce((a, b) => a + b, 0);
+  const ord = raw.map((x, i) => ({ i, r: x - fl[i] })).sort((a, b) => b.r - a.r);
+  const out = [...fl];
+  for (let k = 0; k < rem && k < ord.length; k++) out[ord[k].i]++;
+  return out;
+}
+
+/**
+ * One Sales Report row per buyer bid: same pricing math as lot row, split by distributed weight / qty shares.
+ * Lot-level overrides (qty/weight/rate) still apply to the merged lot before splitting for display.
+ */
+function mergeLotEntryDisplayRow(
+  seller: SellerSettlement,
+  lot: SettlementLot,
+  entryIndex: number,
+  lotOv: Record<string, LotSalesOverride> | undefined,
+  sid: string,
+  divisor: number,
+  settlementRateMode: 'original' | 'modified' = 'modified'
+) {
+  const entries = lot.entries ?? [];
+  const lotOverride = lotOv?.[sid];
+  const hasOtherOverrides = entries.some((_, i) => i > 0 && lotOv?.[`${sid}::${i}`]);
+
+  if (lotOverride && !hasOtherOverrides) {
+    // Legacy distribution mode
+    const merged = mergeLotDisplayRowLegacy(lot, lotOverride, divisor, settlementRateMode);
+    const lotIdLabel = seller ? formatSettlementAuctionLotIdentifier(seller, lot) : '';
+    if (entries.length === 0) {
+      return { ...merged, itemLabel: lotIdLabel };
+    }
+    const e = entries[entryIndex];
+    if (!e) {
+      return { ...merged, itemLabel: lotIdLabel };
+    }
+    const div = merged.divisor;
+    const distW = distributeLotEntryWeights(lot, merged.weight);
+    const w = distW[entryIndex] ?? 0;
+    const qtyParts = distributeMergedQtyAcrossEntries(lot, merged.qty);
+    const qty = qtyParts[entryIndex] ?? 0;
+    const useLotRate =
+      settlementRateMode === 'modified' &&
+      lotOverride?.ratePerBag !== undefined &&
+      Number.isFinite(lotOverride.ratePerBag);
+    const ratePerBag = useLotRate
+      ? Number(lotOverride!.ratePerBag)
+      : settlementEffectiveRatePerBag(e, settlementRateMode);
+    const amount = roundMoney2((w * ratePerBag) / div);
+    const avg = qty > 0 ? w / qty : 0;
+    return {
+      itemLabel: lotIdLabel,
+      qty,
+      weight: w,
+      avg,
+      ratePerBag,
+      amount,
+      divisor: div,
+    };
+  }
+
+  // Independent mode
+  const entryKey = entryIndex === 0 ? sid : `${sid}::${entryIndex}`;
+  const o = lotOv?.[entryKey];
+  const lotIdLabel = seller ? formatSettlementAuctionLotIdentifier(seller, lot) : '';
+  const e = entries[entryIndex];
+  if (!e) {
+    const base = lotBaseSalesRow(lot, divisor, settlementRateMode);
+    return { ...base, itemLabel: lotIdLabel };
+  }
+
+  const baseQty = e.quantity ?? 0;
+  const baseWeight = e.weight ?? 0;
+  const baseRate = settlementEffectiveRatePerBag(e, settlementRateMode);
+
+  const qty = o?.qty !== undefined && Number.isFinite(o.qty) ? Math.max(0, Math.round(Number(o.qty))) : baseQty;
+  const weight = o?.weight !== undefined && Number.isFinite(o.weight) ? o.weight : baseWeight;
+  const ratePerBag =
+    settlementRateMode === 'modified' && o?.ratePerBag !== undefined && Number.isFinite(o.ratePerBag)
+      ? o.ratePerBag
+      : baseRate;
+
+  const amount = roundMoney2((weight * ratePerBag) / divisor);
+  const avg = qty > 0 ? weight / qty : 0;
+
+  return {
+    itemLabel: lotIdLabel,
+    qty,
+    weight,
+    avg,
+    ratePerBag,
+    amount,
+    divisor,
   };
 }
 
@@ -1480,7 +1657,7 @@ function buildMainVehiclePattiDetailRows(
     const fromApi = seller.lots.flatMap((lot, lotIndex) => {
       const sid = lotStableId(lot, lotIndex);
       if (removedSet.has(sid)) return [];
-      const row = mergeLotDisplayRow(lot, lotOverrides?.[sid], getLotDivisor(lot), mode);
+      const row = mergeLotDisplayRow(lot, sid, lotOverrides, getLotDivisor(lot), mode);
       return [
         {
           mark: (seller.sellerMark || '-').trim() || '-',
@@ -1494,7 +1671,7 @@ function buildMainVehiclePattiDetailRows(
     const extras = extraBidLotsBySellerId[seller.sellerId] ?? [];
     const fromExtra = extras.map(e => {
       const lot = settlementLotFromExtraBid(e);
-      const row = mergeLotDisplayRow(lot, undefined, getLotDivisor(lot), mode);
+      const row = mergeLotDisplayRow(lot, '', undefined, getLotDivisor(lot), mode);
       return {
         mark: (seller.sellerMark || '-').trim() || '-',
         bags: Number(row.qty) || 0,
@@ -1665,7 +1842,7 @@ function sumLotSlabChargesForSeller(
   seller.lots.forEach((lot, i) => {
     const sid = lotStableId(lot, i);
     if (removed.has(sid)) return;
-    const merged = mergeLotDisplayRow(lot, lotOv[sid], getDivisor(lot));
+    const merged = mergeLotDisplayRow(lot, sid, lotOv, getDivisor(lot));
     const actualW = merged.weight;
     const add = addSlabChargesForLotWeight(lot, actualW, nameToId, configById);
     unloading += add.unloading;
@@ -1673,7 +1850,7 @@ function sumLotSlabChargesForSeller(
   });
   for (const e of extraBidLots) {
     const lot = settlementLotFromExtraBid(e);
-    const merged = mergeLotDisplayRow(lot, undefined, getDivisor(lot));
+    const merged = mergeLotDisplayRow(lot, '', undefined, getDivisor(lot));
     const add = addSlabChargesForLotWeight(lot, merged.weight, nameToId, configById);
     unloading += add.unloading;
     weighing += add.weighing;
@@ -1762,12 +1939,12 @@ function buildSellerSlabChargeBaseForPattiSellers(
       s.lots.reduce((sum, lot, i) => {
         const sid = lotStableId(lot, i);
         if (removed.has(sid)) return sum;
-        const merged = mergeLotDisplayRow(lot, lotOv[sid], getDivisor(lot));
+        const merged = mergeLotDisplayRow(lot, sid, lotOv, getDivisor(lot));
         return sum + (Number(merged.weight) || 0);
       }, 0) +
       extras.reduce((sum, e) => {
         const lot = settlementLotFromExtraBid(e);
-        const merged = mergeLotDisplayRow(lot, undefined, getDivisor(lot));
+        const merged = mergeLotDisplayRow(lot, '', undefined, getDivisor(lot));
         return sum + (Number(merged.weight) || 0);
       }, 0);
     const qty = Math.max(
@@ -1776,12 +1953,12 @@ function buildSellerSlabChargeBaseForPattiSellers(
         s.lots.reduce((sum, lot, i) => {
           const sid = lotStableId(lot, i);
           if (removed.has(sid)) return sum;
-          const merged = mergeLotDisplayRow(lot, lotOv[sid], getDivisor(lot));
+          const merged = mergeLotDisplayRow(lot, sid, lotOv, getDivisor(lot));
           return sum + (Number(merged.qty) || 0);
         }, 0) +
           extras.reduce((sum, e) => {
             const lot = settlementLotFromExtraBid(e);
-            const merged = mergeLotDisplayRow(lot, undefined, getDivisor(lot));
+            const merged = mergeLotDisplayRow(lot, '', undefined, getDivisor(lot));
             return sum + (Number(merged.qty) || 0);
           }, 0)
       )
@@ -1830,11 +2007,11 @@ function buildRateClustersFromSellerLots(
     const sid = lotStableId(lot, i);
     if (removedIds.has(sid)) return;
     const ov = lotOverrides?.[sid];
-    pushRow(mergeLotDisplayRow(lot, ov, divFn(lot), settlementRateMode));
+    pushRow(mergeLotDisplayRow(lot, sid, lotOverrides, divFn(lot), settlementRateMode));
   });
   for (const e of extraBidLots ?? []) {
     const lot = settlementLotFromExtraBid(e);
-    pushRow(mergeLotDisplayRow(lot, undefined, divFn(lot), settlementRateMode));
+    pushRow(mergeLotDisplayRow(lot, '', undefined, divFn(lot), settlementRateMode));
   }
   return Array.from(rateMap.values()).sort((a, b) => b.rate - a.rate);
 }
@@ -1965,7 +2142,7 @@ function buildSellerSubPattiPrintData(
     const sid = lotStableId(lot, lotIndex);
     if (removedIds.has(sid)) return [];
     const ov = lotOverrides?.[sid];
-    const row = mergeLotDisplayRow(lot, ov, divisorFn(lot), settlementRateMode);
+    const row = mergeLotDisplayRow(lot, sid, lotOverrides, divisorFn(lot), settlementRateMode);
     return [{
       mark: (seller.sellerMark || '-').trim() || '-',
       bags: Number(row.qty) || 0,
@@ -1976,7 +2153,7 @@ function buildSellerSubPattiPrintData(
   });
   const lotRowsFromExtra = extraBidLots.map(e => {
     const lot = settlementLotFromExtraBid(e);
-    const row = mergeLotDisplayRow(lot, undefined, divisorFn(lot), settlementRateMode);
+    const row = mergeLotDisplayRow(lot, '', undefined, divisorFn(lot), settlementRateMode);
     return {
       mark: (seller.sellerMark || '-').trim() || '-',
       bags: Number(row.qty) || 0,
@@ -3713,7 +3890,7 @@ const SettlementPage = () => {
         return `${sellerName}: at least one lot is required`;
       }
       for (const { lot, sid } of visibleLots) {
-        const row = mergeLotDisplayRow(lot, lotOv[sid], getLotDivisor(lot));
+        const row = mergeLotDisplayRow(lot, sid, lotOv, getLotDivisor(lot));
         if (!Number.isFinite(row.qty) || row.qty <= 0) {
           return `${sellerName}: quantity must be greater than 0`;
         }
@@ -3726,7 +3903,7 @@ const SettlementPage = () => {
       }
       for (const e of extraLots) {
         const lot = settlementLotFromExtraBid(e);
-        const row = mergeLotDisplayRow(lot, undefined, getLotDivisor(lot));
+        const row = mergeLotDisplayRow(lot, '', undefined, getLotDivisor(lot));
         if (!Number.isFinite(row.qty) || row.qty <= 0) {
           return `${sellerName}: quantity must be greater than 0 (extra bid)`;
         }
@@ -3741,11 +3918,11 @@ const SettlementPage = () => {
       const allowedQty = Math.round(totalArrivalBagsForSeller(seller));
       let qtyTot = 0;
       for (const { lot, sid } of visibleLots) {
-        qtyTot += mergeLotDisplayRow(lot, lotOv[sid], getLotDivisor(lot)).qty;
+        qtyTot += mergeLotDisplayRow(lot, sid, lotOv, getLotDivisor(lot)).qty;
       }
       for (const e of extraLots) {
         const lot = settlementLotFromExtraBid(e);
-        qtyTot += mergeLotDisplayRow(lot, undefined, getLotDivisor(lot)).qty;
+        qtyTot += mergeLotDisplayRow(lot, '', undefined, getLotDivisor(lot)).qty;
       }
       if (allowedQty > 0 && qtyTot !== allowedQty) {
         if (qtyTot > allowedQty) {
@@ -4559,11 +4736,11 @@ const SettlementPage = () => {
       const amountFromApi = (seller.lots ?? [])
         .map((lot, i) => ({ lot, sid: lotStableId(lot, i) }))
         .filter(x => !removedSet.has(x.sid))
-        .map(({ lot, sid }) => mergeLotDisplayRow(lot, lotOv[sid], getLotDivisor(lot)))
+        .map(({ lot, sid }) => mergeLotDisplayRow(lot, sid, lotOv, getLotDivisor(lot)))
         .reduce((s, r) => s + r.amount, 0);
       const amountFromExtras = extras.reduce((s, e) => {
         const lot = settlementLotFromExtraBid(e);
-        const row = mergeLotDisplayRow(lot, undefined, getLotDivisor(lot));
+        const row = mergeLotDisplayRow(lot, '', undefined, getLotDivisor(lot));
         return s + row.amount;
       }, 0);
       const amountTot = amountFromApi + amountFromExtras;
@@ -5013,30 +5190,34 @@ const SettlementPage = () => {
     [runSellerContactSearch]
   );
 
-  const setLotSalesField = useCallback((sellerId: string, sid: string, field: keyof LotSalesOverride, raw: string) => {
-    setLotSalesOverridesBySellerId(prev => {
-      const curSeller = { ...(prev[sellerId] ?? {}) };
-      const curLot = { ...(curSeller[sid] ?? {}) };
-      if (raw.trim() === '') {
-        delete curLot[field];
-      } else {
-        const n = parseFloat(raw);
-        if (!Number.isFinite(n)) return prev;
-        curLot[field] = field === 'qty' ? Math.round(n) : n;
-      }
-      if (Object.keys(curLot).length === 0) {
-        delete curSeller[sid];
-      } else {
-        curSeller[sid] = curLot;
-      }
-      if (Object.keys(curSeller).length === 0) {
-        const next = { ...prev };
-        delete next[sellerId];
-        return next;
-      }
-      return { ...prev, [sellerId]: curSeller };
-    });
-  }, []);
+  const setLotSalesField = useCallback(
+    (sellerId: string, sid: string, field: keyof LotSalesOverride, raw: string, entryIndex?: number) => {
+      setLotSalesOverridesBySellerId(prev => {
+        const curSeller = { ...(prev[sellerId] ?? {}) };
+        const entryKey = entryIndex === undefined || entryIndex === 0 ? sid : `${sid}::${entryIndex}`;
+        const curLot = { ...(curSeller[entryKey] ?? {}) };
+        if (raw.trim() === '') {
+          delete curLot[field];
+        } else {
+          const n = parseFloat(raw);
+          if (!Number.isFinite(n)) return prev;
+          curLot[field] = field === 'qty' ? Math.round(n) : n;
+        }
+        if (Object.keys(curLot).length === 0) {
+          delete curSeller[entryKey];
+        } else {
+          curSeller[entryKey] = curLot;
+        }
+        if (Object.keys(curSeller).length === 0) {
+          const next = { ...prev };
+          delete next[sellerId];
+          return next;
+        }
+        return { ...prev, [sellerId]: curSeller };
+      });
+    },
+    []
+  );
 
   const updateExtraBidLotField = useCallback(
     (sellerId: string, extraId: string, field: 'qty' | 'weight' | 'ratePerBag', raw: string) => {
@@ -5264,6 +5445,7 @@ const SettlementPage = () => {
       lotOvForSeller: Record<string, LotSalesOverride>
     ) => {
       if (settlementFormMode !== 'saved' || isSettlementFormReadOnly) return;
+      if (!tr.isExtraBid && tr.entryIndex !== 0) return;
       const sid = seller.sellerId;
       if (activeSplitGroupIdBySellerIdRef.current[sid]) {
         toast.message('Save or cancel the current split edit first.');
@@ -7056,7 +7238,24 @@ const SettlementPage = () => {
                   if (p.type === 'api') {
                     const hit = apiLotBySid.get(p.sid);
                     if (!hit) continue;
-                    tableRows.push({ lot: hit.lot, sid: hit.sid, isExtraBid: false as const });
+                    const nEnt = (hit.lot.entries ?? []).length;
+                    if (nEnt <= 0) {
+                      tableRows.push({
+                        lot: hit.lot,
+                        sid: hit.sid,
+                        isExtraBid: false as const,
+                        entryIndex: 0,
+                      });
+                    } else {
+                      for (let ei = 0; ei < nEnt; ei++) {
+                        tableRows.push({
+                          lot: hit.lot,
+                          sid: hit.sid,
+                          isExtraBid: false as const,
+                          entryIndex: ei,
+                        });
+                      }
+                    }
                   } else {
                     const e = extraById.get(p.id);
                     if (!e) continue;
@@ -7068,9 +7267,16 @@ const SettlementPage = () => {
                     });
                   }
                 }
-                const lotRows = tableRows.map(r =>
-                  mergeLotDisplayRow(r.lot, r.isExtraBid ? undefined : lotOv[r.sid], getLotDivisor(r.lot))
-                );
+                const seenLotContrib = new Set<string>();
+                const lotRows: ReturnType<typeof mergeLotDisplayRow>[] = [];
+                for (const tr of tableRows) {
+                  const k = tr.isExtraBid ? `e:${tr.sid}` : `a:${tr.sid}`;
+                  if (seenLotContrib.has(k)) continue;
+                  seenLotContrib.add(k);
+                  lotRows.push(
+                    mergeLotDisplayRow(tr.lot, tr.sid, tr.isExtraBid ? undefined : lotOv, getLotDivisor(tr.lot))
+                  );
+                }
                 const qtyTot = lotRows.reduce((s, r) => s + r.qty, 0);
                 const weightTot = lotRows.reduce((s, r) => s + r.weight, 0);
                 const amountTot = lotRows.reduce((s, r) => s + r.amount, 0);
@@ -7078,16 +7284,24 @@ const SettlementPage = () => {
                 const qtyOutOfBalance = allowedQtyBags > 0 && qtyTot !== allowedQtyBags;
                 const invalidLotFieldBySid: Record<string, { qty?: true; weight?: true; rate?: true }> = {};
                 for (const tr of tableRows) {
-                  const r = mergeLotDisplayRow(
-                    tr.lot,
-                    tr.isExtraBid ? undefined : lotOv[tr.sid],
-                    getLotDivisor(tr.lot)
-                  );
+                  const r = tr.isExtraBid
+                    ? mergeLotDisplayRow(tr.lot, tr.sid, undefined, getLotDivisor(tr.lot))
+                    : mergeLotEntryDisplayRow(
+                        seller,
+                        tr.lot,
+                        tr.entryIndex,
+                        lotOv,
+                        tr.sid,
+                        getLotDivisor(tr.lot)
+                      );
                   const inv: { qty?: true; weight?: true; rate?: true } = {};
                   if (!Number.isFinite(r.qty) || r.qty <= 0) inv.qty = true;
                   if (!Number.isFinite(r.weight) || r.weight <= 0) inv.weight = true;
                   if (!Number.isFinite(r.ratePerBag) || r.ratePerBag <= 0) inv.rate = true;
-                  if (Object.keys(inv).length > 0) invalidLotFieldBySid[tr.sid] = inv;
+                  if (Object.keys(inv).length > 0) {
+                    const entryKey = !tr.isExtraBid && tr.entryIndex > 0 ? `${tr.sid}::${tr.entryIndex}` : tr.sid;
+                    invalidLotFieldBySid[entryKey] = inv;
+                  }
                 }
                 const sellerNameMissing = !(form.name || seller.sellerName || '').trim();
                 const highlightSellerName = showSaveValidationChrome && sellerNameMissing;
@@ -7685,7 +7899,7 @@ const SettlementPage = () => {
                                 #
                               </th>
                               <th className="border-b border-white/25 px-2 py-2.5 text-left text-[10px] font-bold uppercase tracking-wide text-white lg:px-3">
-                                Item (lot)
+                                Item (bid)
                               </th>
                               <th className="border-b border-white/25 px-2 py-2.5 text-center text-[10px] font-bold uppercase tracking-wide text-white lg:px-3">
                                 Qty
@@ -7718,29 +7932,35 @@ const SettlementPage = () => {
                                       'rounded-lg ring-2 ring-destructive/50 ring-inset'
                                   )}
                                 >
-                                  No lots for this seller
+                                  No bids for this seller
                                 </td>
                               </tr>
                             ) : (
                               tableRows.map((tr, displayIdx) => {
                                 const { lot, sid, isExtraBid } = tr;
+                                const entryIndex = tr.isExtraBid ? 0 : tr.entryIndex;
                                 const rowKey = getSalesRowKeyForTableRow(isExtraBid, sid);
                                 const splitSnap = splitSnapForSeller;
                                 const rowInActiveSplitGroup = !!(
                                   splitSnap &&
                                   splitSnap.isEditing &&
-                                  (rowKey === splitSnap.rowKeyA || rowKey === splitSnap.rowKeyB)
+                                  (rowKey === splitSnap.rowKeyA || rowKey === splitSnap.rowKeyB) &&
+                                  (isExtraBid || entryIndex === 0)
                                 );
                                 const splitEditLocksOthers = !!(splitSnap && splitSnap.isEditing);
                                 const fieldLocked =
                                   isSettlementFormReadOnly ||
                                   (splitEditLocksOthers && !rowInActiveSplitGroup);
                                 const div = getLotDivisor(lot);
-                                const row = mergeLotDisplayRow(
+                                const mergedLot = mergeLotDisplayRow(
                                   lot,
-                                  isExtraBid ? undefined : lotOv[sid],
+                                  sid,
+                                  isExtraBid ? undefined : lotOv,
                                   div
                                 );
+                                const row = isExtraBid
+                                  ? mergedLot
+                                  : mergeLotEntryDisplayRow(seller, lot, entryIndex, lotOv, sid, div);
                                 const bounds = commodityAvgWeightBounds[lot.commodityName || ''];
                                 const avgBelowMin = bounds != null && bounds.min > 0 && row.avg < bounds.min;
                                 const avgAboveMax = bounds != null && bounds.max > 0 && row.avg > bounds.max;
@@ -7750,12 +7970,12 @@ const SettlementPage = () => {
                                     settlementFormMode === 'in-progress' ||
                                     settlementFormMode === 'saved') &&
                                   !isSettlementFormReadOnly;
-                                const qtyCellEditable =
+                                const lotFieldEditable =
                                   qtyEditableInSalesReport &&
                                   (!splitEditLocksOthers || rowInActiveSplitGroup);
                                 return (
                                   <tr
-                                    key={sid}
+                                    key={`${sid}-${isExtraBid ? 'x' : entryIndex}`}
                                     data-split-group={splitSnap?.splitGroupId ?? ''}
                                     className="border-b border-border/40 bg-card/90 text-center transition-colors hover:bg-muted/25"
                                   >
@@ -7787,7 +8007,7 @@ const SettlementPage = () => {
                                       )}
                                     </td>
                                     <td className="px-1 py-1.5 align-middle lg:px-2">
-                                      {qtyCellEditable ? (
+                                      {lotFieldEditable ? (
                                         <SettlementNumericInput
                                           value={Number.isFinite(row.qty) ? row.qty : 0}
                                           onCommit={n => {
@@ -7797,7 +8017,7 @@ const SettlementPage = () => {
                                             } else if (isExtraBid) {
                                               updateExtraBidLotField(seller.sellerId, sid, 'qty', s);
                                             } else {
-                                              setLotSalesField(seller.sellerId, sid, 'qty', s);
+                                              setLotSalesField(seller.sellerId, sid, 'qty', s, entryIndex);
                                             }
                                           }}
                                           onClear={
@@ -7806,16 +8026,20 @@ const SettlementPage = () => {
                                               : isExtraBid
                                                 ? () =>
                                                     updateExtraBidLotField(seller.sellerId, sid, 'qty', '0')
-                                                : () => setLotSalesField(seller.sellerId, sid, 'qty', '')
+                                                : () => setLotSalesField(seller.sellerId, sid, 'qty', '', entryIndex)
                                           }
                                           commitMode="live"
                                           integerOnly
                                           fractionDigits={0}
                                           className={cn(
                                             'mx-auto h-9 w-[4.5rem] rounded-md border border-border bg-background px-1.5 text-center text-xs font-semibold tabular-nums [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none',
-                                            showSaveValidationChrome &&
-                                              invalidLotFieldBySid[sid]?.qty &&
-                                              'ring-2 ring-destructive/60 ring-offset-1 ring-offset-background dark:ring-offset-background'
+                                            (() => {
+                                              const entryKey = !isExtraBid && entryIndex > 0 ? `${sid}::${entryIndex}` : sid;
+                                              if (showSaveValidationChrome && invalidLotFieldBySid[entryKey]?.qty) {
+                                                return 'ring-2 ring-destructive/60 ring-offset-1 ring-offset-background dark:ring-offset-background';
+                                              }
+                                              return '';
+                                            })()
                                           )}
                                           aria-label="Quantity bags"
                                           disabled={fieldLocked}
@@ -7826,44 +8050,60 @@ const SettlementPage = () => {
                                             settlementReadOnlyCellClass,
                                             'mx-auto w-[4.5rem] text-foreground'
                                           )}
-                                          title="Quantity from auction / arrivals (editable in settlement)"
+                                          title="Per-buyer share of lot quantity (edit on first row for this lot)"
                                         >
                                           {row.qty}
                                         </div>
                                       )}
                                     </td>
                                     <td className="px-1 py-1.5 align-middle lg:px-2">
-                                      <SettlementNumericInput
-                                        value={Number.isFinite(row.weight) ? row.weight : 0}
-                                        onCommit={n => {
-                                          const s = String(n);
-                                          if (splitSnap && rowInActiveSplitGroup) {
-                                            applySplitGroupQtyWeightSync(seller, splitSnap, rowKey, 'weight', s);
-                                          } else if (isExtraBid) {
-                                            updateExtraBidLotField(seller.sellerId, sid, 'weight', s);
-                                          } else {
-                                            setLotSalesField(seller.sellerId, sid, 'weight', s);
+                                      {lotFieldEditable ? (
+                                        <SettlementNumericInput
+                                          value={Number.isFinite(row.weight) ? row.weight : 0}
+                                          onCommit={n => {
+                                            const s = String(n);
+                                            if (splitSnap && rowInActiveSplitGroup) {
+                                              applySplitGroupQtyWeightSync(seller, splitSnap, rowKey, 'weight', s);
+                                            } else if (isExtraBid) {
+                                              updateExtraBidLotField(seller.sellerId, sid, 'weight', s);
+                                            } else {
+                                              setLotSalesField(seller.sellerId, sid, 'weight', s, entryIndex);
+                                            }
+                                          }}
+                                          onClear={
+                                            rowInActiveSplitGroup
+                                              ? undefined
+                                              : isExtraBid
+                                                ? () =>
+                                                    updateExtraBidLotField(seller.sellerId, sid, 'weight', '0')
+                                                : () => setLotSalesField(seller.sellerId, sid, 'weight', '', entryIndex)
                                           }
-                                        }}
-                                        onClear={
-                                          rowInActiveSplitGroup
-                                            ? undefined
-                                            : isExtraBid
-                                              ? () =>
-                                                  updateExtraBidLotField(seller.sellerId, sid, 'weight', '0')
-                                              : () => setLotSalesField(seller.sellerId, sid, 'weight', '')
-                                        }
-                                        commitMode="live"
-                                        fractionDigits={2}
-                                        className={cn(
-                                          'mx-auto h-9 w-[5rem] rounded-md border border-border bg-background px-1.5 text-center text-xs font-semibold tabular-nums [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none',
-                                          showSaveValidationChrome &&
-                                            invalidLotFieldBySid[sid]?.weight &&
-                                            'ring-2 ring-destructive/60 ring-offset-1 ring-offset-background dark:ring-offset-background'
-                                        )}
-                                        aria-label="Weight kg"
-                                        disabled={fieldLocked}
-                                      />
+                                          commitMode="live"
+                                          fractionDigits={2}
+                                          className={cn(
+                                            'mx-auto h-9 w-[5rem] rounded-md border border-border bg-background px-1.5 text-center text-xs font-semibold tabular-nums [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none',
+                                            (() => {
+                                              const entryKey = !isExtraBid && entryIndex > 0 ? `${sid}::${entryIndex}` : sid;
+                                              if (showSaveValidationChrome && invalidLotFieldBySid[entryKey]?.weight) {
+                                                return 'ring-2 ring-destructive/60 ring-offset-1 ring-offset-background dark:ring-offset-background';
+                                              }
+                                              return '';
+                                            })()
+                                          )}
+                                          aria-label="Weight kg"
+                                          disabled={fieldLocked}
+                                        />
+                                      ) : (
+                                        <div
+                                          className={cn(
+                                            settlementReadOnlyCellClass,
+                                            'mx-auto w-[5rem] text-foreground'
+                                          )}
+                                          title="Edit quantity/weight on the first row for this lot"
+                                        >
+                                          {Number.isFinite(row.weight) ? row.weight.toFixed(1) : '0.0'}
+                                        </div>
+                                      )}
                                     </td>
                                     <td className="px-1 py-1.5 align-middle lg:px-2">
                                       <div
@@ -7884,34 +8124,50 @@ const SettlementPage = () => {
                                       )}
                                     </td>
                                     <td className="px-1 py-1.5 align-middle lg:px-2">
-                                      <SettlementNumericInput
-                                        value={Number.isFinite(row.ratePerBag) ? row.ratePerBag : 0}
-                                        onCommit={n => {
-                                          const s = String(n);
-                                          if (isExtraBid) {
-                                            updateExtraBidLotField(seller.sellerId, sid, 'ratePerBag', s);
-                                          } else {
-                                            setLotSalesField(seller.sellerId, sid, 'ratePerBag', s);
+                                      {lotFieldEditable ? (
+                                        <SettlementNumericInput
+                                          value={Number.isFinite(row.ratePerBag) ? row.ratePerBag : 0}
+                                          onCommit={n => {
+                                            const s = String(n);
+                                            if (isExtraBid) {
+                                              updateExtraBidLotField(seller.sellerId, sid, 'ratePerBag', s);
+                                            } else {
+                                              setLotSalesField(seller.sellerId, sid, 'ratePerBag', s, entryIndex);
+                                            }
+                                          }}
+                                          onClear={
+                                            isExtraBid
+                                              ? () =>
+                                                  updateExtraBidLotField(seller.sellerId, sid, 'ratePerBag', '0')
+                                              : () => setLotSalesField(seller.sellerId, sid, 'ratePerBag', '', entryIndex)
                                           }
-                                        }}
-                                        onClear={
-                                          isExtraBid
-                                            ? () =>
-                                                updateExtraBidLotField(seller.sellerId, sid, 'ratePerBag', '0')
-                                            : () => setLotSalesField(seller.sellerId, sid, 'ratePerBag', '')
-                                        }
-                                        commitMode="live"
-                                        fractionDigits={2}
-                                        className={cn(
-                                          'mx-auto h-9 w-[5.25rem] rounded-md border border-border bg-background px-1.5 text-center text-xs font-semibold tabular-nums [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none',
-                                          showSaveValidationChrome &&
-                                            invalidLotFieldBySid[sid]?.rate &&
-                                            'ring-2 ring-destructive/60 ring-offset-1 ring-offset-background dark:ring-offset-background'
-                                        )}
-                                        aria-label="Rate per bag"
-                                        title="Seller settlement rate per bag; amount uses commodity divisor from settings"
-                                        disabled={fieldLocked}
-                                      />
+                                          commitMode="live"
+                                          fractionDigits={2}
+                                          className={cn(
+                                            'mx-auto h-9 w-[5.25rem] rounded-md border border-border bg-background px-1.5 text-center text-xs font-semibold tabular-nums [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none',
+                                            (() => {
+                                              const entryKey = !isExtraBid && entryIndex > 0 ? `${sid}::${entryIndex}` : sid;
+                                              if (showSaveValidationChrome && invalidLotFieldBySid[entryKey]?.rate) {
+                                                return 'ring-2 ring-destructive/60 ring-offset-1 ring-offset-background dark:ring-offset-background';
+                                              }
+                                              return '';
+                                            })()
+                                          )}
+                                          aria-label="Rate per bag"
+                                          title="Seller settlement rate per bag; amount uses commodity divisor from settings"
+                                          disabled={fieldLocked}
+                                        />
+                                      ) : (
+                                        <div
+                                          className={cn(
+                                            settlementReadOnlyCellClass,
+                                            'mx-auto w-[5.25rem] text-foreground'
+                                          )}
+                                          title="Rate for this buyer bid (edit on first row for lot-wide override)"
+                                        >
+                                          {Number.isFinite(row.ratePerBag) ? row.ratePerBag.toFixed(2) : '0.00'}
+                                        </div>
+                                      )}
                                     </td>
                                     <td className="px-1 py-1.5 align-middle lg:px-2">
                                       <div
@@ -7926,7 +8182,9 @@ const SettlementPage = () => {
                                     </td>
                                     <td className="px-1 py-1.5 align-middle text-center lg:px-2">
                                       <div className="inline-flex items-center justify-center gap-0.5">
-                                        {settlementFormMode === 'saved' && !isSettlementFormReadOnly && (
+                                        {settlementFormMode === 'saved' &&
+                                          !isSettlementFormReadOnly &&
+                                          (isExtraBid || entryIndex === 0) && (
                                           <Button
                                             type="button"
                                             variant="ghost"
@@ -7936,14 +8194,15 @@ const SettlementPage = () => {
                                             title="Split this row in half (enable edit with Alt+M)"
                                             disabled={
                                               splitEditLocksOthers ||
-                                              row.qty <= 0 ||
-                                              row.weight <= 0
+                                              mergedLot.qty <= 0 ||
+                                              mergedLot.weight <= 0
                                             }
-                                            onClick={() => splitInlineSalesTableRow(seller, tr, row, lotOv)}
+                                            onClick={() => splitInlineSalesTableRow(seller, tr, mergedLot, lotOv)}
                                           >
                                             <Edit3 className="h-4 w-4" />
                                           </Button>
                                         )}
+                                        {(isExtraBid || entryIndex === 0) && (
                                         <Button
                                           type="button"
                                           variant="ghost"
@@ -7955,13 +8214,14 @@ const SettlementPage = () => {
                                             setDeleteLotConfirm({
                                               sellerId: seller.sellerId,
                                               lotId: sid,
-                                              itemLabel: row.itemLabel,
+                                              itemLabel: mergedLot.itemLabel,
                                               isExtraBid,
                                             })
                                           }
                                         >
                                           <Trash2 className="h-4 w-4" />
                                         </Button>
+                                        )}
                                       </div>
                                     </td>
                                   </tr>
