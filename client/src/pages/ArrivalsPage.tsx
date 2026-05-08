@@ -1715,7 +1715,7 @@ const ArrivalsPage = () => {
     const g = gatepassNumber.trim();
     if (!g) return false;
     if (g.length < 1 || g.length > 30) return true;
-    return !/^[a-zA-Z0-9]+$/.test(g);
+    return !/^[a-zA-Z0-9-]+$/.test(g);
   }, [gatepassNumber]);
 
   const isBrokerNameInvalid = useMemo(() => {
@@ -3454,7 +3454,7 @@ const ArrivalsPage = () => {
                             "text-xs font-bold uppercase tracking-wider mb-2 block leading-snug sm:mb-2 sm:flex sm:min-h-[2.85rem] sm:items-end sm:pb-0.5",
                             isGatepassNumberInvalid ? "text-red-500" : "text-muted-foreground",
                           )}>
-                            Gatepass (optional) {isGatepassNumberInvalid && '⚠ 1–30, alphanumeric'}
+                            Gatepass (optional) {isGatepassNumberInvalid && '⚠ 1–30, letters, digits, hyphens'}
                           </label>
                           <Input placeholder="Gatepass no. (optional)" value={gatepassNumber} onChange={e => setGatepassNumber(e.target.value.length <= 30 ? e.target.value : gatepassNumber)} className={cn("h-11 w-full min-w-0 rounded-xl text-sm", isGatepassNumberInvalid && "border-red-500 ring-2 ring-red-500/30 bg-red-50 dark:bg-red-950/20")} maxLength={30} />
                         </div>
@@ -4495,7 +4495,7 @@ const ArrivalsPage = () => {
                             "text-xs font-bold uppercase tracking-wider mb-2 block leading-snug sm:mb-2 sm:flex sm:min-h-[2.85rem] sm:items-end sm:pb-0.5",
                             isGatepassNumberInvalid ? "text-red-500" : "text-muted-foreground",
                           )}>
-                            Gatepass (optional) {isGatepassNumberInvalid && '⚠ 1–30'}
+                            Gatepass (optional) {isGatepassNumberInvalid && '⚠ 1–30, letters, digits, hyphens'}
                           </label>
                           <Input placeholder="Gatepass (optional)" value={gatepassNumber} onChange={e => setGatepassNumber(e.target.value.length <= 30 ? e.target.value : gatepassNumber)} className={cn("h-12 w-full min-w-0 rounded-xl", isGatepassNumberInvalid && "border-red-500 ring-2 ring-red-500/30 bg-red-50 dark:bg-red-950/20")} maxLength={30} />
                         </div>
