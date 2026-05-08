@@ -946,10 +946,14 @@ function billHasAnyLineWeightZeroOrMissing(b: BillData): boolean {
 
 /** Saved bills list paging (SummaryPage-style; uses `totalElements` from Spring page). */
 const BILLING_SAVED_BILLS_PAGE_SIZE = 100;
+const BILLING_SAVED_BILLS_FETCH_CONCURRENCY = 4;
+const BILLING_FOCUS_RESYNC_MIN_INTERVAL_MS = 60_000;
 /** Desktop saved-bills list: column ratios (ex-<colgroup>). Grid avoids broken thead/body sync when rows are `position:absolute` (virtualizer). */
 const SAVED_BILLS_TABLE_GRID_COLS =
   'minmax(0,10fr) minmax(0,12fr) minmax(0,11fr) minmax(0,8fr) minmax(0,10fr) minmax(0,9fr) minmax(0,9fr) minmax(0,10fr) minmax(0,9fr) minmax(0,12fr)';
 const BILLING_WEIGHING_PAGE_SIZE = 100;
+const BILLING_ARRIVAL_DETAILS_PAGE_SIZE = 200;
+const BILLING_ARRIVAL_DETAILS_FETCH_CONCURRENCY = 4;
 /** Sales Pad–aligned lot page size for add-bid browser (`id,asc`). */
 const BILLING_ADD_BID_LOTS_PAGE_SIZE = 90;
 
@@ -976,6 +980,25 @@ async function fetchAllWeighingSessions(signal?: AbortSignal): Promise<Awaited<R
     if (page > 500) break;
   }
   return merged;
+}
+
+async function fetchRemainingPages<T>(
+  firstPageItems: T[],
+  totalElements: number,
+  pageSize: number,
+  concurrency: number,
+  fetchPage: (page: number) => Promise<T[]>,
+): Promise<T[]> {
+  const totalPages = Math.ceil(Math.max(totalElements, firstPageItems.length) / pageSize);
+  if (totalPages <= 1) return firstPageItems;
+
+  const rest: T[][] = [];
+  const pageIndexes = Array.from({ length: totalPages - 1 }, (_, idx) => idx + 1);
+  for (let i = 0; i < pageIndexes.length; i += concurrency) {
+    const chunk = await Promise.all(pageIndexes.slice(i, i + concurrency).map(fetchPage));
+    rest.push(...chunk);
+  }
+  return firstPageItems.concat(...rest);
 }
 
 async function fetchAllAuctionLotsForBrowse(signal?: AbortSignal): Promise<LotSummaryDTO[]> {
@@ -1072,12 +1095,15 @@ const BillingPage = () => {
   const [activeLotSlides, setActiveLotSlides] = useState<Record<number, number>>({});
   const [savedBills, setSavedBills] = useState<SalesBillDTO[]>([]);
   const [savedBillsLoading, setSavedBillsLoading] = useState(false);
+  const savedBillsLoadSeqRef = useRef(0);
+  const lastBillingFocusResyncAtRef = useRef(Date.now());
   const [billPersisting, setBillPersisting] = useState(false);
   const persistBillPromiseRef = useRef<Promise<SalesBillDTO | null> | null>(null);
   const [commodities, setCommodities] = useState<any[]>([]);
   const [fullConfigs, setFullConfigs] = useState<FullCommodityConfigDto[]>([]);
   const [weighingSessions, setWeighingSessions] = useState<any[]>([]);
   const [arrivalDetails, setArrivalDetails] = useState<ArrivalDetail[]>([]);
+  const arrivalDetailsLoadSeqRef = useRef(0);
   const [collapsedCommodityIndexes, setCollapsedCommodityIndexes] = useState<number[]>([]);
   const SUMMARY_COMMODITY_COL_WIDTH = 168;
 
@@ -1154,6 +1180,23 @@ const BillingPage = () => {
     );
   }, [bill]);
 
+  const showBrokerageColumn = useMemo(
+    () => !!(bill && billHasBrokerForBrokerage(bill)),
+    [bill],
+  );
+
+  /** Desktop line + header grid: 8 base cols + optional preset + optional brokerage, then action. */
+  const billingLineGridColsClass = useMemo(() => {
+    if (showPresetColumn) {
+      return showBrokerageColumn
+        ? 'lg:grid-cols-[minmax(140px,1.6fr),repeat(10,minmax(0,1fr)),minmax(44px,0.5fr)]'
+        : 'lg:grid-cols-[minmax(140px,1.6fr),repeat(9,minmax(0,1fr)),minmax(44px,0.5fr)]';
+    }
+    return showBrokerageColumn
+      ? 'lg:grid-cols-[minmax(140px,1.6fr),repeat(9,minmax(0,1fr)),minmax(44px,0.5fr)]'
+      : 'lg:grid-cols-[minmax(140px,1.6fr),repeat(8,minmax(0,1fr)),minmax(44px,0.5fr)]';
+  }, [showPresetColumn, showBrokerageColumn]);
+
   const billingCopyLabelsResolved = useMemo(
     () => (billingPrintCopyLabels.length > 0 ? billingPrintCopyLabels : ['ORIGINAL COPY']),
     [billingPrintCopyLabels],
@@ -1227,7 +1270,12 @@ const BillingPage = () => {
     setActiveLotSlides(prev => (prev[groupIdx] === idx ? prev : { ...prev, [groupIdx]: idx }));
   }, [bill]);
 
-  const { auctionResults: auctionData, refetch: refetchAuctions } = useAuctionResults();
+  const {
+    auctionResults: auctionData,
+    refetch: refetchAuctions,
+    resultsComplete: auctionResultsComplete,
+    error: auctionResultsError,
+  } = useAuctionResults();
 
   // Precompute per-commodity average weight bounds from full config (minWeight/maxWeight).
   const commodityAvgWeightBounds = useMemo(() => {
@@ -1488,60 +1536,124 @@ const BillingPage = () => {
   // Load saved bills from backend (all pages; no 200 cap)
   const loadSavedBills = useCallback(async () => {
     if (!canView) return;
+    const seq = savedBillsLoadSeqRef.current + 1;
+    savedBillsLoadSeqRef.current = seq;
     setSavedBillsLoading(true);
     try {
-      const merged: SalesBillDTO[] = [];
-      let page = 0;
-      let totalElements = Infinity;
-      for (;;) {
-        const batch = await billingApi.getPage({
-          page,
-          size: BILLING_SAVED_BILLS_PAGE_SIZE,
-          sort: 'billDate,desc',
-        });
-        const content = batch.content ?? [];
-        totalElements = batch.totalElements ?? totalElements;
-        merged.push(...content);
-        if (content.length < BILLING_SAVED_BILLS_PAGE_SIZE || merged.length >= totalElements) break;
-        page += 1;
-        if (page > 500) break;
+      const first = await billingApi.getPage({
+        page: 0,
+        size: BILLING_SAVED_BILLS_PAGE_SIZE,
+        sort: 'billDate,desc',
+      });
+      const totalElements = Number(first.totalElements ?? first.content?.length ?? 0);
+      const merged = await fetchRemainingPages<SalesBillDTO>(
+        first.content ?? [],
+        totalElements,
+        BILLING_SAVED_BILLS_PAGE_SIZE,
+        BILLING_SAVED_BILLS_FETCH_CONCURRENCY,
+        async page => {
+          const batch = await billingApi.getPage({
+            page,
+            size: BILLING_SAVED_BILLS_PAGE_SIZE,
+            sort: 'billDate,desc',
+          });
+          return batch.content ?? [];
+        },
+      );
+      if (savedBillsLoadSeqRef.current === seq) {
+        setSavedBills(merged);
       }
-      setSavedBills(merged);
     } catch {
-      setSavedBills([]);
+      /* Keep prior savedBills so reserved-bid keys do not disappear after transient API failure. */
     } finally {
-      setSavedBillsLoading(false);
+      if (savedBillsLoadSeqRef.current === seq) {
+        setSavedBillsLoading(false);
+      }
     }
   }, [canView]);
+
+  const reloadArrivalDetails = useCallback(async () => {
+    const first = await arrivalsApi.listDetailPage({
+      page: 0,
+      size: BILLING_ARRIVAL_DETAILS_PAGE_SIZE,
+    });
+    const totalElements = Number(first.totalElements ?? first.items.length);
+    return fetchRemainingPages<ArrivalDetail>(
+      first.items,
+      totalElements,
+      BILLING_ARRIVAL_DETAILS_PAGE_SIZE,
+      BILLING_ARRIVAL_DETAILS_FETCH_CONCURRENCY,
+      async page => {
+        const batch = await arrivalsApi.listDetailPage({
+          page,
+          size: BILLING_ARRIVAL_DETAILS_PAGE_SIZE,
+        });
+        return batch.items;
+      },
+    );
+  }, []);
 
   useEffect(() => {
     if (!canView) return;
     void loadSavedBills();
   }, [canView, loadSavedBills]);
 
-  const reloadArrivalDetails = useCallback(async () => {
-    const all: ArrivalDetail[] = [];
-    for (let page = 0; page < 20; page++) {
-      const chunk = await arrivalsApi.listDetail(page, 100);
-      if (chunk.length === 0) break;
-      all.push(...chunk);
-      if (chunk.length < 100) break;
-    }
-    setArrivalDetails(all);
-  }, []);
-
+  /** After idle tab / failed refresh, auction pages or saved bills can be stale; resync without blanking list. */
   useEffect(() => {
     if (!canView) return;
+    const resyncIfStale = () => {
+      const now = Date.now();
+      if (now - lastBillingFocusResyncAtRef.current < BILLING_FOCUS_RESYNC_MIN_INTERVAL_MS) return;
+      lastBillingFocusResyncAtRef.current = now;
+      void refetchAuctions({ keepPreviousData: true });
+      void loadSavedBills();
+    };
+    const onVisible = () => {
+      if (document.visibilityState !== 'visible') return;
+      resyncIfStale();
+    };
+    const onWinFocus = () => {
+      resyncIfStale();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('focus', onWinFocus);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('focus', onWinFocus);
+    };
+  }, [canView, refetchAuctions, loadSavedBills]);
+
+  const arrivalDetailsNeeded = useMemo(
+    () =>
+      auctionResultsComplete &&
+      auctionData.some(
+        auction =>
+          !String(auction.sellerName ?? '').trim() ||
+          !String(auction.lotName ?? '').trim() ||
+          !String(auction.vehicleMark ?? '').trim() ||
+          !String(auction.sellerMark ?? '').trim(),
+      ),
+    [auctionData, auctionResultsComplete],
+  );
+
+  useEffect(() => {
+    if (!canView || !arrivalDetailsNeeded) {
+      if (!arrivalDetailsNeeded && arrivalDetails.length > 0) setArrivalDetails([]);
+      return;
+    }
+    const seq = arrivalDetailsLoadSeqRef.current + 1;
+    arrivalDetailsLoadSeqRef.current = seq;
     let cancelled = false;
     (async () => {
       try {
-        await reloadArrivalDetails();
+        const details = await reloadArrivalDetails();
+        if (!cancelled && arrivalDetailsLoadSeqRef.current === seq) setArrivalDetails(details);
       } catch {
-        if (!cancelled) setArrivalDetails([]);
+        if (!cancelled && arrivalDetailsLoadSeqRef.current === seq) setArrivalDetails([]);
       }
     })();
     return () => { cancelled = true; };
-  }, [canView, reloadArrivalDetails]);
+  }, [canView, arrivalDetailsNeeded, arrivalDetails.length, reloadArrivalDetails]);
 
   const handleResync = useCallback(async () => {
     setResyncing(true);
@@ -1552,7 +1664,7 @@ const BillingPage = () => {
         commodityApi.getAllFullConfigs().then(setFullConfigs),
         fetchAllWeighingSessions().then(setWeighingSessions).catch(() => setWeighingSessions([])),
         loadSavedBills(),
-        reloadArrivalDetails(),
+        reloadArrivalDetails().then(setArrivalDetails),
       ]);
       toast.success('Billing data refreshed');
     } catch {
@@ -1972,8 +2084,31 @@ const BillingPage = () => {
     }
   };
 
-  // Load buyer data from completed auctions (arrivals from API; weighing from API)
+  const arrivalLotLookup = useMemo(() => {
+    const map = new Map<string, {
+      sellerName: string;
+      lotName: string;
+      vehicleMark?: string | null;
+      sellerMark?: string;
+    }>();
+    arrivalDetails.forEach((arr) => {
+      (arr.sellers || []).forEach((seller) => {
+        (seller.lots || []).forEach((lot) => {
+          map.set(String(lot.id), {
+            sellerName: seller.sellerName,
+            lotName: lot.lotName,
+            vehicleMark: arr.vehicleMarkAlias,
+            sellerMark: seller.sellerMark,
+          });
+        });
+      });
+    });
+    return map;
+  }, [arrivalDetails]);
+
+  // Load buyer data from completed auctions. Arrival detail is only a fallback for older/missing auction result fields.
   useEffect(() => {
+    if (!auctionResultsComplete) return;
     const buyerMap = new Map<string, BuyerPurchase>();
     const lotBagCountByLotId = new Map<string, number>();
 
@@ -2006,18 +2141,13 @@ const BillingPage = () => {
       let vehicleMark = String(auction.vehicleMark ?? '').trim();
       let sellerMark = String(auction.sellerMark ?? '').trim();
 
-      arrivalDetails.forEach((arr) => {
-        (arr.sellers || []).forEach((seller) => {
-          (seller.lots || []).forEach((lot) => {
-            if (String(lot.id) === String(auction.lotId)) {
-              sellerName = seller.sellerName;
-              lotName = lot.lotName || lotName;
-              if (!vehicleMark) vehicleMark = String(arr.vehicleMarkAlias ?? '').trim();
-              if (!sellerMark) sellerMark = String(seller.sellerMark ?? '').trim();
-            }
-          });
-        });
-      });
+      const arrivalMatch = arrivalLotLookup.get(String(auction.lotId ?? ''));
+      if (arrivalMatch) {
+        sellerName = sellerName || arrivalMatch.sellerName;
+        lotName = lotName || arrivalMatch.lotName;
+        if (!vehicleMark) vehicleMark = String(arrivalMatch.vehicleMark ?? '').trim();
+        if (!sellerMark) sellerMark = String(arrivalMatch.sellerMark ?? '').trim();
+      }
 
       const vKey = auction.vehicleNumber || '';
       const sKey = `${vKey}||${sellerName || ''}`;
@@ -2076,7 +2206,7 @@ const BillingPage = () => {
     });
 
     setBuyers(Array.from(buyerMap.values()));
-  }, [auctionData, weighingSessions, arrivalDetails]);
+  }, [auctionData, arrivalLotLookup, auctionResultsComplete]);
 
   const excludeBillIdForReservation = bill && isBackendBillId(bill.billId) ? bill.billId : null;
   const reservedBidKeysOnOtherBills = useMemo(
@@ -2096,18 +2226,21 @@ const BillingPage = () => {
     [buyers, reservedBidKeysOnOtherBills],
   );
 
+  /** Avoid showing all buyers then shrinking after saved-bills fetch, or partial auction pages. */
+  const billingBuyerListReady = auctionResultsComplete && !savedBillsLoading;
+
   useEffect(() => {
-    if (!selectedBuyerFromDropdown) return;
+    if (!billingBuyerListReady || !selectedBuyerFromDropdown) return;
     const still = buyersForBilling.some(
       b =>
         (b.buyerMark || '').toLowerCase() === (selectedBuyerFromDropdown.buyerMark || '').toLowerCase()
         && (b.buyerName || '').toLowerCase() === (selectedBuyerFromDropdown.buyerName || '').toLowerCase(),
     );
     if (!still) setSelectedBuyerFromDropdown(null);
-  }, [buyersForBilling, selectedBuyerFromDropdown]);
+  }, [buyersForBilling, selectedBuyerFromDropdown, billingBuyerListReady]);
 
   useEffect(() => {
-    if (!selectBidBuyer) return;
+    if (!billingBuyerListReady || !selectBidBuyer) return;
     const still = buyersForBilling.some(
       b =>
         (b.buyerMark || '').toLowerCase() === (selectBidBuyer.buyerMark || '').toLowerCase()
@@ -2117,7 +2250,7 @@ const BillingPage = () => {
       setSelectBidBuyer(null);
       setSelectedBidKeys([]);
     }
-  }, [buyersForBilling, selectBidBuyer]);
+  }, [buyersForBilling, selectBidBuyer, billingBuyerListReady]);
 
   // Recalculate grand total (includes per-commodity discount; round-off auto-snaps each commodity to whole ₹)
   const recalcGrandTotal = useCallback((b: BillData): BillData => {
@@ -2546,6 +2679,10 @@ const BillingPage = () => {
   );
 
   const findBuyerByInput = useCallback((): BuyerPurchase | null => {
+    if (!billingBuyerListReady) {
+      toast.error('Buyer list still loading. Wait a moment or use Refresh.');
+      return null;
+    }
     if (selectedBuyerFromDropdown) {
       if (selectedBuyerFromDropdown.entries.length === 0) {
         toast.error('Selected buyer has no bids yet.');
@@ -2596,7 +2733,7 @@ const BillingPage = () => {
       return null;
     }
     return null;
-  }, [buyerBidMarkInput, buyersForBilling, selectedBuyerFromDropdown]);
+  }, [billingBuyerListReady, buyerBidMarkInput, buyersForBilling, selectedBuyerFromDropdown]);
 
   const handleGetBidsForMark = useCallback(async () => {
     const buyer = findBuyerByInput();
@@ -2823,7 +2960,6 @@ const BillingPage = () => {
       generateBill,
       selectedBuyer,
       upsertBidForBuyer,
-      weighingSessions,
     ],
   );
 
@@ -3054,7 +3190,7 @@ const BillingPage = () => {
   ]);
 
   const searchBidBuyerOptions = useMemo(() => {
-    if (!bill) return [];
+    if (!bill || !billingBuyerListReady) return [];
     const q = searchBidInput.trim().toLowerCase();
     const isSameBuyer = (b: BuyerPurchase) =>
       (b.buyerMark || '').toLowerCase() === (bill.buyerMark || '').toLowerCase()
@@ -3066,7 +3202,7 @@ const BillingPage = () => {
         (b.buyerMark || '').toLowerCase().includes(q)
         || (b.buyerName || '').toLowerCase().includes(q),
     );
-  }, [bill, buyersForBilling, searchBidInput]);
+  }, [bill, billingBuyerListReady, buyersForBilling, searchBidInput]);
 
   const searchBidLiveBuyer = useMemo(() => {
     if (!searchBidSourceBuyer) return null;
@@ -3588,6 +3724,7 @@ const BillingPage = () => {
   openPrintPreviewRef.current = openPrintPreview;
 
   const filteredBuyerOptions = useMemo(() => {
+    if (!billingBuyerListReady) return [];
     const q = buyerBidMarkInput.trim().toLowerCase();
     /** Show every unbilled buyer when empty (scrollable panel); the old slice(0,12) hid everyone past 12 with no hint to type. */
     if (!q) return buyersForBilling;
@@ -3596,7 +3733,7 @@ const BillingPage = () => {
         b.buyerMark?.toLowerCase().includes(q)
         || b.buyerName?.toLowerCase().includes(q),
     );
-  }, [buyersForBilling, buyerBidMarkInput]);
+  }, [billingBuyerListReady, buyersForBilling, buyerBidMarkInput]);
 
   useEffect(() => {
     const onPointerDown = (e: MouseEvent) => {
@@ -4464,7 +4601,14 @@ const BillingPage = () => {
                 <h1 className="text-lg font-bold text-white flex items-center gap-2">
                   <span className="text-xl font-black">₹</span> Billing
                 </h1>
-                <p className="text-white/70 text-xs mt-0.5">Sales bill · {buyersForBilling.length} buyer{buyersForBilling.length !== 1 ? 's' : ''} with unbilled bids</p>
+                <p className="text-white/70 text-xs mt-0.5">
+                  Sales bill ·{' '}
+                  {billingBuyerListReady
+                    ? `${buyersForBilling.length} buyer${buyersForBilling.length !== 1 ? 's' : ''} with unbilled bids`
+                    : auctionResultsError
+                      ? 'Could not load auctions — use Refresh'
+                      : 'Loading buyer list…'}
+                </p>
               </div>
               <div className="flex-shrink-0" />
             </div>
@@ -4504,7 +4648,13 @@ const BillingPage = () => {
               <h2 className="text-lg font-bold text-foreground flex items-center gap-2">
                 <span className="text-xl font-black text-indigo-500">₹</span> Billing (Sales Bill)
               </h2>
-              <p className="text-sm text-muted-foreground mt-0.5">{buyersForBilling.length} buyers with unbilled bids · Invoicing & generation</p>
+              <p className="text-sm text-muted-foreground mt-0.5">
+                {billingBuyerListReady
+                  ? `${buyersForBilling.length} buyers with unbilled bids · Invoicing & generation`
+                  : auctionResultsError
+                    ? 'Could not load auctions — use Refresh or open Bill Operations again'
+                    : 'Loading auction results and billing status…'}
+              </p>
             </div>
             <div className="flex flex-wrap items-center gap-2 lg:justify-end w-full lg:w-auto" />
           </div>
@@ -4567,7 +4717,9 @@ const BillingPage = () => {
                 </button>
                 {showBuyerSuggestions && !searchBidDialogOpen && (
                   <div className={cn("absolute z-50 top-full mt-1 w-full max-h-56 overflow-y-auto rounded-xl border border-border bg-background shadow-lg", searchBidDialogOpen && "z-[20]")}>
-                    {filteredBuyerOptions.length === 0 && buyerBidMarkInput.trim() ? (
+                    {!billingBuyerListReady ? (
+                      <p className="px-3 py-2 text-xs text-muted-foreground">Loading buyer list…</p>
+                    ) : filteredBuyerOptions.length === 0 && buyerBidMarkInput.trim() ? (
                       <p className="px-3 py-2 text-xs text-muted-foreground">No buyers match your search.</p>
                     ) : (
                       filteredBuyerOptions.map((b, idx) => (
@@ -4703,12 +4855,16 @@ const BillingPage = () => {
                 </Button>
               </div>
             )}
-            {buyersForBilling.length === 0 && (
+            {!billingBuyerListReady ? (
+              <div className="rounded-xl bg-muted/30 p-4 text-center space-y-2">
+                <p className="text-sm text-muted-foreground">Loading auction results and billing status…</p>
+              </div>
+            ) : buyersForBilling.length === 0 ? (
               <div className="rounded-xl bg-muted/30 p-4 text-center space-y-2">
                 <p className="text-sm text-muted-foreground">No auction bids loaded yet.</p>
                 <Button type="button" variant="outline" onClick={() => navigate('/auctions')} className={arrSolidMd}>Go to Auctions</Button>
               </div>
-            )}
+            ) : null}
           </motion.div>
         )}
 
@@ -4772,7 +4928,9 @@ const BillingPage = () => {
                         />
                         {showSearchBidBuyerSuggestions && !searchBidDialogOpen && (
                           <div className={cn("absolute top-full mt-1 w-full min-w-[12rem] max-h-44 overflow-y-auto rounded-xl border border-border/50 bg-background shadow-lg", searchBidDialogOpen ? "z-[20]" : "z-[100]")}>
-                            {searchBidBuyerOptions.length === 0 ? (
+                            {!billingBuyerListReady ? (
+                              <p className="px-3 py-2 text-xs text-muted-foreground">Loading buyer list…</p>
+                            ) : searchBidBuyerOptions.length === 0 ? (
                               <p className="px-3 py-2 text-xs text-muted-foreground">No buyer found.</p>
                             ) : (
                               searchBidBuyerOptions.map((b, idx) => (
@@ -5027,6 +5185,7 @@ const BillingPage = () => {
                     CHARGES
                   </p>
                   <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+                    {showBrokerageColumn && (
                     <div className="min-w-0 flex-1">
                       <p
                         className={cn(
@@ -5081,6 +5240,7 @@ const BillingPage = () => {
                         </p>
                       )}
                     </div>
+                    )}
 
                     <div className="min-w-0 flex-1">
                       <p className="text-[10px] font-semibold text-muted-foreground mb-1 uppercase tracking-wide">
@@ -5123,8 +5283,10 @@ const BillingPage = () => {
                 </div>
               </div>
               <p className="text-[9px] text-muted-foreground">
-                Global charges: other amounts apply to all lines; brokerage applies only when a broker is set (or buyer
-                acts as broker). Use Apply to All to push header values to lines.
+                Global charges: other amounts apply to all lines.
+                {showBrokerageColumn
+                  ? ' Bill-level brokerage applies when a broker is set (or buyer acts as broker). Use Apply to All to push header values to lines.'
+                  : ' Line brokerage appears only after you add a broker or enable “Use buyer as broker”.'}
               </p>
               {replaceErrors.name && (
                 <p className="text-[11px] text-destructive">{replaceErrors.name}</p>
@@ -5202,9 +5364,7 @@ const BillingPage = () => {
                           <div
                             className={cn(
                               'hidden lg:grid gap-1.5 px-1 pb-1 text-[10px] font-semibold text-muted-foreground uppercase text-center',
-                              showPresetColumn
-                                ? 'lg:grid-cols-[minmax(140px,1.6fr),repeat(10,minmax(0,1fr)),minmax(44px,0.5fr)]'
-                                : 'lg:grid-cols-[minmax(140px,1.6fr),repeat(9,minmax(0,1fr)),minmax(44px,0.5fr)]',
+                              billingLineGridColsClass,
                             )}
                           >
                             <span>Item</span>
@@ -5213,7 +5373,7 @@ const BillingPage = () => {
                             <span>Avg Wt (kg)</span>
                             {showPresetColumn && <span>Preset (₹)</span>}
                             <span>Other Charges</span>
-                            <span>Brokerage (₹)</span>
+                            {showBrokerageColumn && <span>Brokerage (₹)</span>}
                             <span>Token (₹)</span>
                             <span>Bid Rate (₹)</span>
                             <span>New Rate (₹)</span>
@@ -5260,9 +5420,7 @@ const BillingPage = () => {
                                   key={ii}
                                   className={cn(
                                     'relative shrink-0 w-full snap-start grid grid-cols-2 sm:grid-cols-3 gap-x-2 gap-y-1 text-[11px] lg:text-[10px] lg:gap-x-1.5 items-start lg:items-center rounded-xl bg-card border border-border/60 shadow-[0_1px_2px_rgba(15,23,42,0.04)] px-2.5 py-2 lg:px-2 lg:py-1.5 text-center lg:w-auto',
-                                    showPresetColumn
-                                      ? 'lg:grid-cols-[minmax(140px,1.6fr),repeat(10,minmax(0,1fr)),minmax(44px,0.5fr)]'
-                                      : 'lg:grid-cols-[minmax(140px,1.6fr),repeat(9,minmax(0,1fr)),minmax(44px,0.5fr)]',
+                                    billingLineGridColsClass,
                                   )}
                                 >
                                   <button
@@ -5402,6 +5560,7 @@ const BillingPage = () => {
                                     )}
                                   </div>
 
+                                  {showBrokerageColumn && (
                                   <div>
                                     <p className="lg:hidden text-[9px] font-semibold text-muted-foreground uppercase tracking-wide mb-0.5 text-center">Brok ₹</p>
                                     <BillingMoneyInput
@@ -5428,6 +5587,7 @@ const BillingPage = () => {
                                       </p>
                                     )}
                                   </div>
+                                  )}
 
                                   <div>
                                     <p className="lg:hidden text-[9px] font-semibold text-muted-foreground uppercase tracking-wide mb-0.5 text-center">Token ₹</p>
