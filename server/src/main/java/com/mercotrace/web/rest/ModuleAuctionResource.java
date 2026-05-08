@@ -126,6 +126,23 @@ public class ModuleAuctionResource {
     }
 
     /**
+     * {@code GET  /module-auctions/temporary-buyer-marks/search} : bounded search over all historical
+     * temporary buyer marks for extract / merge pickers.
+     */
+    @Operation(summary = "Search temporary buyer marks", description = "Scribble marks from all bids, trader-scoped")
+    @ApiResponses({ @ApiResponse(responseCode = "200", description = "OK") })
+    @GetMapping("/temporary-buyer-marks/search")
+    @PreAuthorize("hasAuthority(\"" + AuthoritiesConstants.AUCTIONS_VIEW + "\")")
+    public ResponseEntity<List<String>> searchTemporaryBuyerMarks(
+        @RequestParam(name = "q", required = false, defaultValue = "") String q,
+        @RequestParam(name = "limit", required = false, defaultValue = "50") Integer limit
+    ) {
+        int cappedLimit = limit == null ? 50 : Math.max(1, Math.min(limit, 100));
+        LOG.debug("REST request to search temporary buyer marks. q={}, limit={}", q, cappedLimit);
+        return ResponseEntity.ok(auctionService.searchTemporaryBuyerMarks(q, cappedLimit));
+    }
+
+    /**
      * {@code GET  /module-auctions/lots/:lotId/session} : get or start an auction session for a lot.
      */
     @Operation(summary = "Get or start session", description = "Returns current auction session for the lot or creates one")

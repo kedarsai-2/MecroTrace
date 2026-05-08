@@ -237,6 +237,17 @@ export const auctionApi = {
     return res.json();
   },
 
+  /** Bounded search over all historical temporary buyer marks for extract / merge pickers. */
+  async searchTemporaryBuyerMarks(q: string, opts?: { limit?: number }): Promise<string[]> {
+    const params = new URLSearchParams();
+    const trimmed = q.trim();
+    if (trimmed) params.set('q', trimmed);
+    params.set('limit', String(opts?.limit ?? 50));
+    const res = await apiFetch(`${BASE}/temporary-buyer-marks/search?${params.toString()}`, { method: 'GET' });
+    if (!res.ok) await parseJsonOrThrow(res, 'Failed to search temporary buyer marks');
+    return res.json();
+  },
+
   async listLots(params: ListLotsParams = {}): Promise<LotSummaryDTO[]> {
     const searchParams = new URLSearchParams();
     if (params.page != null) searchParams.set('page', String(params.page));

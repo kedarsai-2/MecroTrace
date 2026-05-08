@@ -699,6 +699,8 @@ const LogisticsPage = () => {
     isFresh?: boolean;
   } | null>(null);
   const [extractTempMarks, setExtractTempMarks] = useState<string[]>([]);
+  const [extractTempSearchLoading, setExtractTempSearchLoading] = useState(false);
+  const [extractTempSearchQuery, setExtractTempSearchQuery] = useState('');
   const [extractParticipantHits, setExtractParticipantHits] = useState<Contact[]>([]);
   const [extractParticipantSearchLoading, setExtractParticipantSearchLoading] = useState(false);
   const [extractParticipantSearchQuery, setExtractParticipantSearchQuery] = useState('');
@@ -721,10 +723,14 @@ const LogisticsPage = () => {
     dialog: extractDialog,
     query: extractQuery,
     targetChoice: extractTargetChoice,
+    tempSearchLoading: extractTempSearchLoading,
+    tempSearchQuery: extractTempSearchQuery,
   });
   extractSyncRef.current.dialog = extractDialog;
   extractSyncRef.current.query = extractQuery;
   extractSyncRef.current.targetChoice = extractTargetChoice;
+  extractSyncRef.current.tempSearchLoading = extractTempSearchLoading;
+  extractSyncRef.current.tempSearchQuery = extractTempSearchQuery;
 
   const [pendingRemoveBid, setPendingRemoveBid] = useState<BidInfo | null>(null);
   const [removeBidSaving, setRemoveBidSaving] = useState(false);
@@ -769,20 +775,37 @@ const LogisticsPage = () => {
   useEffect(() => {
     if (!extractDialog) {
       setExtractTempMarks([]);
-      setExtractParticipantHits([]);
-      setExtractParticipantSearchLoading(false);
-      setExtractParticipantSearchQuery('');
+      setExtractTempSearchLoading(false);
+      setExtractTempSearchQuery('');
       return;
     }
     let cancelled = false;
-    void auctionApi.listTemporaryBuyerMarksToday().then((m) => {
-      if (!cancelled) setExtractTempMarks(Array.isArray(m) ? m : []);
+    const q = extractQuery.trim();
+    setExtractTempSearchLoading(true);
+    void auctionApi.searchTemporaryBuyerMarks(q, { limit: 50 }).then((m) => {
+      if (!cancelled) {
+        setExtractTempMarks(Array.isArray(m) ? m : []);
+        setExtractTempSearchQuery(q);
+      }
     }).catch(() => {
-      if (!cancelled) setExtractTempMarks([]);
+      if (!cancelled) {
+        setExtractTempMarks([]);
+        setExtractTempSearchQuery(q);
+      }
+    }).finally(() => {
+      if (!cancelled) setExtractTempSearchLoading(false);
     });
     return () => {
       cancelled = true;
     };
+  }, [extractDialog, extractQuery]);
+
+  useEffect(() => {
+    if (!extractDialog) {
+      setExtractParticipantHits([]);
+      setExtractParticipantSearchLoading(false);
+      setExtractParticipantSearchQuery('');
+    }
   }, [extractDialog]);
 
   useEffect(() => {
@@ -1144,7 +1167,7 @@ const LogisticsPage = () => {
   );
 
   const commitExtractTypedAsFreshTarget = useCallback(() => {
-    const { dialog: d, query, targetChoice } = extractSyncRef.current;
+    const { dialog: d, query, targetChoice, tempSearchLoading, tempSearchQuery } = extractSyncRef.current;
     if (!d) return;
     if (targetChoice) {
       setExtractShowPickList(false);
@@ -1152,6 +1175,7 @@ const LogisticsPage = () => {
     }
     const trimmed = query.trim();
     if (!trimmed) return;
+    if (tempSearchLoading || tempSearchQuery !== trimmed) return;
     const m = trimmed.toUpperCase().slice(0, MAX_MARK_LEN);
     if (!m) return;
     if (m.toLowerCase() === d.sourceBuyerMark.trim().toLowerCase()) {
@@ -1220,6 +1244,8 @@ const LogisticsPage = () => {
     if (!trimmed) return null;
     if (extractParticipantSearchLoading) return null;
     if (extractParticipantSearchQuery !== trimmed) return null;
+    if (extractTempSearchLoading) return null;
+    if (extractTempSearchQuery !== trimmed) return null;
 
     const buyerMark = trimmed.toUpperCase().slice(0, MAX_MARK_LEN);
     if (!buyerMark) return null;
@@ -1245,6 +1271,8 @@ const LogisticsPage = () => {
     extractFilteredTemps.length,
     extractParticipantSearchLoading,
     extractParticipantSearchQuery,
+    extractTempSearchLoading,
+    extractTempSearchQuery,
     extractQuery,
   ]);
 
@@ -1303,6 +1331,15 @@ const LogisticsPage = () => {
       const m = extractQuery.trim().toUpperCase().slice(0, MAX_MARK_LEN);
       if (!m) {
         toast.error('Select a buyer from the list or enter a new mark');
+        return;
+      }
+      const querySettled =
+        !extractTempSearchLoading
+        && !extractParticipantSearchLoading
+        && extractTempSearchQuery === extractQuery.trim()
+        && extractParticipantSearchQuery === extractQuery.trim();
+      if (!querySettled) {
+        toast.info('Searching buyers. Please select a match or try again.');
         return;
       }
       if (m.toLowerCase() === d.sourceBuyerMark.trim().toLowerCase()) {
@@ -2925,9 +2962,11 @@ const LogisticsPage = () => {
                       })
                     )}
                     <div className="border-b border-border/40 px-2 py-1 text-[10px] font-bold uppercase tracking-wide text-muted-foreground">
-                      Temp marks (today)
+                      Temp marks
                     </div>
-                    {extractFilteredTemps.length === 0 ? (
+                    {extractTempSearchLoading && extractQuery.trim() !== extractTempSearchQuery ? (
+                      <p className="px-3 py-2 text-[11px] text-muted-foreground">Searching temp marks…</p>
+                    ) : extractFilteredTemps.length === 0 ? (
                       <p className="px-3 py-2 text-[11px] text-muted-foreground">No temp mark matches.</p>
                     ) : (
                       extractFilteredTemps.map((m) => (
@@ -3044,7 +3083,18 @@ const LogisticsPage = () => {
                   )}
                   style={buyerChittiBulkBtnStyle}
                   disabled={
-                    extractSaving || !extractDialog || (!extractTargetChoice && !extractQuery.trim())
+                    extractSaving
+                    || !extractDialog
+                    || (
+                      !extractTargetChoice
+                      && (
+                        !extractQuery.trim()
+                        || extractTempSearchLoading
+                        || extractParticipantSearchLoading
+                        || extractTempSearchQuery !== extractQuery.trim()
+                        || extractParticipantSearchQuery !== extractQuery.trim()
+                      )
+                    )
                   }
                   onClick={() => void runExtractSave()}
                 >

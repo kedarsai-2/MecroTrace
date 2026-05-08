@@ -588,5 +588,18 @@ class AuctionServiceTest {
 
         assertThat(result).containsExactly("alpha", "zebra");
     }
+
+    @Test
+    void searchTemporaryBuyerMarks_searchesAllHistoryAndExcludesRegisteredMarks() {
+        when(auctionEntryRepository.searchDistinctScribbleBuyerMarksForTrader(eq(1L), eq("po"), any(Pageable.class)))
+            .thenReturn(List.of("PO", "PONDY", "PORTAL"));
+        Contact c = new Contact();
+        c.setMark("PORTAL");
+        when(contactRepository.findAllByTraderIdAndActiveTrue(1L)).thenReturn(List.of(c));
+
+        List<String> result = auctionService.searchTemporaryBuyerMarks(" po ", 50);
+
+        assertThat(result).containsExactly("PO", "PONDY");
+    }
 }
 

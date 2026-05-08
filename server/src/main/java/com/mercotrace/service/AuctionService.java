@@ -378,6 +378,41 @@ public class AuctionService {
     }
 
     /**
+     * Distinct temporary buyer marks across all trader auction history for extract / merge pickers.
+     * Registered contact marks stay excluded because the contacts row already owns those targets.
+     */
+    @Transactional(readOnly = true)
+    public List<String> searchTemporaryBuyerMarks(String query, int limit) {
+        Long traderId = resolveTraderId();
+        int cappedLimit = Math.max(1, Math.min(limit, 100));
+        String needle = query == null ? "" : query.trim().toLowerCase(Locale.ROOT);
+
+        List<String> raw = auctionEntryRepository.searchDistinctScribbleBuyerMarksForTrader(
+            traderId,
+            needle,
+            PageRequest.of(0, cappedLimit)
+        );
+        if (raw.isEmpty()) {
+            return List.of();
+        }
+
+        Set<String> registeredMarksLower = contactRepository
+            .findAllByTraderIdAndActiveTrue(traderId)
+            .stream()
+            .map(Contact::getMark)
+            .filter(m -> m != null && !m.isBlank())
+            .map(m -> m.trim().toLowerCase(Locale.ROOT))
+            .collect(Collectors.toSet());
+
+        return raw
+            .stream()
+            .filter(m -> m != null && !m.isBlank())
+            .map(String::trim)
+            .filter(m -> !registeredMarksLower.contains(m.toLowerCase(Locale.ROOT)))
+            .toList();
+    }
+
+    /**
      * Get or start an auction session for a lot.
      */
     public AuctionSessionDTO getOrStartSession(Long lotId) {
