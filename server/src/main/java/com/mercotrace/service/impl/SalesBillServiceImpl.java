@@ -18,6 +18,7 @@ import com.mercotrace.repository.CommodityRepository;
 import com.mercotrace.repository.SalesBillRepository;
 import com.mercotrace.repository.TraderRepository;
 import com.mercotrace.repository.VoucherRepository;
+import com.mercotrace.security.SecurityUtils;
 import com.mercotrace.service.SalesBillService;
 import com.mercotrace.service.TraderContextService;
 import com.mercotrace.service.dto.SalesBillDTOs.*;
@@ -127,6 +128,7 @@ public class SalesBillServiceImpl implements SalesBillService {
         if (!bill.getTraderId().equals(traderId)) {
             throw new IllegalArgumentException("Sales bill not found: " + id);
         }
+        assertNotFrozen(bill, "Printed sales bill is frozen. Press Edit to reopen before changing it.");
 
         // Version snapshot (current state before update)
         try {
@@ -284,6 +286,7 @@ public class SalesBillServiceImpl implements SalesBillService {
         if (!bill.getTraderId().equals(traderId)) {
             throw new IllegalArgumentException("Sales bill not found: " + id);
         }
+        assertNotFrozen(bill, "Printed sales bill is frozen. Press Edit to reopen before assigning number.");
         if (bill.getBillNumber() != null && !bill.getBillNumber().isBlank()) {
             return toDto(bill);
         }
@@ -292,6 +295,45 @@ public class SalesBillServiceImpl implements SalesBillService {
         bill.setBillNumber(billNumber);
         bill = salesBillRepository.save(bill);
         return toDto(bill);
+    }
+
+    @Override
+    public SalesBillDTO markPrinted(Long id) {
+        Long traderId = traderContextService.getCurrentTraderId();
+        SalesBill bill = salesBillRepository
+            .findByIdWithGroupsAndVersions(id)
+            .orElseThrow(() -> new IllegalArgumentException("Sales bill not found: " + id));
+        if (!bill.getTraderId().equals(traderId)) {
+            throw new IllegalArgumentException("Sales bill not found: " + id);
+        }
+        Instant now = Instant.now();
+        if (bill.getPrintedAt() == null) {
+            bill.setPrintedAt(now);
+        }
+        bill.setLockedAt(now);
+        bill.setLockedBy(currentActor());
+        bill.setReopenedAt(null);
+        bill.setReopenedBy(null);
+        bill.setReopenReason(null);
+        return toDto(salesBillRepository.save(bill));
+    }
+
+    @Override
+    public SalesBillDTO reopen(Long id) {
+        Long traderId = traderContextService.getCurrentTraderId();
+        SalesBill bill = salesBillRepository
+            .findByIdWithGroupsAndVersions(id)
+            .orElseThrow(() -> new IllegalArgumentException("Sales bill not found: " + id));
+        if (!bill.getTraderId().equals(traderId)) {
+            throw new IllegalArgumentException("Sales bill not found: " + id);
+        }
+        if (bill.getLockedAt() == null || bill.getReopenedAt() != null) {
+            return toDto(bill);
+        }
+        bill.setReopenedAt(Instant.now());
+        bill.setReopenedBy(currentActor());
+        bill.setReopenReason(null);
+        return toDto(salesBillRepository.save(bill));
     }
 
     private void createVouchersIfNeeded(Long traderId, Long billId, BigDecimal buyerCoolie, BigDecimal outboundFreight) {
@@ -453,6 +495,13 @@ public class SalesBillServiceImpl implements SalesBillService {
         dto.setBrokerageValue(bill.getBrokerageValue());
         dto.setGlobalOtherCharges(bill.getGlobalOtherCharges());
         dto.setPendingBalance(bill.getPendingBalance());
+        dto.setPrintedAt(bill.getPrintedAt());
+        dto.setLockedAt(bill.getLockedAt());
+        dto.setLockedBy(bill.getLockedBy());
+        dto.setReopenedAt(bill.getReopenedAt());
+        dto.setReopenedBy(bill.getReopenedBy());
+        dto.setReopenReason(bill.getReopenReason());
+        dto.setFrozen(isFrozen(bill));
 
         List<CommodityGroupDTO> groups = new ArrayList<>();
         for (SalesBillCommodityGroup g : bill.getCommodityGroups()) {
@@ -563,6 +612,20 @@ public class SalesBillServiceImpl implements SalesBillService {
 
     private static BigDecimal nullToZero(BigDecimal v) {
         return v != null ? v : BigDecimal.ZERO;
+    }
+
+    private static boolean isFrozen(SalesBill bill) {
+        return bill.getLockedAt() != null && bill.getReopenedAt() == null;
+    }
+
+    private static void assertNotFrozen(SalesBill bill, String message) {
+        if (isFrozen(bill)) {
+            throw new IllegalArgumentException(message);
+        }
+    }
+
+    private static String currentActor() {
+        return SecurityUtils.getCurrentUserLogin().orElse("system");
     }
 
     private static Instant parseInstant(String s) {

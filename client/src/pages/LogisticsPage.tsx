@@ -494,6 +494,7 @@ const LogisticsPage = () => {
               buyerId,
               isScribble: Boolean(entry.isScribble ?? entry.is_scribble),
               isSelfSale: Boolean(entry.isSelfSale ?? entry.is_self_sale),
+              frozen: Boolean(entry.frozen),
               auctionCompletedAtMs,
             });
           });
@@ -1006,7 +1007,7 @@ const LogisticsPage = () => {
 
   const migrateVisibleEntries = useMemo(() => {
     if (!migrateLiveSourceGroup) return [];
-    return migrateLiveSourceGroup.bids.filter(b => Math.floor(Number(b.quantity) || 0) > 0);
+    return migrateLiveSourceGroup.bids.filter(b => !b.frozen && Math.floor(Number(b.quantity) || 0) > 0);
   }, [migrateLiveSourceGroup]);
 
   const migrateVisibleRowKeys = useMemo(
@@ -1046,6 +1047,9 @@ const LogisticsPage = () => {
     const newRowIsScribble = target.buyerId == null;
     let usedLotIncrease = false;
     const entryId = bid.auctionEntryId;
+    if (bid.frozen) {
+      throw new Error('This bid is frozen because its Sales Bill is printed. Reopen the bill before changing it.');
+    }
     if (entryId == null || !Number.isFinite(Number(entryId))) {
       throw new Error('Missing auction entry id');
     }
@@ -1151,6 +1155,10 @@ const LogisticsPage = () => {
     (g: { buyerMark: string; buyerName: string; bids: BidInfo[] }, selectedBids: BidInfo[]) => {
       if (selectedBids.length === 0) {
         toast.error('Select at least one lot');
+        return;
+      }
+      if (selectedBids.some(b => b.frozen)) {
+        toast.error('One or more selected bids are frozen because Sales Bill is printed. Reopen the bill before changing them.');
         return;
       }
       setExtractDialog({
@@ -1453,6 +1461,11 @@ const LogisticsPage = () => {
     const bid = pendingRemoveBid;
     if (!bid?.auctionEntryId) {
       toast.error('Cannot remove: missing entry id');
+      return;
+    }
+    if (bid.frozen) {
+      toast.error('This bid is frozen because its Sales Bill is printed. Reopen the bill before changing it.');
+      setPendingRemoveBid(null);
       return;
     }
     setRemoveBidSaving(true);
@@ -2145,8 +2158,8 @@ const LogisticsPage = () => {
                                               <td className="py-1.5 pr-1 text-center align-middle">
                                                 <button
                                                   type="button"
-                                                  title="Remove bid from buyer"
-                                                  disabled={b.auctionEntryId == null}
+                                                  title={b.frozen ? 'Sales Bill printed: reopen bill before removing this bid' : 'Remove bid from buyer'}
+                                                  disabled={b.auctionEntryId == null || b.frozen}
                                                   onClick={() => setPendingRemoveBid(b)}
                                                   className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-destructive hover:bg-destructive/10 disabled:pointer-events-none disabled:opacity-40"
                                                   aria-label={`Remove lot ${formatLotIdentifierForBid(b)}`}
@@ -2226,8 +2239,8 @@ const LogisticsPage = () => {
                                   </div>
                                   <button
                                     type="button"
-                                    title="Remove bid from buyer"
-                                    disabled={b.auctionEntryId == null}
+                                    title={b.frozen ? 'Sales Bill printed: reopen bill before removing this bid' : 'Remove bid from buyer'}
+                                    disabled={b.auctionEntryId == null || b.frozen}
                                     onClick={() => setPendingRemoveBid(b)}
                                     className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-destructive hover:bg-destructive/10 disabled:pointer-events-none disabled:opacity-40"
                                     aria-label={`Remove lot ${formatLotIdentifierForBid(b)}`}

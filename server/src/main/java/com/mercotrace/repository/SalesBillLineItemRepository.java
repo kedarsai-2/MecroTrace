@@ -127,4 +127,31 @@ public interface SalesBillLineItemRepository extends JpaRepository<SalesBillLine
         @Param("lotIdStrs") Collection<String> lotIdStrs,
         @Param("lotIdsLong") Collection<Long> lotIdsLong
     );
+
+    @Query(
+        "SELECT CASE WHEN COUNT(i) > 0 THEN true ELSE false END FROM SalesBillLineItem i " +
+        "JOIN i.commodityGroup g JOIN g.salesBill b " +
+        "WHERE b.traderId = :traderId AND b.lockedAt IS NOT NULL AND b.reopenedAt IS NULL " +
+        "AND i.auctionEntryId = :auctionEntryId"
+    )
+    boolean existsFrozenBillLineByAuctionEntryId(@Param("traderId") Long traderId, @Param("auctionEntryId") Long auctionEntryId);
+
+    @Query(
+        "SELECT DISTINCT i.auctionEntryId FROM SalesBillLineItem i " +
+        "JOIN i.commodityGroup g JOIN g.salesBill b " +
+        "WHERE b.traderId = :traderId AND b.lockedAt IS NOT NULL AND b.reopenedAt IS NULL " +
+        "AND i.auctionEntryId IN :auctionEntryIds"
+    )
+    List<Long> findFrozenBillAuctionEntryIds(
+        @Param("traderId") Long traderId,
+        @Param("auctionEntryIds") Collection<Long> auctionEntryIds
+    );
+
+    @Query(
+        "SELECT CASE WHEN COUNT(i) > 0 THEN true ELSE false END FROM SalesBillLineItem i " +
+        "JOIN i.commodityGroup g JOIN g.salesBill b " +
+        "WHERE b.traderId = :traderId AND b.lockedAt IS NOT NULL AND b.reopenedAt IS NULL " +
+        "AND i.lotId = :lotId"
+    )
+    boolean existsFrozenBillLineByLotId(@Param("traderId") Long traderId, @Param("lotId") String lotId);
 }

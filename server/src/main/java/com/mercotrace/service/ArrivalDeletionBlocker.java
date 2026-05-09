@@ -6,6 +6,7 @@ package com.mercotrace.service;
  */
 public enum ArrivalDeletionBlocker {
     BILLING,
+    AUCTION,
     AUCTION_SELF_SALE,
     SELF_SALE_CLOSURE,
     CDN,
@@ -17,6 +18,7 @@ public enum ArrivalDeletionBlocker {
     public String displayLabel() {
         return switch (this) {
             case BILLING -> "Billing";
+            case AUCTION -> "Auction";
             case AUCTION_SELF_SALE -> "Auction self-sale";
             case SELF_SALE_CLOSURE -> "Self-sale closure";
             case CDN -> "CDN";

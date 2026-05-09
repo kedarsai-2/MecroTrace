@@ -100,6 +100,13 @@ export interface SalesBillDTO {
   brokerageValue: number;
   globalOtherCharges: number;
   pendingBalance: number;
+  printedAt?: string | null;
+  lockedAt?: string | null;
+  lockedBy?: string | null;
+  reopenedAt?: string | null;
+  reopenedBy?: string | null;
+  reopenReason?: string | null;
+  frozen?: boolean;
   versions?: BillVersionDTO[];
 }
 
@@ -251,5 +258,19 @@ export const billingApi = {
       method: 'POST',
     });
     return handleResponse<SalesBillDTO>(res, 'Failed to assign bill number');
+  },
+
+  async markPrinted(id: string | number): Promise<SalesBillDTO> {
+    const res = await apiFetch(`${BASE}/${encodeURIComponent(String(id))}/print-lock`, {
+      method: 'POST',
+    });
+    return handleResponse<SalesBillDTO>(res, 'Failed to freeze printed bill');
+  },
+
+  async reopen(id: string | number): Promise<SalesBillDTO> {
+    const res = await apiFetch(`${BASE}/${encodeURIComponent(String(id))}/reopen`, {
+      method: 'POST',
+    });
+    return handleResponse<SalesBillDTO>(res, 'Failed to reopen bill');
   },
 };

@@ -20,7 +20,7 @@ import {
   ShoppingCart, User, Users, Package, Truck, Banknote, ChevronDown,
   Search, AlertTriangle, Merge, Hash,
   ChevronLeft, ChevronRight, ChevronUp, List, Filter, Printer,
-  Pencil, Check, X, RotateCcw, Settings2,
+  Pencil, Check, X, RotateCcw, Settings2, Lock,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useDesktopMode } from '@/hooks/use-desktop';
@@ -108,7 +108,6 @@ function auctionPerfEnabled(): boolean {
 function auctionPerfLog(label: string, startedAt: number, meta?: Record<string, unknown>) {
   if (!auctionPerfEnabled()) return;
   const durationMs = Math.round((performance.now() - startedAt) * 10) / 10;
-  // eslint-disable-next-line no-console
   console.info(`[auction-perf] ${label}`, { durationMs, ...(meta ?? {}) });
 }
 
@@ -144,6 +143,8 @@ interface LotInfo {
   }>;
   /** Latest auction bags sold (list + session sync). Self-sale: derived from unit qty − remaining. */
   sold_bags?: number;
+  /** Printed Settlement Patti froze this seller's Summary/Sales Pad rows. */
+  sellerFrozen?: boolean;
 }
 
 type LotStatus = 'available' | 'sold' | 'partial' | 'pending' | 'self_sale';
@@ -170,6 +171,8 @@ interface SaleEntry {
   buyerRate: number;
   /** From API `last_modified_ms` — sent back on PATCH for concurrency */
   lastModifiedMs?: number | null;
+  /** This exact bid is part of a printed Sales Bill. */
+  frozen?: boolean;
 }
 
 type DuplicateMarkDialogState = {
@@ -544,6 +547,12 @@ const QuickLotNavigationOverlay = memo(function QuickLotNavigationOverlay({
                     <span className={cn('font-semibold truncate flex-1', isActive ? 'text-primary' : 'text-foreground')}>
                       {formatLotDisplayName(lot)}
                     </span>
+                    {lot.sellerFrozen && (
+                      <span className="inline-flex items-center gap-0.5 rounded bg-slate-500/15 px-1.5 py-0.5 text-[9px] font-bold uppercase text-slate-700 dark:text-slate-200">
+                        <Lock className="h-2.5 w-2.5" />
+                        Frozen
+                      </span>
+                    )}
                     <span className={cn('px-1.5 py-0.5 rounded text-[9px] font-bold', cfg.bg, cfg.text)}>{cfg.label}</span>
                   </button>
                 );
@@ -1063,6 +1072,7 @@ function lotSummaryToLotInfo(dto: LotSummaryDTO): LotInfo {
     status: (dto.status?.toLowerCase() as LotStatus) ?? 'available',
     vehicle_total_qty: dto.vehicle_total_qty,
     seller_total_qty: dto.seller_total_qty,
+    sellerFrozen: dto.seller_frozen ?? false,
     participatingBuyers: participatingBuyers.length > 0 ? participatingBuyers : undefined,
   };
 }
@@ -1178,6 +1188,7 @@ function sessionEntryToSaleEntry(e: AuctionEntryDTO): SaleEntry {
     sellerRate: Number(e.bid_rate) - Number(e.preset_margin ?? 0),
     buyerRate: Number(e.buyer_rate ?? e.bid_rate),
     lastModifiedMs: e.last_modified_ms ?? null,
+    frozen: e.frozen === true,
   };
 }
 
@@ -1575,6 +1586,7 @@ interface AuctionEntriesGridProps {
   editingBidId: string | null;
   showTokenInput: string | null;
   canEdit: boolean;
+  readOnly: boolean;
   autoScrollKey: number;
   gridSectionRef: RefObject<HTMLDivElement | null>;
   auctionGridMobileScrollStyle?: CSSProperties;
@@ -1592,6 +1604,7 @@ const AuctionEntriesGrid = memo(function AuctionEntriesGrid({
   editingBidId,
   showTokenInput,
   canEdit,
+  readOnly,
   autoScrollKey,
   gridSectionRef,
   auctionGridMobileScrollStyle,
@@ -1718,14 +1731,14 @@ const AuctionEntriesGrid = memo(function AuctionEntriesGrid({
                       animate={{ opacity: 1, x: 0 }}
                       transition={{ delay: i * 0.05 }}
                       onClick={() => {
-                        if (!isDesktop && canEdit && !editingBidId) {
+                        if (!isDesktop && canEdit && !readOnly && !entry.frozen && !editingBidId) {
                           onStartEditBid(entry);
                         }
                       }}
                       className={cn(
                         'border-b border-border/30 hover:bg-muted/20 transition-colors',
                         !isDesktop && 'scroll-mt-14',
-                        !isDesktop && canEdit && !editingBidId && 'cursor-pointer',
+                        !isDesktop && canEdit && !readOnly && !entry.frozen && !editingBidId && 'cursor-pointer',
                         entry.isSelfSale && 'border-l-4 border-l-amber-500',
                         entry.isScribble && 'border-l-4 border-l-violet-500',
                         editingBidId === entry.id && 'bg-primary/5 ring-1 ring-inset ring-primary/35'
@@ -1747,6 +1760,12 @@ const AuctionEntriesGrid = memo(function AuctionEntriesGrid({
                           {editingBidId === entry.id && (
                             <span className={cn('px-1 py-0.5 rounded bg-primary/20 text-primary font-bold', isDesktop ? 'text-[8px]' : 'text-[12px]')}>
                               EDITING
+                            </span>
+                          )}
+                          {entry.frozen && (
+                            <span className={cn('inline-flex items-center gap-0.5 px-1 py-0.5 rounded bg-slate-500/15 text-slate-700 dark:text-slate-200 font-bold', isDesktop ? 'text-[8px]' : 'text-[12px]')}>
+                              <Lock className={cn(isDesktop ? 'h-2.5 w-2.5' : 'h-3 w-3')} />
+                              BILL FROZEN
                             </span>
                           )}
                         </div>
@@ -1776,7 +1795,7 @@ const AuctionEntriesGrid = memo(function AuctionEntriesGrid({
                         >
                           <button
                             type="button"
-                            disabled={!!editingBidId}
+                            disabled={readOnly || entry.frozen || !!editingBidId}
                             onClick={() => onToggleTokenInput(entry.id)}
                             className={cn(
                               'rounded-md transition-colors disabled:opacity-40',
@@ -1791,17 +1810,17 @@ const AuctionEntriesGrid = memo(function AuctionEntriesGrid({
                             <button
                               onClick={() => onRequestDeleteBid(entry)}
                               type="button"
-                              disabled={!!editingBidId}
+                              disabled={readOnly || entry.frozen || !!editingBidId}
                               className="rounded-md bg-destructive/10 text-destructive hover:bg-destructive/20 disabled:opacity-40 p-1.5"
                               title="Delete bid"
                             >
                               <Trash2 className="h-4 w-4" />
                             </button>
                           )}
-                          {isDesktop && canEdit && (
+                          {isDesktop && canEdit && !readOnly && (
                             <button
                               type="button"
-                              disabled={!!editingBidId}
+                              disabled={entry.frozen || !!editingBidId}
                               onClick={() => onStartEditBid(entry)}
                               className="p-1.5 rounded-md bg-muted/60 text-foreground hover:bg-muted disabled:opacity-40"
                               title="Edit bid"
@@ -1877,6 +1896,7 @@ interface AuctionDesktopBidControlsProps {
   mobileKeyboardEnabled: boolean;
   rateInputRef: RefObject<HTMLInputElement | null>;
   qtyInputRef: RefObject<HTMLInputElement | null>;
+  readOnly: boolean;
   addDisabled: boolean;
   updateDisabled: boolean;
   showSelfSaleButton: boolean;
@@ -1903,6 +1923,7 @@ const AuctionDesktopBidControls = memo(function AuctionDesktopBidControls({
   mobileKeyboardEnabled,
   rateInputRef,
   qtyInputRef,
+  readOnly,
   addDisabled,
   updateDisabled,
   showSelfSaleButton,
@@ -1917,7 +1938,7 @@ const AuctionDesktopBidControls = memo(function AuctionDesktopBidControls({
   onCancelEdit,
   onSelfSale,
 }: AuctionDesktopBidControlsProps) {
-  const readOnlyNumeric = useVirtualKeyboardGuard && !mobileKeyboardEnabled;
+  const readOnlyNumeric = readOnly || (useVirtualKeyboardGuard && !mobileKeyboardEnabled);
   const inputMode = readOnlyNumeric ? 'none' : 'numeric';
 
   return (
@@ -2014,6 +2035,7 @@ interface AuctionMobileBidTopRowProps {
   isMdViewport: boolean;
   completeLoading: boolean;
   canDelete: boolean;
+  readOnly: boolean;
   activeNumpadField: 'rate' | 'qty' | 'mark';
   mobileKeyboardEnabled: boolean;
   rateInputRef: RefObject<HTMLInputElement | null>;
@@ -2042,6 +2064,7 @@ const AuctionMobileBidTopRow = memo(function AuctionMobileBidTopRow({
   isMdViewport,
   completeLoading,
   canDelete,
+  readOnly,
   activeNumpadField,
   mobileKeyboardEnabled,
   rateInputRef,
@@ -2078,8 +2101,8 @@ const AuctionMobileBidTopRow = memo(function AuctionMobileBidTopRow({
           onChange={(e) => onRateChange(e.target.value)}
           onFocus={onRateFocus}
           onBlur={onNumericBlur}
-          readOnly={!mobileKeyboardEnabled}
-          inputMode={!mobileKeyboardEnabled ? 'none' : 'numeric'}
+            readOnly={readOnly || !mobileKeyboardEnabled}
+            inputMode={readOnly || !mobileKeyboardEnabled ? 'none' : 'numeric'}
           placeholder="0"
           aria-label="Bid rate in rupees"
           className={cn(
@@ -2100,7 +2123,7 @@ const AuctionMobileBidTopRow = memo(function AuctionMobileBidTopRow({
           type="text"
           autoComplete="off"
           value={scribbleMark}
-          readOnly={!!editingBidId}
+          readOnly={readOnly || !!editingBidId}
           onMouseDown={onMarkPointerStart}
           onTouchStart={onMarkPointerStart}
           onChange={(e) => onMarkChange(e.target.value, e.target.selectionStart)}
@@ -2134,8 +2157,8 @@ const AuctionMobileBidTopRow = memo(function AuctionMobileBidTopRow({
             onChange={(e) => onQtyChange(e.target.value)}
             onFocus={onQtyFocus}
             onBlur={onNumericBlur}
-            readOnly={!mobileKeyboardEnabled}
-            inputMode={!mobileKeyboardEnabled ? 'none' : 'numeric'}
+          readOnly={readOnly || !mobileKeyboardEnabled}
+          inputMode={readOnly || !mobileKeyboardEnabled ? 'none' : 'numeric'}
             placeholder="0"
             aria-label={`Quantity in bags, ${remaining} bags remaining in lot`}
             className={cn(
@@ -2157,7 +2180,7 @@ const AuctionMobileBidTopRow = memo(function AuctionMobileBidTopRow({
                 type="button"
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={onDeleteEditingBid}
-                disabled={completeLoading || !canDelete}
+                disabled={readOnly || completeLoading || !canDelete}
                 className={cn(
                   'flex shrink-0 items-center justify-center rounded-md border-2 border-destructive/40 bg-destructive/10 text-destructive hover:bg-destructive/20 disabled:pointer-events-none disabled:opacity-40',
                   isMdViewport ? 'h-14 min-w-[4.25rem] px-2' : 'h-12 min-w-[2.5rem] px-1'
@@ -3269,7 +3292,14 @@ const AuctionsPage = () => {
   const remaining = selectedLot ? selectedLot.bag_count - totalSold : 0;
   const highestBid = useMemo(() => Math.max(0, ...entries.map(e => e.rate)), [entries]);
   const isSelfSaleReauction = selectedLotSource === 'self_sale';
+  const selectedLotFrozen = selectedLot?.sellerFrozen === true;
   const canEditAuctionBids = can('Auctions / Sales', 'Edit');
+  const notifyFrozenAuction = useCallback(() => {
+    toast.error('This Sales Pad is frozen because the Settlement Patti is printed. Press Alt+M in Settlement to reopen it before changing auction bids.');
+  }, []);
+  const notifyBillFrozenBid = useCallback(() => {
+    toast.error('This bid is frozen because its Sales Bill is printed. Press Alt+E in Billing to reopen the bill before changing this bid.');
+  }, []);
   const previousSelfSaleEntries = selfSaleContext?.previous_entries ?? [];
   const previousBidRate = useMemo(() => {
     if (entries.length === 0) return 0;
@@ -3403,6 +3433,7 @@ const AuctionsPage = () => {
             was_modified: sl.was_modified ?? prev.was_modified,
             vehicle_mark: vm ?? prev.vehicle_mark,
             seller_mark: sl.seller_mark ?? prev.seller_mark,
+            sellerFrozen: sl.seller_frozen ?? prev.sellerFrozen,
             vehicle_total_qty: sl.vehicle_total_qty ?? prev.vehicle_total_qty,
             seller_total_qty: sl.seller_total_qty ?? prev.seller_total_qty,
             vehicle_number: sl.vehicle_number ?? prev.vehicle_number,
@@ -3422,6 +3453,7 @@ const AuctionsPage = () => {
               was_modified: sl.was_modified ?? l.was_modified,
               vehicle_mark: vm ?? l.vehicle_mark,
               seller_mark: sl.seller_mark ?? l.seller_mark,
+              sellerFrozen: sl.seller_frozen ?? l.sellerFrozen,
               vehicle_total_qty: sl.vehicle_total_qty ?? l.vehicle_total_qty,
               seller_total_qty: sl.seller_total_qty ?? l.seller_total_qty,
               vehicle_number: sl.vehicle_number ?? l.vehicle_number,
@@ -3448,6 +3480,7 @@ const AuctionsPage = () => {
               selfSaleQty: l.selfSaleQty ?? sl.original_bag_count,
               vehicle_mark: vm ?? l.vehicle_mark,
               seller_mark: sl.seller_mark ?? l.seller_mark,
+              sellerFrozen: sl.seller_frozen ?? l.sellerFrozen,
               vehicle_total_qty: sl.vehicle_total_qty ?? l.vehicle_total_qty,
               seller_total_qty: sl.seller_total_qty ?? l.seller_total_qty,
               vehicle_number: sl.vehicle_number ?? l.vehicle_number,
@@ -3493,6 +3526,10 @@ const AuctionsPage = () => {
     (applied: number, type: PresetType) => {
       if (!selectedLot) return;
       if (!can('Auctions / Sales', 'Edit')) return;
+      if (selectedLotFrozen) {
+        notifyFrozenAuction();
+        return;
+      }
 
       presetSyncChainRef.current = presetSyncChainRef.current
         .then(async () => {
@@ -3504,7 +3541,7 @@ const AuctionsPage = () => {
               ? mapOrderedSessionEntries(lastSession.entries)
               : entriesRef.current;
             const next = fresh.find(
-              e => !(e.presetApplied === applied && e.presetType === type)
+              e => !e.frozen && !(e.presetApplied === applied && e.presetType === type)
             );
             if (!next) break;
             lastSession = await updateBidForCurrentSelection(Number(next.id), {
@@ -3540,7 +3577,7 @@ const AuctionsPage = () => {
           await refetchAuctionSession();
         });
     },
-    [selectedLot, can, updateBidForCurrentSelection, applyAuctionSession, refetchAuctionSession]
+    [selectedLot, selectedLotFrozen, can, notifyFrozenAuction, updateBidForCurrentSelection, applyAuctionSession, refetchAuctionSession]
   );
 
   const deleteBidForCurrentSelection = useCallback(async (bidId: number) => {
@@ -3706,6 +3743,10 @@ const AuctionsPage = () => {
       toast.error('You do not have permission to add auction bids.');
       return;
     }
+    if (selectedLotFrozen) {
+      notifyFrozenAuction();
+      return;
+    }
     if (!selectedLot) return;
     const currentSold = entries.reduce((s, e) => s + e.quantity, 0);
     const newTotal = currentSold + entry.quantity;
@@ -3743,6 +3784,10 @@ const AuctionsPage = () => {
 
   const finalizeEntry = useCallback(async (entry: Omit<SaleEntry, 'id' | 'bidNumber'>, allowLotIncrease?: boolean) => {
     if (!selectedLot) return;
+    if (selectedLotFrozen) {
+      notifyFrozenAuction();
+      return;
+    }
     const allow = allowLotIncrease ?? addBidRetryAllowIncrease;
     const body: AuctionBidCreateRequest = {
       buyer_name: entry.buyerName,
@@ -3794,7 +3839,7 @@ const AuctionsPage = () => {
         toast.error(err instanceof Error ? err.message : 'Failed to add bid');
       }
     }
-  }, [selectedLot, selectedLotSource, addBidRetryAllowIncrease, loadTemporaryBuyerMarks, addBidForCurrentSelection, applyAuctionSession]);
+  }, [selectedLot, selectedLotSource, selectedLotFrozen, addBidRetryAllowIncrease, loadTemporaryBuyerMarks, addBidForCurrentSelection, applyAuctionSession, notifyFrozenAuction]);
 
   const confirmQtyIncrease = async () => {
     if (!qtyIncreaseDialog || !selectedLot) return;
@@ -3805,7 +3850,17 @@ const AuctionsPage = () => {
 
   const handleDuplicateMerge = async () => {
     if (!duplicateMarkDialog || !selectedLot) return;
+    if (selectedLotFrozen) {
+      notifyFrozenAuction();
+      setDuplicateMarkDialog(null);
+      return;
+    }
     const { existingEntry, rate: newRate, qty: newQty } = duplicateMarkDialog;
+    if (existingEntry.frozen) {
+      notifyBillFrozenBid();
+      setDuplicateMarkDialog(null);
+      return;
+    }
     const mergeEffectivePreset = showPresetMargin ? preset : 0;
     if (existingEntry.rate === newRate) {
       try {
@@ -3874,6 +3929,10 @@ const AuctionsPage = () => {
   };
 
   const handleFormSubmit = () => {
+    if (selectedLotFrozen) {
+      notifyFrozenAuction();
+      return;
+    }
     if (!selectedBuyer || !rate || !qty) return;
     const entryRate = getBidRateFromInput(rate);
     const entryQty = parseInt(qty);
@@ -3899,6 +3958,10 @@ const AuctionsPage = () => {
 
   const handleScribbleConfirm = (initials: string, quantity: number) => {
     if (editingBidId) return;
+    if (selectedLotFrozen) {
+      notifyFrozenAuction();
+      return;
+    }
     const currentRate = getBidRateFromInput(rate) || highestBid || 0;
     if (currentRate <= 0) return;
     const effectivePreset = showPresetMargin ? preset : 0;
@@ -3924,6 +3987,10 @@ const AuctionsPage = () => {
   };
 
   const handleScribbleInlineAdd = () => {
+    if (selectedLotFrozen) {
+      notifyFrozenAuction();
+      return;
+    }
     if (!scribbleMark || !rate || !qty) return;
     const entryRate = getBidRateFromInput(rate);
     const entryQty = parseInt(qty);
@@ -3954,6 +4021,10 @@ const AuctionsPage = () => {
 
   // Unified Add Bid: use selected contact (name + mark) or scribble mark only — fast path for live auction
   const handleUnifiedAdd = () => {
+    if (selectedLotFrozen) {
+      notifyFrozenAuction();
+      return;
+    }
     const entryRate = getBidRateFromInput(rate);
     const entryQty = parseInt(qty);
     if (!rate || !qty || entryRate <= 0 || entryQty <= 0) return;
@@ -4084,6 +4155,10 @@ const AuctionsPage = () => {
 
   const handleSelfSale = () => {
     if (remaining <= 0 || !selectedLot) return;
+    if (selectedLotFrozen) {
+      notifyFrozenAuction();
+      return;
+    }
     hapticImpact();
     const currentRate = highestBid || getBidRateFromInput(rate) || 0;
     tryAddEntry({
@@ -4192,6 +4267,10 @@ const AuctionsPage = () => {
       toast.error('You do not have permission to delete auction bids.');
       return;
     }
+    if (selectedLotFrozen) {
+      notifyFrozenAuction();
+      return;
+    }
     if (editingBidId === id) {
       setEditingBidId(null);
       setEditBidDraft(null);
@@ -4200,6 +4279,11 @@ const AuctionsPage = () => {
       setShowTokenInput(null);
       editBidFormSnapshotRef.current = null;
     }
+    const target = entriesRef.current.find(entry => entry.id === id);
+    if (target?.frozen) {
+      notifyBillFrozenBid();
+      return;
+    }
     try {
       const session = await deleteBidForCurrentSelection(Number(id));
       applyAuctionSession(session);
@@ -4207,7 +4291,7 @@ const AuctionsPage = () => {
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Failed to remove bid');
     }
-  }, [selectedLot, loadTemporaryBuyerMarks, editingBidId, can, getBidRateFromInput]);
+  }, [selectedLot, selectedLotFrozen, loadTemporaryBuyerMarks, editingBidId, can, notifyFrozenAuction, notifyBillFrozenBid, deleteBidForCurrentSelection, applyAuctionSession]);
 
   const setTokenAdvanceAmount = useCallback(async (id: string, amount: number) => {
     if (!selectedLot) return;
@@ -4219,6 +4303,15 @@ const AuctionsPage = () => {
       toast.error('You do not have permission to edit auction bids.');
       return;
     }
+    if (selectedLotFrozen) {
+      notifyFrozenAuction();
+      return;
+    }
+    const target = entriesRef.current.find(entry => entry.id === id);
+    if (target?.frozen) {
+      notifyBillFrozenBid();
+      return;
+    }
     try {
       const session = await updateBidForCurrentSelection(Number(id), { token_advance: amount });
       applyAuctionSession(session);
@@ -4226,20 +4319,36 @@ const AuctionsPage = () => {
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Failed to update token advance');
     }
-  }, [selectedLot, editingBidId, can, applyAuctionSession, updateBidForCurrentSelection]);
+  }, [selectedLot, editingBidId, selectedLotFrozen, can, notifyFrozenAuction, notifyBillFrozenBid, applyAuctionSession, updateBidForCurrentSelection]);
 
   const toggleAuctionTokenInput = useCallback((entryId: string) => {
     setShowTokenInput(prev => prev === entryId ? null : entryId);
   }, []);
 
   const requestDeleteBid = useCallback((entry: SaleEntry) => {
+    if (selectedLotFrozen) {
+      notifyFrozenAuction();
+      return;
+    }
+    if (entry.frozen) {
+      notifyBillFrozenBid();
+      return;
+    }
     setPendingDeleteBid({ id: entry.id, label: `${entry.buyerName} (${entry.buyerMark})` });
-  }, []);
+  }, [selectedLotFrozen, notifyFrozenAuction, notifyBillFrozenBid]);
 
   const requestDeleteEditingBid = useCallback(() => {
     if (!editingEntry) return;
+    if (selectedLotFrozen) {
+      notifyFrozenAuction();
+      return;
+    }
+    if (editingEntry.frozen) {
+      notifyBillFrozenBid();
+      return;
+    }
     setPendingDeleteBid({ id: editingEntry.id, label: `${editingEntry.buyerName} (${editingEntry.buyerMark})` });
-  }, [editingEntry]);
+  }, [editingEntry, selectedLotFrozen, notifyFrozenAuction, notifyBillFrozenBid]);
 
   const cancelEditBid = useCallback(() => {
     const snap = editBidFormSnapshotRef.current;
@@ -4269,6 +4378,14 @@ const AuctionsPage = () => {
   const startEditBid = useCallback((entry: SaleEntry) => {
     if (!can('Auctions / Sales', 'Edit')) {
       toast.error('You do not have permission to edit auction bids.');
+      return;
+    }
+    if (selectedLotFrozen) {
+      notifyFrozenAuction();
+      return;
+    }
+    if (entry.frozen) {
+      notifyBillFrozenBid();
       return;
     }
 
@@ -4331,12 +4448,23 @@ const AuctionsPage = () => {
     activeNumpadField,
     mobileKeyboardEnabled,
     buyers,
+    selectedLotFrozen,
+    notifyFrozenAuction,
+    notifyBillFrozenBid,
   ]);
 
   const saveEditBid = useCallback(async (entry: SaleEntry) => {
     if (!selectedLot || !editBidDraft) return;
     if (!can('Auctions / Sales', 'Edit')) {
       toast.error('You do not have permission to edit auction bids.');
+      return;
+    }
+    if (selectedLotFrozen) {
+      notifyFrozenAuction();
+      return;
+    }
+    if (entry.frozen) {
+      notifyBillFrozenBid();
       return;
     }
     const rateDisplay = parseInt(editBidDraft.rate, 10);
@@ -4415,7 +4543,11 @@ const AuctionsPage = () => {
     editBidDraft,
     entries,
     editBidRetryAllowIncrease,
+    selectedLotFrozen,
     can,
+    notifyFrozenAuction,
+    notifyBillFrozenBid,
+    updateBidForCurrentSelection,
     loadTemporaryBuyerMarks,
     applyAuctionSession,
     refetchAuctionSession,
@@ -4424,6 +4556,11 @@ const AuctionsPage = () => {
 
   const confirmEditBidQtyIncrease = useCallback(async () => {
     if (!editBidQtyDialog || !selectedLot) return;
+    if (selectedLotFrozen) {
+      notifyFrozenAuction();
+      setEditBidQtyDialog(null);
+      return;
+    }
     const { pendingBody, bidNumericId } = editBidQtyDialog;
     setEditBidQtyDialog(null);
     try {
@@ -4453,9 +4590,13 @@ const AuctionsPage = () => {
       }
       toast.error(err instanceof Error ? err.message : 'Failed to update bid');
     }
-  }, [editBidQtyDialog, selectedLot, applyAuctionSession, loadTemporaryBuyerMarks, refetchAuctionSession, cancelEditBid]);
+  }, [editBidQtyDialog, selectedLot, selectedLotFrozen, notifyFrozenAuction, applyAuctionSession, loadTemporaryBuyerMarks, refetchAuctionSession, cancelEditBid, updateBidForCurrentSelection]);
 
   const applyPreset = (value: number) => {
+    if (selectedLotFrozen) {
+      notifyFrozenAuction();
+      return;
+    }
     const next = preset === value ? 0 : value;
     setPreset(next);
     if (next !== 0) setPresetType(value >= 0 ? 'PROFIT' : 'LOSS');
@@ -4486,6 +4627,10 @@ const AuctionsPage = () => {
   }, [editingBidId, previousBidRate, rate]);
 
   const handleShowPresetMarginChange = useCallback((checked: boolean) => {
+    if (selectedLotFrozen) {
+      notifyFrozenAuction();
+      return;
+    }
     // Do not rewrite rate when toggling preset — field stays seller bid; preset is separate.
     if (!editingBidId) {
       const currentInput = parseInt(rate, 10);
@@ -4513,7 +4658,7 @@ const AuctionsPage = () => {
     } else if (preset !== 0) {
       syncPresetToAllSessionBids(preset, presetType);
     }
-  }, [editingBidId, preset, presetType, previousBidRate, rate, syncPresetToAllSessionBids]);
+  }, [editingBidId, preset, presetType, previousBidRate, rate, selectedLotFrozen, notifyFrozenAuction, syncPresetToAllSessionBids]);
 
   const selectLot = useCallback((lot: LotInfo, source: LotSource = statusFilter === 'self_sale' ? 'self_sale' : 'regular') => {
     setSelectedLotSource(source);
@@ -5091,6 +5236,15 @@ const AuctionsPage = () => {
                     {selectedLot.vehicle_number?.trim() || '—'}
                     <span className="mx-1 text-white/45 md:mx-1.5">|</span>
                     {formatLotDisplayName(selectedLot)}
+                    {selectedLotFrozen && (
+                      <>
+                        <span className="mx-1 text-white/45 md:mx-1.5">|</span>
+                        <span className="inline-flex items-center gap-1 rounded-full bg-white/20 px-2 py-0.5 text-[0.85em] font-black uppercase text-white">
+                          <Lock className="h-[0.9em] w-[0.9em]" />
+                          Frozen
+                        </span>
+                      </>
+                    )}
                     <span className="mx-1 text-white/45 md:mx-1.5">|</span>
                     <span className="tabular-nums">{totalSold}/{remaining}</span>
                   </p>
@@ -5267,8 +5421,17 @@ const AuctionsPage = () => {
                     Lot {currentLotIndex + 1} of {navigationLots.length}
                   </span>
                   <span className={cn('flex items-center gap-1', mobileTouchHero.hint)}>
-                    <ChevronUp className="h-3.5 w-3.5" strokeWidth={2.5} />
-                    Tap to enlarge grid
+                    {selectedLotFrozen ? (
+                      <>
+                        <Lock className="h-3.5 w-3.5" strokeWidth={2.5} />
+                        Frozen by printed Patti
+                      </>
+                    ) : (
+                      <>
+                        <ChevronUp className="h-3.5 w-3.5" strokeWidth={2.5} />
+                        Tap to enlarge grid
+                      </>
+                    )}
                   </span>
                 </div>
               )}
@@ -5291,6 +5454,15 @@ const AuctionsPage = () => {
           isDesktop && 'contents'
         )}
       >
+      {selectedLotFrozen && !isDesktop && (
+        <div className="mx-3 mt-2 rounded-xl border border-slate-400/35 bg-slate-500/10 px-3 py-2 text-xs text-slate-700 dark:text-slate-200">
+          <div className="flex items-center gap-2 font-bold">
+            <Lock className="h-4 w-4" />
+            Frozen by printed Settlement Patti
+          </div>
+          <p className="mt-0.5 text-muted-foreground">Use Alt+M in Settlement to reopen before changing bids.</p>
+        </div>
+      )}
       {/* Desktop Toolbar */}
       {isDesktop && (
         <div className="px-8 py-5">
@@ -5298,6 +5470,12 @@ const AuctionsPage = () => {
             <div>
               <h2 className="text-lg font-bold text-foreground flex items-center gap-2">
                 <Gavel className="w-5 h-5 text-blue-500" /> Sales Pad — Live Auction
+                {selectedLotFrozen && (
+                  <span className="inline-flex items-center gap-1 rounded-full border border-slate-400/40 bg-slate-500/10 px-2.5 py-1 text-xs font-black uppercase tracking-wide text-slate-700 dark:text-slate-200">
+                    <Lock className="h-3.5 w-3.5" />
+                    Frozen
+                  </span>
+                )}
               </h2>
               <p className="text-sm text-muted-foreground">
                 {selectedLot ? formatLotDisplayName(selectedLot) : 'No lot selected'}
@@ -5344,6 +5522,19 @@ const AuctionsPage = () => {
               <div className="glass-card rounded-2xl p-4 border-l-4 border-l-rose-500">
                 <p className="text-[10px] text-muted-foreground uppercase font-semibold">{isSelfSaleReauction ? 'Self-Sale Qty' : 'Entries'}</p>
                 <p className="text-2xl font-black text-foreground">{isSelfSaleReauction ? (selfSaleContext?.quantity ?? 0) : entries.length}</p>
+              </div>
+            </div>
+          )}
+          {selectedLotFrozen && (
+            <div className="mt-4 rounded-2xl border border-slate-400/35 bg-slate-500/10 p-4 text-sm text-slate-700 dark:text-slate-200">
+              <div className="flex items-start gap-3">
+                <Lock className="mt-0.5 h-5 w-5 shrink-0" />
+                <div>
+                  <p className="font-bold">Auction bids are frozen for this seller.</p>
+                  <p className="text-muted-foreground">
+                    Settlement Patti is printed. Use Alt+M in Settlement to reopen before adding, editing, deleting, or changing token amounts.
+                  </p>
+                </div>
               </div>
             </div>
           )}
@@ -5413,6 +5604,7 @@ const AuctionsPage = () => {
               <PresetMarginSwitch
                 checked={showPresetMargin}
                 onCheckedChange={handleShowPresetMarginChange}
+                disabled={selectedLotFrozen}
                 aria-label="Show preset margin on bids"
               />
             </div>
@@ -5426,8 +5618,9 @@ const AuctionsPage = () => {
                         key={opt.label + String(opt.value)}
                         type="button"
                         onClick={() => applyPreset(opt.value)}
+                        disabled={selectedLotFrozen}
                         className={cn(
-                          'flex-1 py-2 rounded-xl text-sm font-bold transition-all',
+                          'flex-1 py-2 rounded-xl text-sm font-bold transition-all disabled:opacity-50',
                           preset === opt.value
                             ? opt.value >= 0
                               ? 'bg-gradient-to-r from-emerald-500 to-green-500 text-white shadow-md shadow-emerald-500/20'
@@ -5472,7 +5665,7 @@ const AuctionsPage = () => {
                       data-skip-route-autofocus={preferRateForFirstBidFormFocus ? 'true' : undefined}
                       type="text"
                       value={scribbleMark}
-                      readOnly={!!editingBidId}
+                      readOnly={selectedLotFrozen || !!editingBidId}
                       onMouseDown={() => { manualMarkSelectionRef.current = true; }}
                       onTouchStart={() => { manualMarkSelectionRef.current = true; }}
                       onChange={(e) => {
@@ -5531,7 +5724,7 @@ const AuctionsPage = () => {
                         </span>
                         <button
                           type="button"
-                          disabled={!!editingBidId}
+                          disabled={selectedLotFrozen || !!editingBidId}
                           onClick={() => { setSelectedBuyer(null); lastScribbleSegmentRef.current = ''; setScribbleMark(''); }}
                           className="text-muted-foreground hover:text-foreground p-0.5 disabled:opacity-40 disabled:cursor-not-allowed"
                         >
@@ -5545,7 +5738,7 @@ const AuctionsPage = () => {
                         <button
                           type="button"
                           onClick={handleMarkBackspace}
-                          disabled={!!editingBidId || !scribbleMark}
+                          disabled={selectedLotFrozen || !!editingBidId || !scribbleMark}
                           className="px-2 py-1 rounded-lg text-[10px] font-semibold bg-muted/70 text-foreground hover:bg-muted disabled:opacity-40 border border-border/60"
                           aria-label="Delete last character of mark"
                         >
@@ -5553,7 +5746,7 @@ const AuctionsPage = () => {
                         </button>
                         <button
                           type="button"
-                          disabled={!!editingBidId}
+                          disabled={selectedLotFrozen || !!editingBidId}
                           onClick={() => { lastScribbleSegmentRef.current = ''; setScribbleMark(''); setScribblePadResetTrigger((t) => t + 1); }}
                           className="p-1 rounded-md bg-destructive/10 text-destructive hover:bg-destructive/20 disabled:opacity-40 disabled:cursor-not-allowed"
                           aria-label="Clear mark"
@@ -5578,10 +5771,11 @@ const AuctionsPage = () => {
                   mobileKeyboardEnabled={mobileKeyboardEnabled}
                   rateInputRef={rateInputRef}
                   qtyInputRef={qtyInputRef}
-                  addDisabled={(!scribbleMark.trim() && !selectedBuyer) || !rate || !qty || parseInt(qty) <= 0 || parseInt(rate) <= 0}
-                  updateDisabled={!rate || !qty || parseInt(qty) <= 0 || parseInt(rate) <= 0}
+                  readOnly={selectedLotFrozen}
+                  addDisabled={selectedLotFrozen || (!scribbleMark.trim() && !selectedBuyer) || !rate || !qty || parseInt(qty) <= 0 || parseInt(rate) <= 0}
+                  updateDisabled={selectedLotFrozen || !rate || !qty || parseInt(qty) <= 0 || parseInt(rate) <= 0}
                   showSelfSaleButton={!isSelfSaleReauction}
-                  selfSaleDisabled={remaining <= 0}
+                  selfSaleDisabled={selectedLotFrozen || remaining <= 0}
                   onRateChange={handleRateInputChange}
                   onQtyChange={handleQtyInputChange}
                   onRateFocus={handleRateInputFocus}
@@ -5613,6 +5807,7 @@ const AuctionsPage = () => {
             editingBidId={editingBidId}
             showTokenInput={showTokenInput}
             canEdit={canEditAuctionBids}
+            readOnly={selectedLotFrozen}
             autoScrollKey={autoScrollKey}
             gridSectionRef={auctionGridSectionRef}
             auctionGridMobileScrollStyle={auctionGridMobileScrollStyle}
@@ -5733,7 +5928,8 @@ const AuctionsPage = () => {
             editingActive={!!(editingBidId && editBidDraft && editingEntry)}
             isMdViewport={isMdViewport}
             completeLoading={completeLoading}
-            canDelete={can('Auctions / Sales', 'Delete')}
+            canDelete={!selectedLotFrozen && can('Auctions / Sales', 'Delete')}
+            readOnly={selectedLotFrozen}
             activeNumpadField={activeNumpadField}
             mobileKeyboardEnabled={mobileKeyboardEnabled}
             rateInputRef={rateInputRef}
@@ -5768,9 +5964,10 @@ const AuctionsPage = () => {
                           key={opt.label + String(opt.value)}
                           type="button"
                           onClick={() => applyPreset(opt.value)}
+                          disabled={selectedLotFrozen}
                           style={presetChipButtonStyle}
                           className={cn(
-                            'shrink-0 inline-flex items-center justify-center whitespace-nowrap rounded-none px-3 py-2 font-bold transition-all leading-tight',
+                            'shrink-0 inline-flex items-center justify-center whitespace-nowrap rounded-none px-3 py-2 font-bold transition-all leading-tight disabled:opacity-50',
                             preset === opt.value
                               ? opt.value >= 0
                                 ? 'bg-gradient-to-r from-emerald-500 to-green-500 text-white'
@@ -5790,8 +5987,9 @@ const AuctionsPage = () => {
                             const hit = presetOptions.find((o) => o.value === preset);
                             if (hit) applyPreset(hit.value);
                           }}
+                          disabled={selectedLotFrozen}
                           style={presetChipIconSquareStyle}
-                          className="inline-flex shrink-0 items-center justify-center rounded-none border border-border/60 bg-muted/50 text-muted-foreground hover:bg-muted"
+                          className="inline-flex shrink-0 items-center justify-center rounded-none border border-border/60 bg-muted/50 text-muted-foreground hover:bg-muted disabled:opacity-50"
                           aria-label="Clear preset margin"
                           title="Reset margin"
                         >
@@ -5806,6 +6004,7 @@ const AuctionsPage = () => {
                 <PresetMarginSwitch
                   checked={showPresetMargin}
                   onCheckedChange={handleShowPresetMarginChange}
+                  disabled={selectedLotFrozen}
                   aria-label="Show preset margin on bids"
                 />
               </div>
@@ -5841,7 +6040,8 @@ const AuctionsPage = () => {
                     key={k}
                     type="button"
                     onClick={() => handleNumpadKey(k)}
-                    className="rounded-none bg-muted/60 hover:bg-muted font-bold text-foreground transition-colors"
+                    disabled={selectedLotFrozen}
+                    className="rounded-none bg-muted/60 hover:bg-muted font-bold text-foreground transition-colors disabled:opacity-50"
                     style={numpadMainRowStyle}
                   >
                     {k}
@@ -5853,6 +6053,7 @@ const AuctionsPage = () => {
                 <button
                   type="button"
                   onClick={handleNumpadBackspace}
+                  disabled={selectedLotFrozen}
                   className="rounded-none bg-muted/60 hover:bg-muted text-foreground font-semibold inline-flex items-center justify-center disabled:opacity-50"
                   style={numpadSecondaryRowStyle}
                   aria-label="Backspace (remove last character)"
@@ -5863,6 +6064,7 @@ const AuctionsPage = () => {
                 <button
                   type="button"
                   onClick={handleNumpadClear}
+                  disabled={selectedLotFrozen}
                   className="col-span-2 rounded-none bg-muted/60 hover:bg-muted text-foreground font-bold disabled:opacity-50 uppercase tracking-wide"
                   style={numpadSecondaryRowStyle}
                   aria-label="Clear current bid draft fields"
@@ -5885,7 +6087,7 @@ const AuctionsPage = () => {
                   type="button"
                   onMouseDown={(e) => e.preventDefault()}
                   onClick={appendMarkParenFromNumpad}
-                  disabled={!!editingBidId}
+                  disabled={selectedLotFrozen || !!editingBidId}
                   className="rounded-none bg-violet-500/15 text-violet-800 dark:text-violet-200 border border-violet-500/35 font-bold"
                   style={numpadSecondaryRowStyle}
                   title="Add ( or ) to mark"
@@ -5898,7 +6100,7 @@ const AuctionsPage = () => {
                   <button
                     type="button"
                     onClick={handleSelfSale}
-                    disabled={remaining <= 0}
+                    disabled={selectedLotFrozen || remaining <= 0}
                     className="rounded-none bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/30 font-bold disabled:opacity-50"
                     style={numpadSecondaryRowStyle}
                     aria-label="Self Sale"
@@ -5915,7 +6117,7 @@ const AuctionsPage = () => {
                     <button
                       type="button"
                       onClick={() => { if (editingEntry) void saveEditBid(editingEntry); }}
-                      disabled={!editingEntry || !rate || !qty || parseInt(qty) <= 0 || parseInt(rate) <= 0}
+                      disabled={selectedLotFrozen || !editingEntry || !rate || !qty || parseInt(qty) <= 0 || parseInt(rate) <= 0}
                       className="rounded-none bg-gradient-to-r from-violet-500 to-fuchsia-500 text-white font-bold disabled:opacity-50"
                       style={numpadSecondaryRowStyle}
                     >
@@ -5947,7 +6149,7 @@ const AuctionsPage = () => {
                   <button
                     type="button"
                     onClick={handleUnifiedAdd}
-                    disabled={(!scribbleMark.trim() && !selectedBuyer) || !rate || !qty || parseInt(qty) <= 0 || parseInt(rate) <= 0}
+                    disabled={selectedLotFrozen || (!scribbleMark.trim() && !selectedBuyer) || !rate || !qty || parseInt(qty) <= 0 || parseInt(rate) <= 0}
                     className="rounded-none bg-gradient-to-r from-violet-500 to-fuchsia-500 text-white font-bold disabled:opacity-50 px-1 leading-tight"
                     style={numpadActionRowStyle}
                   >

@@ -226,6 +226,13 @@ public final class SalesBillDTOs {
         private BigDecimal brokerageValue;
         private BigDecimal globalOtherCharges;
         private BigDecimal pendingBalance;
+        private Instant printedAt;
+        private Instant lockedAt;
+        private String lockedBy;
+        private Instant reopenedAt;
+        private String reopenedBy;
+        private String reopenReason;
+        private Boolean frozen;
         private List<BillVersionDTO> versions = new ArrayList<>();
 
         public String getBillId() { return billId; }
@@ -276,6 +283,20 @@ public final class SalesBillDTOs {
         public void setGlobalOtherCharges(BigDecimal globalOtherCharges) { this.globalOtherCharges = globalOtherCharges; }
         public BigDecimal getPendingBalance() { return pendingBalance; }
         public void setPendingBalance(BigDecimal pendingBalance) { this.pendingBalance = pendingBalance; }
+        public Instant getPrintedAt() { return printedAt; }
+        public void setPrintedAt(Instant printedAt) { this.printedAt = printedAt; }
+        public Instant getLockedAt() { return lockedAt; }
+        public void setLockedAt(Instant lockedAt) { this.lockedAt = lockedAt; }
+        public String getLockedBy() { return lockedBy; }
+        public void setLockedBy(String lockedBy) { this.lockedBy = lockedBy; }
+        public Instant getReopenedAt() { return reopenedAt; }
+        public void setReopenedAt(Instant reopenedAt) { this.reopenedAt = reopenedAt; }
+        public String getReopenedBy() { return reopenedBy; }
+        public void setReopenedBy(String reopenedBy) { this.reopenedBy = reopenedBy; }
+        public String getReopenReason() { return reopenReason; }
+        public void setReopenReason(String reopenReason) { this.reopenReason = reopenReason; }
+        public Boolean getFrozen() { return frozen; }
+        public void setFrozen(Boolean frozen) { this.frozen = frozen; }
         public List<BillVersionDTO> getVersions() { return versions; }
         public void setVersions(List<BillVersionDTO> versions) { this.versions = versions != null ? versions : new ArrayList<>(); }
     }

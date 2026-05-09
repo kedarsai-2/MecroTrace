@@ -21,6 +21,7 @@ import com.mercotrace.repository.SettlementVoucherTempRepository;
 import com.mercotrace.repository.VehicleRepository;
 import com.mercotrace.repository.VehicleWeightRepository;
 import com.mercotrace.repository.VoucherLineRepository;
+import com.mercotrace.security.SecurityUtils;
 import com.mercotrace.service.AuctionService;
 import com.mercotrace.service.ContactService;
 import com.mercotrace.service.SettlementService;
@@ -35,6 +36,7 @@ import com.mercotrace.service.dto.SettlementDTOs;
 import com.mercotrace.service.dto.SettlementDTOs.*;
 import java.math.BigDecimal;
 import java.math.MathContext;
+import java.time.Instant;
 import java.util.*;
 import java.util.stream.Collectors;
 import org.slf4j.Logger;
@@ -314,6 +316,7 @@ public class SettlementServiceImpl implements SettlementService {
         }
 
         List<SellerSettlementDTO> allSellers = new ArrayList<>(sellerMap.values());
+        applyFrozenPattiState(traderId, allSellers);
         if (search != null && !search.isBlank()) {
             String q = search.toLowerCase().trim();
             allSellers = allSellers.stream()
@@ -532,6 +535,7 @@ public class SettlementServiceImpl implements SettlementService {
             return Optional.empty();
         }
         Patti patti = opt.get();
+        assertNotFrozen(patti, "Printed Sales Patti is frozen. Press Edit to reopen before changing it.");
         applyOriginalSnapshotIfEmpty(patti, request.getOriginalSnapshotJson());
         patti.setSellerName(request.getSellerName());
         patti.setGrossAmount(request.getGrossAmount());
@@ -545,6 +549,43 @@ public class SettlementServiceImpl implements SettlementService {
         mapRequestDeductionsAndClustersToEntity(request, patti);
         pattiRepository.save(patti);
         return pattiRepository.findById(id).map(this::toPattiDTO);
+    }
+
+    @Override
+    @Transactional(readOnly = false)
+    public PattiDTO markPattiPrinted(Long id) {
+        Long traderId = traderContextService.getCurrentTraderId();
+        Patti patti = pattiRepository
+            .findById(id)
+            .filter(p -> traderId.equals(p.getTraderId()))
+            .orElseThrow(() -> new IllegalArgumentException("Sales Patti not found: " + id));
+        Instant now = Instant.now();
+        if (patti.getPrintedAt() == null) {
+            patti.setPrintedAt(now);
+        }
+        patti.setLockedAt(now);
+        patti.setLockedBy(currentActor());
+        patti.setReopenedAt(null);
+        patti.setReopenedBy(null);
+        patti.setReopenReason(null);
+        return toPattiDTO(pattiRepository.save(patti));
+    }
+
+    @Override
+    @Transactional(readOnly = false)
+    public PattiDTO reopenPatti(Long id) {
+        Long traderId = traderContextService.getCurrentTraderId();
+        Patti patti = pattiRepository
+            .findById(id)
+            .filter(p -> traderId.equals(p.getTraderId()))
+            .orElseThrow(() -> new IllegalArgumentException("Sales Patti not found: " + id));
+        if (patti.getLockedAt() == null || patti.getReopenedAt() != null) {
+            return toPattiDTO(patti);
+        }
+        patti.setReopenedAt(Instant.now());
+        patti.setReopenedBy(currentActor());
+        patti.setReopenReason(null);
+        return toPattiDTO(pattiRepository.save(patti));
     }
 
     @Override
@@ -1178,6 +1219,40 @@ public class SettlementServiceImpl implements SettlementService {
 
     private record Scope(Long traderId, String sellerId) {}
 
+    private void applyFrozenPattiState(Long traderId, List<SellerSettlementDTO> sellers) {
+        if (sellers == null || sellers.isEmpty()) {
+            return;
+        }
+        List<String> sellerIds = sellers.stream()
+            .map(SellerSettlementDTO::getSellerId)
+            .filter(Objects::nonNull)
+            .map(String::trim)
+            .filter(s -> !s.isBlank())
+            .distinct()
+            .toList();
+        if (sellerIds.isEmpty()) {
+            return;
+        }
+        Map<String, Patti> frozenBySeller = pattiRepository
+            .findAllByTraderIdAndSellerIdInAndLockedAtIsNotNullAndReopenedAtIsNullAndInProgressFalse(traderId, sellerIds)
+            .stream()
+            .collect(Collectors.toMap(Patti::getSellerId, p -> p, (a, b) -> {
+                Instant aLocked = a.getLockedAt();
+                Instant bLocked = b.getLockedAt();
+                if (aLocked == null) return b;
+                if (bLocked == null) return a;
+                return bLocked.isAfter(aLocked) ? b : a;
+            }));
+        for (SellerSettlementDTO seller : sellers) {
+            Patti patti = frozenBySeller.get(seller.getSellerId());
+            seller.setFrozen(patti != null);
+            if (patti != null) {
+                seller.setFrozenPattiId(patti.getPattiId());
+                seller.setFrozenAt(patti.getLockedAt());
+            }
+        }
+    }
+
     private PattiDTO toPattiDTO(Patti e) {
         PattiDTO dto = new PattiDTO();
         dto.setId(e.getId());
@@ -1194,6 +1269,13 @@ public class SettlementServiceImpl implements SettlementService {
         dto.setUseAverageWeight(e.getUseAverageWeight());
         dto.setInProgress(Boolean.TRUE.equals(e.getInProgress()));
         dto.setExtensionJson(e.getExtensionJson());
+        dto.setPrintedAt(e.getPrintedAt());
+        dto.setLockedAt(e.getLockedAt());
+        dto.setLockedBy(e.getLockedBy());
+        dto.setReopenedAt(e.getReopenedAt());
+        dto.setReopenedBy(e.getReopenedBy());
+        dto.setReopenReason(e.getReopenReason());
+        dto.setFrozen(isFrozen(e));
         for (PattiRateCluster c : e.getRateClusters()) {
             RateClusterDTO rc = new RateClusterDTO();
             rc.setRate(c.getRate());
@@ -1253,5 +1335,19 @@ public class SettlementServiceImpl implements SettlementService {
         if (serial != null) {
             dto.setSellerSerialNo(serial);
         }
+    }
+
+    private static boolean isFrozen(Patti patti) {
+        return patti.getLockedAt() != null && patti.getReopenedAt() == null;
+    }
+
+    private static void assertNotFrozen(Patti patti, String message) {
+        if (isFrozen(patti)) {
+            throw new IllegalArgumentException(message);
+        }
+    }
+
+    private static String currentActor() {
+        return SecurityUtils.getCurrentUserLogin().orElse("system");
     }
 }

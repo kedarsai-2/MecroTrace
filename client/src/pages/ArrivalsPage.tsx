@@ -1386,7 +1386,7 @@ const ArrivalsPage = () => {
     setStep(2);
 
     const mappedSellers: SellerEntry[] = (detail?.sellers ?? []).map((s, idx) => ({
-      seller_vehicle_id: `edit-${s?.contactId ?? idx}-${idx}`,
+      seller_vehicle_id: s?.sellerVehicleId != null ? String(s.sellerVehicleId) : `edit-${s?.contactId ?? idx}-${idx}`,
       contact_id: String(s?.contactId ?? ''),
       seller_serial_number: s?.sellerSerialNumber ?? null,
       seller_name: s?.sellerName ?? '',
@@ -1580,18 +1580,24 @@ const ArrivalsPage = () => {
     partially_completed: true,
     sellers: sellers.map(s => {
       const hasContactId = s.contact_id !== '' && !Number.isNaN(Number(s.contact_id));
+      const sellerVehicleId = Number(s.seller_vehicle_id);
       return {
+        seller_vehicle_id: Number.isFinite(sellerVehicleId) && sellerVehicleId > 0 ? sellerVehicleId : undefined,
         contact_id: hasContactId ? Number(s.contact_id) : null,
         seller_name: s.seller_name,
         seller_phone: s.seller_phone,
         seller_mark: s.seller_mark || undefined,
-        lots: s.lots.map(l => ({
-          lot_name: l.lot_name,
-          quantity: l.quantity,
-          commodity_name: l.commodity_name,
-          broker_tag: l.broker_tag || undefined,
-          variant: l.variant || undefined,
-        })),
+        lots: s.lots.map(l => {
+          const lotId = Number(l.lot_id);
+          return {
+            lot_id: Number.isFinite(lotId) && lotId > 0 ? lotId : undefined,
+            lot_name: l.lot_name,
+            quantity: l.quantity,
+            commodity_name: l.commodity_name,
+            broker_tag: l.broker_tag || undefined,
+            variant: l.variant || undefined,
+          };
+        }),
       };
     }),
   }), [isMultiSeller, vehicleNumber, vehicleMarkAlias, loadedWeight, emptyWeight, deductedWeight, freightMethod, freightRate, freightKgs, noRental, advancePaid, brokerName, brokerContactId, narration, godown, gatepassNumber, origin, sellers]);

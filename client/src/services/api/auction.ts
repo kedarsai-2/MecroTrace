@@ -30,6 +30,8 @@ export interface LotSummaryDTO {
   vehicle_total_qty?: number;
   /** Total bags for this seller (all lots of that seller). For lot identifier. */
   seller_total_qty?: number;
+  /** True when printed Settlement Patti froze this seller's Summary/Sales Pad rows. */
+  seller_frozen?: boolean;
   /** Distinct buyers with bids (latest auction); for "By Buyer" lot navigation. */
   participating_buyers?: LotParticipatingBuyerDTO[];
 }
@@ -59,6 +61,8 @@ export interface AuctionEntryDTO {
   created_at?: string;
   /** Epoch ms — optimistic concurrency when PATCHing this bid */
   last_modified_ms?: number;
+  /** True when this exact bid is part of a printed, non-reopened Sales Bill. */
+  frozen?: boolean;
 }
 
 export interface AuctionSessionDTO {
@@ -215,10 +219,20 @@ async function parseJsonOrThrow(res: Response, defaultMessage: string): Promise<
     const contentType = res.headers.get('content-type') || '';
     if (contentType.includes('application/json') || contentType.includes('application/problem+json')) {
       const body = await res.json();
-      if (body?.message) message = body.message;
-      else if (body?.detail) message = body.detail;
-      else if (body?.title) message = body.title;
-      else if (Array.isArray(body?.errors) && body.errors[0]?.message) message = body.errors[0].message;
+      const apiMessage = typeof body?.message === 'string' ? body.message : '';
+      const apiDetail = typeof body?.detail === 'string' ? body.detail : '';
+      const apiTitle = typeof body?.title === 'string' ? body.title : '';
+      const firstError = Array.isArray(body?.errors) && typeof body.errors[0]?.message === 'string'
+        ? body.errors[0].message
+        : '';
+      if (apiMessage.startsWith('error.')) {
+        message = apiDetail || apiTitle || firstError || defaultMessage;
+      } else {
+        message = apiMessage || apiDetail || apiTitle || firstError || defaultMessage;
+      }
+      if (message === 'error.validation') {
+        message = 'This auction change is blocked by validation. If Settlement Patti or Sales Bill is printed, reopen it before changing bids.';
+      }
     } else {
       const text = await res.text();
       if (text && text.length < 300) message = text;

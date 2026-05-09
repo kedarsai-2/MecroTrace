@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <changeSet id="20260509120000-1" author="mercotrace">
+        <addColumn tableName="sales_bill">
+            <column name="printed_at" type="${datetimeType}"/>
+            <column name="locked_at" type="${datetimeType}"/>
+            <column name="locked_by" type="varchar(100)"/>
+            <column name="reopened_at" type="${datetimeType}"/>
+            <column name="reopened_by" type="varchar(100)"/>
+            <column name="reopen_reason" type="varchar(500)"/>
+        </addColumn>
+        <createIndex indexName="idx_sales_bill_trader_locked" tableName="sales_bill">
+            <column name="trader_id"/>
+            <column name="locked_at"/>
+            <column name="reopened_at"/>
+        </createIndex>
+    </changeSet>
+
+    <changeSet id="20260509120000-2" author="mercotrace">
+        <addColumn tableName="sales_patti">
+            <column name="printed_at" type="${datetimeType}"/>
+            <column name="locked_at" type="${datetimeType}"/>
+            <column name="locked_by" type="varchar(100)"/>
+            <column name="reopened_at" type="${datetimeType}"/>
+            <column name="reopened_by" type="varchar(100)"/>
+            <column name="reopen_reason" type="varchar(500)"/>
+        </addColumn>
+        <createIndex indexName="idx_sales_patti_trader_seller_locked" tableName="sales_patti">
+            <column name="trader_id"/>
+            <column name="seller_id"/>
+            <column name="locked_at"/>
+            <column name="reopened_at"/>
+        </createIndex>
+    </changeSet>
+</databaseChangeLog>

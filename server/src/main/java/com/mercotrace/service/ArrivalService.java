@@ -24,6 +24,7 @@ import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -512,6 +513,7 @@ public class ArrivalService {
         List<ArrivalSellerFullDTO> sellerFullList = new ArrayList<>();
         for (SellerInVehicle siv : sellers) {
             ArrivalSellerFullDTO sellerFull = new ArrivalSellerFullDTO();
+            sellerFull.setSellerVehicleId(siv.getId());
             sellerFull.setContactId(siv.getContactId());
             if (siv.getContactId() != null) {
                 sellerFull.setSellerName(contactNameById.getOrDefault(siv.getContactId(), ""));
@@ -637,95 +639,16 @@ public class ArrivalService {
             }
             List<SellerInVehicle> existingSellers = sellerInVehicleRepository.findAllByVehicleId(vehicleId);
             List<Long> existingSellerVehicleIds = existingSellers.stream().map(SellerInVehicle::getId).toList();
-            if (!existingSellerVehicleIds.isEmpty()) {
-                freightCalculationRepository.findOneByVehicleId(vehicleId)
-                    .ifPresent(fc -> freightDistributionRepository.deleteByFreightId(fc.getId()));
-                List<Lot> lotsToRemove = lotRepository.findAllBySellerVehicleIdIn(existingSellerVehicleIds);
-                List<Long> lotIdsToRemove = lotsToRemove.stream().map(Lot::getId).toList();
-                assertLotsNotBlockedForEdit(traderId, lotIdsToRemove);
-                if (!lotIdsToRemove.isEmpty()) {
-                    List<Auction> auctionsForLots = auctionRepository.findAllByLotIdIn(lotIdsToRemove);
-                    List<Long> auctionIds = auctionsForLots.stream().map(Auction::getId).toList();
-                    if (!auctionIds.isEmpty()) {
-                        auctionEntryRepository.deleteByAuctionIdIn(auctionIds);
-                    }
-                    auctionRepository.deleteByLotIdIn(lotIdsToRemove);
-                }
-                lotRepository.deleteBySellerVehicleIdIn(existingSellerVehicleIds);
-            }
-            sellerInVehicleRepository.deleteByVehicleId(vehicleId);
-
-            Instant now = Instant.now();
-            DailySerial dailySerial = getOrCreateGlobalSellerSerialForUpdate(traderId);
-            int sellerSerialPeak = dailySerial.getSellerSerial() != null ? dailySerial.getSellerSerial() : 0;
-            Set<Integer> usedSellerSerials = new HashSet<>();
-            Set<String> seenSellerKeys = new HashSet<>();
-            int lotSerialPeak = currentLotSerialBaseForTrader(traderId, dailySerial);
-            Long updateBrokerContactId = update.getBrokerContactId();
-            for (ArrivalSellerDTO sellerDTO : update.getSellers()) {
-                SellerInVehicle siv = new SellerInVehicle();
-                siv.setVehicleId(vehicleId);
-                Long contactId = sellerDTO.getContactId();
-                if (contactId != null) {
-                    Contact contact = contactRepository.findById(contactId).orElseThrow(() ->
-                        new IllegalArgumentException("Seller contact not found: " + contactId));
-                    contactService.ensureTraderUsesPortalContact(traderId, contactId);
-                    siv.setContactId(contactId);
-                    String incomingMark = sellerDTO.getSellerMark() != null && !sellerDTO.getSellerMark().isBlank() ? sellerDTO.getSellerMark().trim() : null;
-                    siv.setSellerMark(incomingMark);
-                    propagateMarkToContact(contact, incomingMark, traderId);
-                } else {
-                    String phone = sellerDTO.getSellerPhone() != null ? sellerDTO.getSellerPhone().trim() : null;
-                    if (!isStillPartial && phone != null && !phone.isEmpty()) {
-                        if (!phone.matches("[0-9]+") || phone.length() < 6 || phone.length() > 20) {
-                            throw new IllegalArgumentException("Free-text seller phone must be digits only (6–20 digits)");
-                        }
-                    }
-                    siv.setContactId(null);
-                    siv.setSellerName(sellerDTO.getSellerName() != null ? sellerDTO.getSellerName().trim() : null);
-                    siv.setSellerPhone(phone);
-                    siv.setSellerMark(sellerDTO.getSellerMark() != null ? sellerDTO.getSellerMark().trim() : null);
-                }
-                if (updateBrokerContactId != null) {
-                    siv.setBrokerId(updateBrokerContactId);
-                }
-                siv = sellerInVehicleRepository.save(siv);
-                int requestedSerial = assignStableSellerSerial(traderId, sellerDTO, dailySerial, usedSellerSerials, seenSellerKeys);
-                sellerSerialPeak = Math.max(sellerSerialPeak, requestedSerial);
-                List<ArrivalLotDTO> sellerLots = sellerDTO.getLots() != null ? sellerDTO.getLots() : List.of();
-                for (ArrivalLotDTO lotDTO : sellerLots) {
-                    // DB constraints require commodity_id + lot_name; skip incomplete lot rows.
-                    String lotName = lotDTO.getLotName();
-                    String commodityName = lotDTO.getCommodityName();
-                    boolean hasLotName = lotName != null && !lotName.isBlank();
-                    boolean hasCommodityName = commodityName != null && !commodityName.isBlank();
-                    if (!hasLotName || !hasCommodityName) continue;
-
-                    Lot lot = new Lot();
-                    lot.setSellerVehicleId(siv.getId());
-                    lot.setCommodityId(resolveCommodityId(traderId, commodityName.trim()));
-                    lot.setLotName(lotName.trim());
-                    Integer bagCount = lotDTO.getBagCount();
-                    lot.setBagCount(bagCount != null ? bagCount : 0);
-                    if (lotDTO.getVariant() != null && !lotDTO.getVariant().isBlank()) lot.setVariant(lotDTO.getVariant().trim());
-                    if (lotDTO.getBrokerTag() != null && !lotDTO.getBrokerTag().isBlank()) lot.setBrokerTag(lotDTO.getBrokerTag().trim());
-                    lot.setSellerSerialNo(requestedSerial);
-                    // Lot serials are trader-scoped and continue incrementally across arrivals.
-                    lotSerialPeak = nextLotSerial(lotSerialPeak);
-                    lot.setLotSerialNo(lotSerialPeak);
-                    lot.setCreatedAt(now);
-                    currentLots.add(lot);
-                }
-            }
-            dailySerial.setSellerSerial(sellerSerialPeak);
-            dailySerial.setLotSerial(lotSerialPeak);
-            dailySerialRepository.save(dailySerial);
-            if (updateBrokerContactId != null) {
-                contactService.ensureTraderUsesPortalContact(traderId, updateBrokerContactId);
-            }
-            if (!currentLots.isEmpty()) {
-                lotRepository.saveAll(currentLots);
-            }
+            List<Lot> existingLots = existingSellerVehicleIds.isEmpty()
+                ? List.of()
+                : lotRepository.findAllBySellerVehicleIdIn(existingSellerVehicleIds);
+            List<ArrivalDeletionBlocker> blockers = collectLotDeletionBlockers(
+                traderId,
+                existingLots.stream().map(Lot::getId).toList()
+            );
+            currentLots = blockers.isEmpty()
+                ? replaceArrivalSellersAndLots(traderId, vehicleId, update, existingSellerVehicleIds, existingLots, isStillPartial)
+                : appendOnlyArrivalLots(traderId, vehicleId, update, existingSellers, existingLots, blockers, isStillPartial);
             sellersReplaced = true;
         }
 
@@ -777,6 +700,266 @@ public class ArrivalService {
         }
 
         return toSummary(vehicle);
+    }
+
+    private List<Lot> replaceArrivalSellersAndLots(
+        Long traderId,
+        Long vehicleId,
+        ArrivalUpdateDTO update,
+        List<Long> existingSellerVehicleIds,
+        List<Lot> lotsToRemove,
+        boolean isStillPartial
+    ) {
+        if (!existingSellerVehicleIds.isEmpty()) {
+            freightCalculationRepository.findOneByVehicleId(vehicleId)
+                .ifPresent(fc -> freightDistributionRepository.deleteByFreightId(fc.getId()));
+            List<Long> lotIdsToRemove = lotsToRemove.stream().map(Lot::getId).toList();
+            if (!lotIdsToRemove.isEmpty()) {
+                List<Auction> auctionsForLots = auctionRepository.findAllByLotIdIn(lotIdsToRemove);
+                List<Long> auctionIds = auctionsForLots.stream().map(Auction::getId).toList();
+                if (!auctionIds.isEmpty()) {
+                    auctionEntryRepository.deleteByAuctionIdIn(auctionIds);
+                }
+                auctionRepository.deleteByLotIdIn(lotIdsToRemove);
+            }
+            lotRepository.deleteBySellerVehicleIdIn(existingSellerVehicleIds);
+        }
+        sellerInVehicleRepository.deleteByVehicleId(vehicleId);
+        return createArrivalSellersAndLots(traderId, vehicleId, update, isStillPartial);
+    }
+
+    private List<Lot> createArrivalSellersAndLots(Long traderId, Long vehicleId, ArrivalUpdateDTO update, boolean isStillPartial) {
+        Instant now = Instant.now();
+        DailySerial dailySerial = getOrCreateGlobalSellerSerialForUpdate(traderId);
+        int sellerSerialPeak = dailySerial.getSellerSerial() != null ? dailySerial.getSellerSerial() : 0;
+        Set<Integer> usedSellerSerials = new HashSet<>();
+        Set<String> seenSellerKeys = new HashSet<>();
+        int lotSerialPeak = currentLotSerialBaseForTrader(traderId, dailySerial);
+        Long updateBrokerContactId = update.getBrokerContactId();
+        List<Lot> currentLots = new ArrayList<>();
+        for (ArrivalSellerDTO sellerDTO : update.getSellers()) {
+            SellerInVehicle siv = createSellerInVehicleFromDto(traderId, vehicleId, sellerDTO, updateBrokerContactId, isStillPartial);
+            int requestedSerial = assignStableSellerSerial(traderId, sellerDTO, dailySerial, usedSellerSerials, seenSellerKeys);
+            sellerSerialPeak = Math.max(sellerSerialPeak, requestedSerial);
+            lotSerialPeak = appendNewLotsFromDto(traderId, siv.getId(), sellerDTO, requestedSerial, lotSerialPeak, now, currentLots);
+        }
+        dailySerial.setSellerSerial(sellerSerialPeak);
+        dailySerial.setLotSerial(lotSerialPeak);
+        dailySerialRepository.save(dailySerial);
+        if (updateBrokerContactId != null) {
+            contactService.ensureTraderUsesPortalContact(traderId, updateBrokerContactId);
+        }
+        if (!currentLots.isEmpty()) {
+            lotRepository.saveAll(currentLots);
+        }
+        return currentLots;
+    }
+
+    private List<Lot> appendOnlyArrivalLots(
+        Long traderId,
+        Long vehicleId,
+        ArrivalUpdateDTO update,
+        List<SellerInVehicle> existingSellers,
+        List<Lot> existingLots,
+        List<ArrivalDeletionBlocker> blockers,
+        boolean isStillPartial
+    ) {
+        Map<Long, SellerInVehicle> sellersById = existingSellers.stream().collect(Collectors.toMap(SellerInVehicle::getId, s -> s));
+        Map<Long, Lot> lotsById = existingLots.stream().collect(Collectors.toMap(Lot::getId, l -> l));
+        Set<Long> seenExistingLots = new HashSet<>();
+        Instant now = Instant.now();
+        DailySerial dailySerial = getOrCreateGlobalSellerSerialForUpdate(traderId);
+        int lotSerialPeak = currentLotSerialBaseForTrader(traderId, dailySerial);
+        int sellerSerialPeak = dailySerial.getSellerSerial() != null ? dailySerial.getSellerSerial() : 0;
+        Set<Integer> usedSellerSerials = new HashSet<>();
+        Set<String> seenSellerKeys = new HashSet<>();
+        List<Lot> newLots = new ArrayList<>();
+
+        for (ArrivalSellerDTO sellerDTO : update.getSellers()) {
+            SellerInVehicle siv = sellerDTO.getSellerVehicleId() != null ? sellersById.get(sellerDTO.getSellerVehicleId()) : null;
+            int sellerSerial;
+            if (siv == null) {
+                siv = createSellerInVehicleFromDto(traderId, vehicleId, sellerDTO, update.getBrokerContactId(), isStillPartial);
+                sellerSerial = assignStableSellerSerial(traderId, sellerDTO, dailySerial, usedSellerSerials, seenSellerKeys);
+                sellerSerialPeak = Math.max(sellerSerialPeak, sellerSerial);
+            } else {
+                assertExistingSellerUnchanged(siv, sellerDTO, blockers);
+                Long currentSellerVehicleId = siv.getId();
+                sellerSerial = existingLots.stream()
+                    .filter(l -> Objects.equals(l.getSellerVehicleId(), currentSellerVehicleId))
+                    .map(Lot::getSellerSerialNo)
+                    .filter(Objects::nonNull)
+                    .findFirst()
+                    .orElseGet(() -> assignStableSellerSerial(traderId, sellerDTO, dailySerial, usedSellerSerials, seenSellerKeys));
+            }
+            for (ArrivalLotDTO lotDTO : sellerDTO.getLots() != null ? sellerDTO.getLots() : List.<ArrivalLotDTO>of()) {
+                if (lotDTO.getId() != null) {
+                    Lot existing = lotsById.get(lotDTO.getId());
+                    if (existing == null || !Objects.equals(existing.getSellerVehicleId(), siv.getId())) {
+                        throw new IllegalArgumentException("Lot does not belong to this arrival: " + lotDTO.getId());
+                    }
+                    assertExistingLotUnchanged(traderId, existing, lotDTO, blockers);
+                    seenExistingLots.add(existing.getId());
+                    continue;
+                }
+                lotSerialPeak = appendNewLotsFromDto(traderId, siv.getId(), sellerDTO, sellerSerial, lotSerialPeak, now, newLots, lotDTO);
+            }
+        }
+
+        Set<Long> incomingSellerIds = update.getSellers().stream()
+            .map(ArrivalSellerDTO::getSellerVehicleId)
+            .filter(Objects::nonNull)
+            .collect(Collectors.toSet());
+        for (SellerInVehicle existingSeller : existingSellers) {
+            if (!incomingSellerIds.contains(existingSeller.getId())) {
+                throwBlockedAppendOnly(blockers);
+            }
+        }
+        for (Lot existingLot : existingLots) {
+            if (!seenExistingLots.contains(existingLot.getId())) {
+                throwBlockedAppendOnly(blockers);
+            }
+        }
+
+        if (!newLots.isEmpty()) {
+            lotRepository.saveAll(newLots);
+        }
+        dailySerial.setSellerSerial(sellerSerialPeak);
+        dailySerial.setLotSerial(lotSerialPeak);
+        dailySerialRepository.save(dailySerial);
+        List<Lot> out = new ArrayList<>(existingLots);
+        out.addAll(newLots);
+        return out;
+    }
+
+    private SellerInVehicle createSellerInVehicleFromDto(
+        Long traderId,
+        Long vehicleId,
+        ArrivalSellerDTO sellerDTO,
+        Long brokerContactId,
+        boolean isStillPartial
+    ) {
+        SellerInVehicle siv = new SellerInVehicle();
+        siv.setVehicleId(vehicleId);
+        Long contactId = sellerDTO.getContactId();
+        if (contactId != null) {
+            Contact contact = contactRepository.findById(contactId).orElseThrow(() ->
+                new IllegalArgumentException("Seller contact not found: " + contactId));
+            contactService.ensureTraderUsesPortalContact(traderId, contactId);
+            siv.setContactId(contactId);
+            String incomingMark = sellerDTO.getSellerMark() != null && !sellerDTO.getSellerMark().isBlank() ? sellerDTO.getSellerMark().trim() : null;
+            siv.setSellerMark(incomingMark);
+            propagateMarkToContact(contact, incomingMark, traderId);
+        } else {
+            String phone = sellerDTO.getSellerPhone() != null ? sellerDTO.getSellerPhone().trim() : null;
+            if (!isStillPartial && phone != null && !phone.isEmpty()) {
+                if (!phone.matches("[0-9]+") || phone.length() < 6 || phone.length() > 20) {
+                    throw new IllegalArgumentException("Free-text seller phone must be digits only (6–20 digits)");
+                }
+            }
+            siv.setContactId(null);
+            siv.setSellerName(sellerDTO.getSellerName() != null ? sellerDTO.getSellerName().trim() : null);
+            siv.setSellerPhone(phone);
+            siv.setSellerMark(sellerDTO.getSellerMark() != null ? sellerDTO.getSellerMark().trim() : null);
+        }
+        if (brokerContactId != null) {
+            siv.setBrokerId(brokerContactId);
+        }
+        return sellerInVehicleRepository.save(siv);
+    }
+
+    private int appendNewLotsFromDto(
+        Long traderId,
+        Long sellerVehicleId,
+        ArrivalSellerDTO sellerDTO,
+        int sellerSerial,
+        int lotSerialPeak,
+        Instant now,
+        List<Lot> currentLots
+    ) {
+        for (ArrivalLotDTO lotDTO : sellerDTO.getLots() != null ? sellerDTO.getLots() : List.<ArrivalLotDTO>of()) {
+            if (lotDTO.getId() != null) continue;
+            lotSerialPeak = appendNewLotsFromDto(traderId, sellerVehicleId, sellerDTO, sellerSerial, lotSerialPeak, now, currentLots, lotDTO);
+        }
+        return lotSerialPeak;
+    }
+
+    private int appendNewLotsFromDto(
+        Long traderId,
+        Long sellerVehicleId,
+        ArrivalSellerDTO sellerDTO,
+        int sellerSerial,
+        int lotSerialPeak,
+        Instant now,
+        List<Lot> currentLots,
+        ArrivalLotDTO lotDTO
+    ) {
+        String lotName = lotDTO.getLotName();
+        String commodityName = lotDTO.getCommodityName();
+        boolean hasLotName = lotName != null && !lotName.isBlank();
+        boolean hasCommodityName = commodityName != null && !commodityName.isBlank();
+        if (!hasLotName || !hasCommodityName) return lotSerialPeak;
+        Lot lot = new Lot();
+        lot.setSellerVehicleId(sellerVehicleId);
+        lot.setCommodityId(resolveCommodityId(traderId, commodityName.trim()));
+        lot.setLotName(lotName.trim());
+        Integer bagCount = lotDTO.getBagCount();
+        lot.setBagCount(bagCount != null ? bagCount : 0);
+        if (lotDTO.getVariant() != null && !lotDTO.getVariant().isBlank()) lot.setVariant(lotDTO.getVariant().trim());
+        if (lotDTO.getBrokerTag() != null && !lotDTO.getBrokerTag().isBlank()) lot.setBrokerTag(lotDTO.getBrokerTag().trim());
+        lot.setSellerSerialNo(sellerSerial);
+        lotSerialPeak = nextLotSerial(lotSerialPeak);
+        lot.setLotSerialNo(lotSerialPeak);
+        lot.setCreatedAt(now);
+        currentLots.add(lot);
+        return lotSerialPeak;
+    }
+
+    private void assertExistingSellerUnchanged(SellerInVehicle existing, ArrivalSellerDTO incoming, List<ArrivalDeletionBlocker> blockers) {
+        if (!Objects.equals(existing.getContactId(), incoming.getContactId())) {
+            throwBlockedAppendOnly(blockers);
+        }
+        if (incoming.getContactId() != null) {
+            if (!sameText(existing.getSellerMark(), incoming.getSellerMark())) {
+                throwBlockedAppendOnly(blockers);
+            }
+            return;
+        }
+        if (!sameText(existing.getSellerName(), incoming.getSellerName())
+            || !sameText(existing.getSellerPhone(), incoming.getSellerPhone())
+            || !sameText(existing.getSellerMark(), incoming.getSellerMark())) {
+            throwBlockedAppendOnly(blockers);
+        }
+    }
+
+    private void assertExistingLotUnchanged(Long traderId, Lot existing, ArrivalLotDTO incoming, List<ArrivalDeletionBlocker> blockers) {
+        Long incomingCommodityId = incoming.getCommodityName() != null && !incoming.getCommodityName().isBlank()
+            ? resolveCommodityId(traderId, incoming.getCommodityName().trim())
+            : null;
+        if (!sameText(existing.getLotName(), incoming.getLotName())
+            || !Objects.equals(existing.getCommodityId(), incomingCommodityId)
+            || !Objects.equals(existing.getBagCount() != null ? existing.getBagCount() : 0, incoming.getBagCount())
+            || !sameText(existing.getBrokerTag(), incoming.getBrokerTag())
+            || !sameText(existing.getVariant(), incoming.getVariant())) {
+            throwBlockedAppendOnly(blockers);
+        }
+    }
+
+    private boolean sameText(String a, String b) {
+        String aa = a != null ? a.trim() : "";
+        String bb = b != null ? b.trim() : "";
+        return aa.equals(bb);
+    }
+
+    private void throwBlockedAppendOnly(List<ArrivalDeletionBlocker> blockers) {
+        List<String> codes = blockers.stream().map(Enum::name).toList();
+        String labels = blockers.stream().map(ArrivalDeletionBlocker::displayLabel).collect(Collectors.joining(", "));
+        throw new ArrivalDeletionBlockedException(
+            "Existing seller or lot details cannot be changed because this arrival is already linked in: " +
+                labels +
+                ". You can add a new lot to the vehicle, but existing linked lots must stay unchanged.",
+            codes
+        );
     }
 
     /**
@@ -831,6 +1014,9 @@ public class ArrivalService {
         List<ArrivalDeletionBlocker> out = new ArrayList<>();
         if (salesBillLineItemRepository.existsForTraderLotsDeletionScope(traderId, lotIdStrs, lotIds)) {
             out.add(ArrivalDeletionBlocker.BILLING);
+        }
+        if (!auctionRepository.findAllByLotIdIn(lotIds).isEmpty()) {
+            out.add(ArrivalDeletionBlocker.AUCTION);
         }
         if (auctionSelfSaleUnitRepository.existsByLotIdIn(lotIds)) {
             out.add(ArrivalDeletionBlocker.AUCTION_SELF_SALE);

@@ -57,6 +57,10 @@ public class AuctionResultEntryDTO implements Serializable {
     @JsonProperty("tokenAdvance")
     private BigDecimal tokenAdvance;
 
+    /** True when this exact bid is part of a printed, non-reopened Sales Bill. */
+    @JsonProperty("frozen")
+    private Boolean frozen;
+
     public Integer getBidNumber() {
         return bidNumber;
     }
@@ -167,6 +171,14 @@ public class AuctionResultEntryDTO implements Serializable {
 
     public void setTokenAdvance(BigDecimal tokenAdvance) {
         this.tokenAdvance = tokenAdvance;
+    }
+
+    public Boolean getFrozen() {
+        return frozen;
+    }
+
+    public void setFrozen(Boolean frozen) {
+        this.frozen = frozen;
     }
 }
 

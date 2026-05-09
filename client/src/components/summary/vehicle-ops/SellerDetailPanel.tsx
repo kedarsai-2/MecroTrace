@@ -55,6 +55,7 @@ function LotBlockHeader({
   bulkSellerRate,
   onBulkSellerRateCommit,
   hasBids = false,
+  sellerFrozen = false,
 }: {
   lot: LotSummaryDTO;
   pendingBags: number;
@@ -69,6 +70,7 @@ function LotBlockHeader({
   onBulkSellerRateCommit?: (rate: number) => void;
   /** Bulk rate input only when session has at least one bid row. */
   hasBids?: boolean;
+  sellerFrozen?: boolean;
 }) {
   const bulkFocusedRef = useRef(false);
   const [bulkDraft, setBulkDraft] = useState(() =>
@@ -80,7 +82,7 @@ function LotBlockHeader({
   }, [bulkSellerRate]);
 
   const commitBulkDraft = useCallback(() => {
-    if (!onBulkSellerRateCommit) return;
+    if (!onBulkSellerRateCommit || sellerFrozen) return;
     const raw = bulkDraft.trim().replace(/,/g, '');
     if (raw === '') {
       setBulkDraft(bulkSellerRate === '' || bulkSellerRate === undefined ? '' : String(bulkSellerRate));
@@ -92,7 +94,7 @@ function LotBlockHeader({
       return;
     }
     onBulkSellerRateCommit(n);
-  }, [bulkDraft, bulkSellerRate, onBulkSellerRateCommit]);
+  }, [bulkDraft, bulkSellerRate, onBulkSellerRateCommit, sellerFrozen]);
 
   const label = formatLotLabelFromSummary(lot);
   return (
@@ -111,7 +113,11 @@ function LotBlockHeader({
             {label}
           </p>
         </div>
-        {onBulkSellerRateCommit && hasBids ? (
+        {sellerFrozen ? (
+          <span className="rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-[10px] font-bold uppercase tracking-wide text-amber-700 dark:text-amber-300">
+            Frozen
+          </span>
+        ) : onBulkSellerRateCommit && hasBids ? (
           <Input
             type="text"
             inputMode="decimal"
@@ -414,6 +420,7 @@ export function SellerDetailPanel({
                             }));
                           }}
                           hasBids={hasBids}
+                          sellerFrozen={lot.seller_frozen === true}
                         />
                       </div>
                       <div
@@ -435,6 +442,7 @@ export function SellerDetailPanel({
                           onAuctionDataInvalidate={onAuctionDataInvalidate}
                           applyBulkSellerRate={bulkApplyByLotId[lid]?.rate ?? null}
                           applyBulkSellerRateSeq={bulkApplyByLotId[lid]?.seq ?? 0}
+                          readOnly={lot.seller_frozen === true}
                         />
                       </div>
                     </div>
@@ -479,6 +487,7 @@ export function SellerDetailPanel({
                             }));
                           }}
                           hasBids={hasBids}
+                          sellerFrozen={lot.seller_frozen === true}
                         />
                         </div>
                       </div>
@@ -501,6 +510,7 @@ export function SellerDetailPanel({
                       onAuctionDataInvalidate={onAuctionDataInvalidate}
                       applyBulkSellerRate={bulkApplyByLotId[visibleLotId]?.rate ?? null}
                       applyBulkSellerRateSeq={bulkApplyByLotId[visibleLotId]?.seq ?? 0}
+                      readOnly={(sortedLots.find((l) => l.lot_id === visibleLotId)?.seller_frozen ?? false) === true}
                     />
                   </div>
                 )}

@@ -16,6 +16,9 @@ public final class ArrivalDTOs {
 
     public static class ArrivalLotDTO implements Serializable {
 
+        @JsonAlias({ "lot_id" })
+        private Long id;
+
         private String lotName;
 
         /** Returned by API; assigned server-side as trader-scoped incremental serial. */
@@ -30,6 +33,14 @@ public final class ArrivalDTOs {
 
         /** Optional variant per lot (e.g. Small, Medium, Large). */
         private String variant;
+
+        public Long getId() {
+            return id;
+        }
+
+        public void setId(Long id) {
+            this.id = id;
+        }
 
         public String getLotName() {
             return lotName;
@@ -82,6 +93,9 @@ public final class ArrivalDTOs {
 
     public static class ArrivalSellerDTO implements Serializable {
 
+        @JsonAlias({ "seller_vehicle_id" })
+        private Long sellerVehicleId;
+
         /** When null, seller is free-text (name/phone from DTO only). */
         private Long contactId;
 
@@ -95,6 +109,14 @@ public final class ArrivalDTOs {
         private String sellerMark;
 
         private List<ArrivalLotDTO> lots;
+
+        public Long getSellerVehicleId() {
+            return sellerVehicleId;
+        }
+
+        public void setSellerVehicleId(Long sellerVehicleId) {
+            this.sellerVehicleId = sellerVehicleId;
+        }
 
         public Long getContactId() {
             return contactId;
@@ -719,6 +741,7 @@ public final class ArrivalDTOs {
 
     /** Seller with full lots for arrival expand (includes contactId/sellerPhone for edit form prefill). */
     public static class ArrivalSellerFullDTO implements Serializable {
+        private Long sellerVehicleId;
         private Long contactId;
         private Integer sellerSerialNumber;
         private String sellerName;
@@ -726,6 +749,8 @@ public final class ArrivalDTOs {
         private String sellerMark;
         private List<ArrivalLotFullDTO> lots;
 
+        public Long getSellerVehicleId() { return sellerVehicleId; }
+        public void setSellerVehicleId(Long sellerVehicleId) { this.sellerVehicleId = sellerVehicleId; }
         public Long getContactId() { return contactId; }
         public void setContactId(Long contactId) { this.contactId = contactId; }
         public Integer getSellerSerialNumber() { return sellerSerialNumber; }

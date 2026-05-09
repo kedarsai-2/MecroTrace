@@ -132,6 +132,24 @@ public class SalesBill implements Serializable {
     @Column(name = "last_modified_date")
     private Instant lastModifiedDate;
 
+    @Column(name = "printed_at")
+    private Instant printedAt;
+
+    @Column(name = "locked_at")
+    private Instant lockedAt;
+
+    @Column(name = "locked_by", length = 100)
+    private String lockedBy;
+
+    @Column(name = "reopened_at")
+    private Instant reopenedAt;
+
+    @Column(name = "reopened_by", length = 100)
+    private String reopenedBy;
+
+    @Column(name = "reopen_reason", length = 500)
+    private String reopenReason;
+
     @OneToMany(mappedBy = "salesBill", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)
     @OrderBy("sortOrder")
     private List<SalesBillCommodityGroup> commodityGroups = new ArrayList<>();
@@ -196,6 +214,18 @@ public class SalesBill implements Serializable {
     public void setLastModifiedBy(String lastModifiedBy) { this.lastModifiedBy = lastModifiedBy; }
     public Instant getLastModifiedDate() { return lastModifiedDate; }
     public void setLastModifiedDate(Instant lastModifiedDate) { this.lastModifiedDate = lastModifiedDate; }
+    public Instant getPrintedAt() { return printedAt; }
+    public void setPrintedAt(Instant printedAt) { this.printedAt = printedAt; }
+    public Instant getLockedAt() { return lockedAt; }
+    public void setLockedAt(Instant lockedAt) { this.lockedAt = lockedAt; }
+    public String getLockedBy() { return lockedBy; }
+    public void setLockedBy(String lockedBy) { this.lockedBy = lockedBy; }
+    public Instant getReopenedAt() { return reopenedAt; }
+    public void setReopenedAt(Instant reopenedAt) { this.reopenedAt = reopenedAt; }
+    public String getReopenedBy() { return reopenedBy; }
+    public void setReopenedBy(String reopenedBy) { this.reopenedBy = reopenedBy; }
+    public String getReopenReason() { return reopenReason; }
+    public void setReopenReason(String reopenReason) { this.reopenReason = reopenReason; }
     public List<SalesBillCommodityGroup> getCommodityGroups() { return commodityGroups; }
     public void setCommodityGroups(List<SalesBillCommodityGroup> commodityGroups) { this.commodityGroups = commodityGroups; }
     public List<SalesBillVersion> getVersions() { return versions; }

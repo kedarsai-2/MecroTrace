@@ -55,6 +55,8 @@ export interface BidInfo {
   buyerId?: number | null;
   isScribble?: boolean;
   isSelfSale?: boolean;
+  /** Exact bid is locked because its Sales Bill is printed. */
+  frozen?: boolean;
   /** Parent auction `completedAt` as epoch ms (logistics: sort buyer groups newest first). */
   auctionCompletedAtMs?: number;
 }

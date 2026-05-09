@@ -502,6 +502,13 @@ interface BillData {
   brokerageValue: number;
   globalOtherCharges: number;
   pendingBalance: number;
+  printedAt?: string | null;
+  lockedAt?: string | null;
+  lockedBy?: string | null;
+  reopenedAt?: string | null;
+  reopenedBy?: string | null;
+  reopenReason?: string | null;
+  frozen?: boolean;
   versions: any[];
 }
 
@@ -522,6 +529,10 @@ function isBackendBillId(billId: string): boolean {
 /** Saved bill list / issued bill number (excludes Bill In Progress drafts). */
 function isNumberedSavedBill(bill: BillData | null | undefined): boolean {
   return !!bill && isBackendBillId(String(bill.billId)) && !!String(bill.billNumber ?? '').trim();
+}
+
+function isFrozenBill(bill: BillData | null | undefined): boolean {
+  return !!bill && (bill.frozen === true || (!!bill.lockedAt && !bill.reopenedAt));
 }
 
 /** Sum of per-line token advances (auction bid tokens). */
@@ -1316,10 +1327,83 @@ const BillingPage = () => {
   }, [bill, can]);
   /** Numbered bills open view-only until Edit / Alt+E (same idea as settlement Alt+M). */
   const billFormReadOnly = useMemo(
-    () => isNumberedSavedBill(bill) && editLocked,
+    () => isNumberedSavedBill(bill) && (editLocked || isFrozenBill(bill)),
     [bill, editLocked],
   );
   const billSaveActionEnabled = billValidation.isValid && canPersistSalesBill && !billFormReadOnly;
+
+  // Recalculate grand total (includes per-commodity discount; round-off auto-snaps each commodity to whole ₹)
+  const recalcGrandTotal = useCallback((b: BillData): BillData => {
+    const calculateGroupCharges = (group: CommodityGroup) => {
+      const sub = roundMoney2(group.subtotal);
+      const commissionAmount = percentOfAmount(sub, group.commissionPercent || 0);
+      const userFeeAmount = percentOfAmount(sub, group.userFeePercent || 0);
+      const gstAmount = totalGstRupeesForGroup(group);
+      const totalCharges = roundMoney2(commissionAmount + userFeeAmount + gstAmount);
+      return { commissionAmount, userFeeAmount, totalCharges };
+    };
+
+    const commodityGroups = b.commodityGroups.map(group => {
+      const next = { ...syncGstRatesFromFixedAmounts({ ...group }) };
+      const charges = calculateGroupCharges(next);
+      next.commissionAmount = charges.commissionAmount;
+      next.userFeeAmount = charges.userFeeAmount;
+      next.totalCharges = charges.totalCharges;
+      const cr = Number(next.coolieRate) || 0;
+      const wr = Number(next.weighmanChargeRate) || 0;
+      const cq = effectiveCoolieChargeQty(next);
+      const wq = effectiveWeighmanChargeQty(next);
+      next.coolieAmount = cr > 0 ? roundMoney2(cr * cq) : 0;
+      next.weighmanChargeAmount = wr > 0 ? roundMoney2(wr * wq) : 0;
+      return next;
+    });
+
+    const commodityGroupsWithRoundOff = commodityGroups.map(group => ({
+      ...group,
+      manualRoundOff: rupeeWholeRoundOffDelta(commodityPreRoundTotalRupees(group)),
+    }));
+
+    let grandTotal = 0;
+    commodityGroupsWithRoundOff.forEach(group => {
+      const commodityTotal = roundMoney2(
+        commodityPreRoundTotalRupees(group) + roundMoney2(group.manualRoundOff || 0),
+      );
+      grandTotal = roundMoney2(grandTotal + commodityTotal);
+    });
+
+    grandTotal = roundMoney2(grandTotal + roundMoney2(b.outboundFreight || 0));
+
+    const tokenAdvance = sumLineTokenAdvances({ ...b, commodityGroups: commodityGroupsWithRoundOff });
+    const pendingBalance = roundMoney2(grandTotal - tokenAdvance);
+    return roundBillMoneyValues({
+      ...b,
+      commodityGroups: commodityGroupsWithRoundOff,
+      grandTotal,
+      pendingBalance,
+      tokenAdvance,
+    });
+  }, []);
+
+  const enableBillingEdit = useCallback(async () => {
+    if (!bill || !isNumberedSavedBill(bill)) return;
+    if (!can('Billing', 'Edit')) {
+      toast.error('You do not have permission to edit bills.');
+      return;
+    }
+    if (isFrozenBill(bill)) {
+      try {
+        const reopened = await billingApi.reopen(bill.billId);
+        const normalized = recalcGrandTotal(normalizeBillFromApi(reopened, fullConfigs, commodities) as BillData);
+        setBill(normalized);
+        setEditLocked(false);
+        toast.success('Printed bill reopened for editing.');
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : 'Failed to reopen bill.');
+      }
+      return;
+    }
+    setEditLocked(false);
+  }, [bill, can, commodities, fullConfigs, recalcGrandTotal]);
 
   const commodityTaxConfigByName = useMemo(() => {
     const map = new Map<string, { hasTax: boolean; defaultMode: 'GST' | 'IGST' | 'NONE' }>();
@@ -1701,12 +1785,8 @@ const BillingPage = () => {
       if (!bill || showPrint) return;
       const isUpdate = bill.billId && isBackendBillId(bill.billId);
       if (k === 'e' && isUpdate) {
-        if (!can('Billing', 'Edit')) {
-          toast.error('You do not have permission to edit bills.');
-          return;
-        }
-        if (isNumberedSavedBill(bill) && editLocked) {
-          setEditLocked(false);
+        if (isNumberedSavedBill(bill) && billFormReadOnly) {
+          void enableBillingEdit();
         }
       }
       if (k === 's') {
@@ -1735,7 +1815,7 @@ const BillingPage = () => {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [isDesktop, bill, showPrint, commodityAvgWeightBounds, can, editLocked]);
+  }, [isDesktop, bill, showPrint, commodityAvgWeightBounds, can, editLocked, billFormReadOnly, enableBillingEdit]);
 
   const openContactFromBilling = async () => {
     if (!canCreateContact) {
@@ -2251,58 +2331,6 @@ const BillingPage = () => {
       setSelectedBidKeys([]);
     }
   }, [buyersForBilling, selectBidBuyer, billingBuyerListReady]);
-
-  // Recalculate grand total (includes per-commodity discount; round-off auto-snaps each commodity to whole ₹)
-  const recalcGrandTotal = useCallback((b: BillData): BillData => {
-    const calculateGroupCharges = (group: CommodityGroup) => {
-      const sub = roundMoney2(group.subtotal);
-      const commissionAmount = percentOfAmount(sub, group.commissionPercent || 0);
-      const userFeeAmount = percentOfAmount(sub, group.userFeePercent || 0);
-      const gstAmount = totalGstRupeesForGroup(group);
-      const totalCharges = roundMoney2(commissionAmount + userFeeAmount + gstAmount);
-      return { commissionAmount, userFeeAmount, totalCharges };
-    };
-
-    const commodityGroups = b.commodityGroups.map(group => {
-      const next = { ...syncGstRatesFromFixedAmounts({ ...group }) };
-      const charges = calculateGroupCharges(next);
-      next.commissionAmount = charges.commissionAmount;
-      next.userFeeAmount = charges.userFeeAmount;
-      next.totalCharges = charges.totalCharges;
-      const cr = Number(next.coolieRate) || 0;
-      const wr = Number(next.weighmanChargeRate) || 0;
-      const cq = effectiveCoolieChargeQty(next);
-      const wq = effectiveWeighmanChargeQty(next);
-      next.coolieAmount = cr > 0 ? roundMoney2(cr * cq) : 0;
-      next.weighmanChargeAmount = wr > 0 ? roundMoney2(wr * wq) : 0;
-      return next;
-    });
-
-    const commodityGroupsWithRoundOff = commodityGroups.map(group => ({
-      ...group,
-      manualRoundOff: rupeeWholeRoundOffDelta(commodityPreRoundTotalRupees(group)),
-    }));
-
-    let grandTotal = 0;
-    commodityGroupsWithRoundOff.forEach(group => {
-      const commodityTotal = roundMoney2(
-        commodityPreRoundTotalRupees(group) + roundMoney2(group.manualRoundOff || 0),
-      );
-      grandTotal = roundMoney2(grandTotal + commodityTotal);
-    });
-
-    grandTotal = roundMoney2(grandTotal + roundMoney2(b.outboundFreight || 0));
-
-    const tokenAdvance = sumLineTokenAdvances({ ...b, commodityGroups: commodityGroupsWithRoundOff });
-    const pendingBalance = roundMoney2(grandTotal - tokenAdvance);
-    return roundBillMoneyValues({
-      ...b,
-      commodityGroups: commodityGroupsWithRoundOff,
-      grandTotal,
-      pendingBalance,
-      tokenAdvance,
-    });
-  }, []);
 
   const serializeBillForDirty = useCallback((b: BillData): string => {
     return JSON.stringify({
@@ -2969,6 +2997,10 @@ const BillingPage = () => {
         toast.error('Open a buyer bill first');
         return;
       }
+      if (billFormReadOnly || isFrozenBill(bill)) {
+        toast.error('Printed bill is frozen. Press Edit (Alt+E) to reopen before adding bids.');
+        return;
+      }
       const qtyDigits = String(addBidQty).replace(/[^\d]/g, '');
       const qty = qtyDigits === '' ? NaN : Math.max(1, parseInt(qtyDigits, 10));
       const rate = roundMoney2(Number(addBidBaseRate));
@@ -3042,6 +3074,7 @@ const BillingPage = () => {
       addBidTokenAdvance,
       applyAddBidSessionToBill,
       bill,
+      billFormReadOnly,
       refetchAuctions,
       resetAddBidForm,
       selectedBuyer,
@@ -3052,6 +3085,10 @@ const BillingPage = () => {
     (allowLotIncreaseFromStep: boolean) => {
       if (!bill || !selectedBuyer) {
         toast.error('Open a buyer bill first');
+        return;
+      }
+      if (billFormReadOnly || isFrozenBill(bill)) {
+        toast.error('Printed bill is frozen. Press Edit (Alt+E) to reopen before adding bids.');
         return;
       }
       if (!addBidSelectedLot) {
@@ -3099,6 +3136,7 @@ const BillingPage = () => {
       addBidRetryAllowIncrease,
       addBidSelectedLot,
       bill,
+      billFormReadOnly,
       executeBillingAddBid,
       selectedBuyer,
     ],
@@ -3107,6 +3145,18 @@ const BillingPage = () => {
   const handleAddBidToCurrentBuyer = useCallback(() => {
     beginAddBidFlow(false);
   }, [beginAddBidFlow]);
+
+  const openAddBidDialog = useCallback(() => {
+    if (!bill || !selectedBuyer) {
+      toast.error('Open a buyer bill first');
+      return;
+    }
+    if (billFormReadOnly || isFrozenBill(bill)) {
+      toast.error('Printed bill is frozen. Press Edit (Alt+E) to reopen before adding bids.');
+      return;
+    }
+    setAddBidDialogOpen(true);
+  }, [bill, billFormReadOnly, selectedBuyer]);
 
   const confirmAddBidQtyIncrease = useCallback(() => {
     setAddBidQtyIncreaseDialog(null);
@@ -3617,6 +3667,10 @@ const BillingPage = () => {
 
   const handleSaveDraft = async () => {
     if (!bill) return;
+    if (isFrozenBill(bill)) {
+      toast.error('This printed bill is frozen. Reopen it before saving changes.');
+      return;
+    }
     if (isNumberedSavedBill(bill) && editLocked) return;
     const result = await persistBill();
     if (!result) return;
@@ -3886,7 +3940,20 @@ const BillingPage = () => {
                   }
                   const printHtml = salesBillPrintJobHtml;
                   const ok = await directPrint(printHtml, { mode: "system" });
-                  ok ? toast.success('Sales Bill sent to printer!') : toast.error('Printer not connected.');
+                  if (ok) {
+                    try {
+                      const locked = await billingApi.markPrinted(activePrintBill.billId);
+                      const normalized = recalcGrandTotal(normalizeBillFromApi(locked, fullConfigs, commodities) as BillData);
+                      setBill(normalized);
+                      setEditLocked(true);
+                    } catch (err) {
+                      toast.error(err instanceof Error ? err.message : 'Printed, but failed to freeze bill.');
+                      return;
+                    }
+                    toast.success('Sales Bill sent to printer and frozen.');
+                  } else {
+                    toast.error('Printer not connected.');
+                  }
                 }}
                 className={cn(arrSolidTall, 'flex-1 sm:flex-none gap-2')}>
                 <Printer className="w-5 h-5" /> Print Bill
@@ -4762,9 +4829,15 @@ const BillingPage = () => {
               <Button
                 type="button"
                 variant="outline"
-                onClick={() => setAddBidDialogOpen(true)}
+                onClick={openAddBidDialog}
                 disabled={!bill || !selectedBuyer}
-                title={!bill || !selectedBuyer ? 'Open a buyer bill first' : undefined}
+                title={
+                  !bill || !selectedBuyer
+                    ? 'Open a buyer bill first'
+                    : billFormReadOnly || isFrozenBill(bill)
+                      ? 'Printed bill is frozen. Press Edit (Alt+E) to reopen before adding bids.'
+                      : undefined
+                }
                 className={cn(
                   arrSolidLg,
                   'sm:self-end',
@@ -6538,13 +6611,7 @@ const BillingPage = () => {
                       type="button"
                       variant="outline"
                       className={cn(arrSolidMd, 'gap-1.5')}
-                      onClick={() => {
-                        if (!can('Billing', 'Edit')) {
-                          toast.error('You do not have permission to edit bills.');
-                          return;
-                        }
-                        setEditLocked(false);
-                      }}
+                      onClick={() => void enableBillingEdit()}
                       disabled={
                         !isBackendBillId(bill.billId)
                         || !isNumberedSavedBill(bill)
@@ -6558,7 +6625,9 @@ const BillingPage = () => {
                             ? 'View-only mode applies to saved bills that have a bill number.'
                             : !billFormReadOnly
                               ? 'Bill is already editable.'
-                              : 'Enable editing (Alt+E)'
+                              : isFrozenBill(bill)
+                                ? 'Printed bill is frozen. Press Edit (Alt+E) to reopen.'
+                                : 'Enable editing (Alt+E)'
                       }
                     >
                       <Edit3 className="w-4 h-4" /> Edit{tabHint('Alt E')}

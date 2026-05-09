@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Info, Loader2, Trash2 } from 'lucide-react';
+import { Info, Loader2, Lock, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { BillingMoneyInput } from '@/components/billing/BillingMoneyInput';
 import { ConfirmDeleteDialog } from '@/components/ConfirmDeleteDialog';
@@ -122,6 +122,8 @@ export type LotBidsTableProps = {
   applyBulkSellerRate?: number | null;
   /** Bump (e.g. per commit) so same rate can re-apply; 0 = skip. */
   applyBulkSellerRateSeq?: number;
+  /** Printed Patti freeze: render bid controls read-only until Settlement is reopened. */
+  readOnly?: boolean;
 };
 
 /** Form field label styling — matches Billing mobile line-item hints. */
@@ -140,6 +142,7 @@ export function LotBidsTable({
   onUnsavedRatesChange,
   applyBulkSellerRate = null,
   applyBulkSellerRateSeq = 0,
+  readOnly = false,
 }: LotBidsTableProps) {
   /** Local overrides per entry — cleared when merged values match server. */
   const [localEditsById, setLocalEditsById] = useState<Record<number, Partial<LocalBidEditFields>>>({});
@@ -175,17 +178,19 @@ export function LotBidsTable({
   const entries = session?.entries ?? EMPTY_SESSION_ENTRIES;
 
   useEffect(() => {
+    if (readOnly) return;
     if (applyBulkSellerRateSeq < 1) return;
     if (applyBulkSellerRate == null || !Number.isFinite(applyBulkSellerRate) || applyBulkSellerRate < 1) return;
     const rate = roundMoney2(applyBulkSellerRate);
     setLocalEditsById((prev) => {
       const next = { ...prev };
       for (const e of entries) {
+        if (e.frozen) continue;
         next[e.auction_entry_id] = { ...(next[e.auction_entry_id] ?? {}), summary_seller_rate: rate };
       }
       return next;
     });
-  }, [applyBulkSellerRate, applyBulkSellerRateSeq, entries]);
+  }, [applyBulkSellerRate, applyBulkSellerRateSeq, entries, readOnly]);
 
   const entryIdsKey = useMemo(() => entries.map((e) => e.auction_entry_id).join(','), [entries]);
 
@@ -225,6 +230,11 @@ export function LotBidsTable({
 
   const handleDelete = useCallback(async () => {
     if (!deleteTarget) return;
+    if (deleteTarget.frozen) {
+      toast.error('This bid is frozen because its Sales Bill is printed. Reopen the bill before changing it.');
+      setDeleteTarget(null);
+      return;
+    }
     setDeleting(true);
     try {
       const updated = await auctionApi.deleteBid(lotId, deleteTarget.auction_entry_id);
@@ -255,7 +265,7 @@ export function LotBidsTable({
 
   useEffect(() => {
     if (!addBidOpen) return;
-    const rem = session != null ? Number(session.remaining_bags) || 0 : 0;
+    const rem = Number(session?.remaining_bags ?? 0) || 0;
     setAddBidQty(rem > 0 ? String(rem) : '');
     setAddBidBaseRate('');
     setAddBidPresetMargin('0');
@@ -404,11 +414,16 @@ export function LotBidsTable({
   }, []);
 
   const handleSaveRates = useCallback(async () => {
+    if (readOnly) {
+      toast.error('This seller is frozen because Sales Patti is printed. Reopen the Patti before editing Summary.');
+      return;
+    }
     if (!session || entries.length === 0) {
       toast.message('Nothing to save', { description: 'Add a bid first or open a lot with entries.' });
       return;
     }
     for (const e of entries) {
+      if (e.frozen) continue;
       const edits = localEditsById[e.auction_entry_id];
       if (!entryHasDirtyEdits(e, edits)) continue;
       const m = mergeEntryDisplay(e, edits);
@@ -436,6 +451,7 @@ export function LotBidsTable({
     try {
       const toSave: { entry: AuctionEntryDTO; body: AuctionBidUpdateRequest }[] = [];
       for (const e of entries) {
+        if (e.frozen) continue;
         const edits = localEditsById[e.auction_entry_id];
         if (!entryHasDirtyEdits(e, edits)) continue;
         const m = mergeEntryDisplay(e, edits);
@@ -486,13 +502,14 @@ export function LotBidsTable({
     } finally {
       setSaving(false);
     }
-  }, [entries, localEditsById, lotId, onAuctionDataInvalidate, onSessionUpdated, session, saveRetryAllowLotIncrease]);
+  }, [entries, localEditsById, lotId, onAuctionDataInvalidate, onSessionUpdated, readOnly, session, saveRetryAllowLotIncrease]);
 
-  const busy = loading || deleting || saving;
+  const busy = loading || deleting || saving || readOnly;
 
   const hasUnsavedRates = useMemo(() => {
     if (!session || entries.length === 0) return false;
     for (const e of entries) {
+      if (e.frozen) continue;
       if (entryHasDirtyEdits(e, localEditsById[e.auction_entry_id])) return true;
     }
     return false;
@@ -620,6 +637,7 @@ export function LotBidsTable({
               const edits = localEditsById[id];
               const m = mergeEntryDisplay(e, edits);
               const preset = Number(e.preset_margin ?? 0);
+              const rowBusy = busy || e.frozen === true;
               return (
                 <TableRow key={id} className="border-border/30">
                   <TableCell className="max-w-[9rem] whitespace-nowrap text-left font-medium">
@@ -632,13 +650,19 @@ export function LotBidsTable({
                       aria-label={`Buyer mark for bid ${e.bid_number}`}
                       className={cn(readOnlyBidTextClass, 'max-w-[8rem] font-medium')}
                     />
+                    {e.frozen && (
+                      <span className="mt-1 inline-flex items-center gap-1 rounded-full bg-slate-500/10 px-2 py-0.5 text-[10px] font-bold uppercase text-slate-700 dark:text-slate-200">
+                        <Lock className="h-3 w-3" />
+                        Bill frozen
+                      </span>
+                    )}
                   </TableCell>
                   <TableCell className="whitespace-nowrap text-right">
                     <BillingMoneyInput
                       commitMode="blur"
                       integerOnly
                       min={1}
-                      disabled={busy}
+                      disabled={rowBusy}
                       value={m.quantity}
                       onCommit={(n) => patchLocalEdit(id, { quantity: Math.max(1, Math.round(n)) })}
                       title="Quantity (bags)"
@@ -649,7 +673,7 @@ export function LotBidsTable({
                     <BillingMoneyInput
                       commitMode="blur"
                       min={1}
-                      disabled={busy}
+                      disabled={rowBusy}
                       value={m.rate}
                       onCommit={(n) => patchLocalEdit(id, { rate: roundMoney2(n) })}
                       title="Buyer rate"
@@ -673,7 +697,7 @@ export function LotBidsTable({
                   <TableCell className="whitespace-nowrap text-right">
                     <BillingMoneyInput
                       commitMode="blur"
-                      disabled={busy}
+                      disabled={rowBusy}
                       value={m.extra_rate}
                       onCommit={(n) => patchLocalEdit(id, { extra_rate: roundMoney2(n) })}
                       title="Brokerage (extra rate)"
@@ -687,7 +711,7 @@ export function LotBidsTable({
                     <BillingMoneyInput
                       commitMode="blur"
                       min={1}
-                      disabled={busy}
+                      disabled={rowBusy}
                       value={m.summary_seller_rate}
                       onCommit={(n) => patchLocalEdit(id, { summary_seller_rate: roundMoney2(n) })}
                       title={`New seller rate for ${m.buyer_mark}`}
@@ -699,7 +723,7 @@ export function LotBidsTable({
                       type="button"
                       className={cn(
                         'inline-flex rounded-lg p-2 text-destructive hover:bg-destructive/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring md:p-1.5 lg:p-2',
-                        busy && 'pointer-events-none opacity-50',
+                        rowBusy && 'pointer-events-none opacity-50',
                       )}
                       aria-label={`Delete bid ${e.bid_number}`}
                       onClick={() => setDeleteTarget(e)}
@@ -749,6 +773,7 @@ export function LotBidsTable({
             const edits = localEditsById[id];
             const m = mergeEntryDisplay(e, edits);
             const preset = Number(e.preset_margin ?? 0);
+            const rowBusy = busy || e.frozen === true;
             return (
               <div
                 key={id}
@@ -772,13 +797,19 @@ export function LotBidsTable({
                         aria-label={`Buyer mark for bid ${e.bid_number}`}
                         className={cn(readOnlyBidTextClass, 'h-10 text-sm')}
                       />
+                      {e.frozen && (
+                        <span className="inline-flex items-center gap-1 rounded-full bg-slate-500/10 px-2 py-0.5 text-[10px] font-bold uppercase text-slate-700 dark:text-slate-200">
+                          <Lock className="h-3 w-3" />
+                          Bill frozen
+                        </span>
+                      )}
                     </div>
                   </div>
                   <button
                     type="button"
                     className={cn(
                       'mb-0.5 inline-flex shrink-0 rounded-lg p-2 text-destructive hover:bg-destructive/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-                      busy && 'pointer-events-none opacity-50',
+                      rowBusy && 'pointer-events-none opacity-50',
                     )}
                     aria-label={`Delete bid ${e.bid_number}`}
                     onClick={() => setDeleteTarget(e)}
@@ -793,7 +824,7 @@ export function LotBidsTable({
                       commitMode="blur"
                       integerOnly
                       min={1}
-                      disabled={busy}
+                      disabled={rowBusy}
                       value={m.quantity}
                       onCommit={(n) => patchLocalEdit(id, { quantity: Math.max(1, Math.round(n)) })}
                       title="Quantity (bags)"
@@ -808,7 +839,7 @@ export function LotBidsTable({
                     <BillingMoneyInput
                       commitMode="blur"
                       min={1}
-                      disabled={busy}
+                      disabled={rowBusy}
                       value={m.rate}
                       onCommit={(n) => patchLocalEdit(id, { rate: roundMoney2(n) })}
                       title="Buyer rate"
@@ -822,7 +853,7 @@ export function LotBidsTable({
                     <FieldLabel>Brokerage (₹)</FieldLabel>
                     <BillingMoneyInput
                       commitMode="blur"
-                      disabled={busy}
+                      disabled={rowBusy}
                       value={m.extra_rate}
                       onCommit={(n) => patchLocalEdit(id, { extra_rate: roundMoney2(n) })}
                       title="Brokerage (extra rate)"
@@ -893,7 +924,7 @@ export function LotBidsTable({
                     <BillingMoneyInput
                       commitMode="blur"
                       min={1}
-                      disabled={busy}
+                      disabled={rowBusy}
                       value={m.summary_seller_rate}
                       onCommit={(n) => patchLocalEdit(id, { summary_seller_rate: roundMoney2(n) })}
                       title={`New seller rate for ${m.buyer_mark}`}

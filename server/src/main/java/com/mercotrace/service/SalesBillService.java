@@ -36,4 +36,14 @@ public interface SalesBillService {
      * If the bill already has a number, this is a no-op and returns the existing bill.
      */
     SalesBillDTO assignNumber(Long id);
+
+    /**
+     * Mark a bill as printed and freeze it until explicitly reopened.
+     */
+    SalesBillDTO markPrinted(Long id);
+
+    /**
+     * Reopen a printed/frozen bill for editing with audit timestamp/user.
+     */
+    SalesBillDTO reopen(Long id);
 }

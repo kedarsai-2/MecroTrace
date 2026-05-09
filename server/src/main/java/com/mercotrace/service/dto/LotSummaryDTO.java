@@ -59,6 +59,10 @@ public class LotSummaryDTO implements Serializable {
     @JsonProperty("seller_total_qty")
     private Integer sellerTotalQty;
 
+    /** True when this seller's Summary/Sales Pad rows are frozen by a printed Sales Patti. */
+    @JsonProperty("seller_frozen")
+    private Boolean sellerFrozen;
+
     /**
      * Distinct buyers with bids on the latest auction for this lot (registered contacts and scribble/temp).
      * Excludes self-sale rows. Omitted or empty when there are no qualifying bids.
@@ -188,6 +192,14 @@ public class LotSummaryDTO implements Serializable {
 
     public void setSellerTotalQty(Integer sellerTotalQty) {
         this.sellerTotalQty = sellerTotalQty;
+    }
+
+    public Boolean getSellerFrozen() {
+        return sellerFrozen;
+    }
+
+    public void setSellerFrozen(Boolean sellerFrozen) {
+        this.sellerFrozen = sellerFrozen;
     }
 
     public List<LotParticipatingBuyerDTO> getParticipatingBuyers() {

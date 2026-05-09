@@ -266,6 +266,10 @@ interface PattiData {
   useAverageWeight: boolean;
 }
 
+function isFrozenPatti(dto: PattiDTO | null | undefined): boolean {
+  return !!dto && (dto.frozen === true || (!!dto.lockedAt && !dto.reopenedAt));
+}
+
 interface ArrivalSummaryRow {
   key: string;
   vehicleNumber: string;
@@ -3514,7 +3518,7 @@ const SettlementPage = () => {
     toast.success('In-progress patti restored.');
   }, [openPattiForEdit]);
 
-  const isPattiEditLocked = !!selectedSeller && !!pattiData && !isLatestEditUnlocked;
+  const isPattiEditLocked = !!selectedSeller && !!pattiData && (!isLatestEditUnlocked || isFrozenPatti(pattiDetailDto));
   const isSettlementFormReadOnly = isPattiEditLocked || isOriginalReferenceMode;
 
   const exitOriginalReferenceMode = useCallback(() => {
@@ -3710,6 +3714,24 @@ const SettlementPage = () => {
     };
   }, [pattiSaveBusy, selectedSeller, pattiData, isLatestEditUnlocked, showPrint, settlementWorkspaceSnapshot, isOriginalReferenceMode]);
 
+  const resolvePattiIdsForSellerIds = useCallback((sellerIds: string[], refreshed: PattiDTO[] = []): number[] => {
+    const wanted = new Set(sellerIds.map(s => String(s).trim()).filter(Boolean));
+    const ids = new Set<number>();
+    for (const sid of wanted) {
+      const id = existingPattiIdBySellerId[sid];
+      if (id != null && Number(id) > 0) ids.add(Number(id));
+    }
+    for (const p of [...savedPattis, ...refreshed]) {
+      const sid = String(p.sellerId ?? '').trim();
+      if (wanted.has(sid) && p.id != null && Number(p.id) > 0) ids.add(Number(p.id));
+    }
+    const detailSid = String(pattiDetailDto?.sellerId ?? '').trim();
+    if (detailSid && wanted.has(detailSid) && pattiDetailDto?.id != null && Number(pattiDetailDto.id) > 0) {
+      ids.add(Number(pattiDetailDto.id));
+    }
+    return Array.from(ids);
+  }, [existingPattiIdBySellerId, pattiDetailDto, savedPattis]);
+
   const enableSettlementEdit = useCallback(() => {
     if (isOriginalReferenceMode) {
       const wasLocked = !isLatestEditUnlocked;
@@ -3722,11 +3744,63 @@ const SettlementPage = () => {
       }
       return;
     }
+    if (isFrozenPatti(pattiDetailDto)) {
+      const scopeSellerIds = (
+        selectedArrivalSellerIds.length > 0
+          ? selectedArrivalSellerIds
+          : selectedSeller
+            ? [selectedSeller.sellerId]
+            : []
+      ).map(String);
+      const ids = resolvePattiIdsForSellerIds(scopeSellerIds);
+      if (ids.length === 0) {
+        toast.error('Saved Patti id is missing. Refresh and try again.');
+        return;
+      }
+      void Promise.all(ids.map(id => settlementApi.reopenPatti(id)))
+        .then((updatedRows) => {
+          const activeSellerId = String(pattiDetailDto?.sellerId ?? selectedSeller?.sellerId ?? '').trim();
+          const active = updatedRows.find(p => String(p.sellerId ?? '') === activeSellerId) ?? updatedRows[0];
+          if (active) setPattiDetailDto(active);
+          setIsLatestEditUnlocked(true);
+          settlementDirtyBaselineRef.current = null;
+          setSettlementDirtyNonce(n => n + 1);
+          void loadSavedPattis();
+          toast.success('Printed Sales Patti reopened for editing.');
+        })
+        .catch((err) => toast.error(err instanceof Error ? err.message : 'Failed to reopen Sales Patti.'));
+      return;
+    }
     settlementDirtyBaselineRef.current = null;
     setSettlementDirtyNonce(n => n + 1);
     setIsLatestEditUnlocked(true);
     toast.success('Editing enabled.');
-  }, [isOriginalReferenceMode, isLatestEditUnlocked, exitOriginalReferenceMode]);
+  }, [
+    isOriginalReferenceMode,
+    isLatestEditUnlocked,
+    exitOriginalReferenceMode,
+    pattiDetailDto,
+    selectedArrivalSellerIds,
+    selectedSeller,
+    loadSavedPattis,
+    resolvePattiIdsForSellerIds,
+  ]);
+
+  const freezePrintedPattisForSellers = useCallback(async (sellerIds: string[], refreshed: PattiDTO[] = []) => {
+    const ids = resolvePattiIdsForSellerIds(sellerIds, refreshed);
+    if (ids.length === 0) return;
+    let primary: PattiDTO | null = null;
+    for (const id of ids) {
+      const updated = await settlementApi.markPattiPrinted(id);
+      if (pattiDetailDto?.id != null && Number(pattiDetailDto.id) === id) {
+        primary = updated;
+      }
+    }
+    if (primary) setPattiDetailDto(primary);
+    setIsLatestEditUnlocked(false);
+    void loadSavedPattis();
+    void loadSellers();
+  }, [loadSavedPattis, loadSellers, pattiDetailDto?.id, resolvePattiIdsForSellerIds]);
 
   const computePattiSavePayloadForSeller = useCallback(
     (
@@ -4143,6 +4217,32 @@ const SettlementPage = () => {
       ensureSellerInMainPattiScope,
       resolveMainPattiCreateNumbering,
     ]
+  );
+
+  const saveAndFreezePrintedPattisForSellers = useCallback(
+    async (scopeSellers: SellerSettlement[]) => {
+      if (scopeSellers.length === 0) {
+        throw new Error('No Sales Patti rows found to freeze.');
+      }
+      for (const seller of scopeSellers) {
+        const ok = await savePattiForSeller(seller, {
+          silent: true,
+          showPrintAfterSave: false,
+          skipBusyGuard: true,
+        });
+        if (!ok) {
+          throw new Error(`Could not save Patti for ${seller.sellerName || seller.sellerId} before freezing.`);
+        }
+      }
+      const refreshed = await loadSavedPattis();
+      const sellerIds = scopeSellers.map(s => s.sellerId);
+      const ids = resolvePattiIdsForSellerIds(sellerIds, refreshed);
+      if (ids.length === 0) {
+        throw new Error('Could not find saved Patti rows to freeze. Save Patti first, then print.');
+      }
+      await freezePrintedPattisForSellers(sellerIds, refreshed);
+    },
+    [freezePrintedPattisForSellers, loadSavedPattis, resolvePattiIdsForSellerIds, savePattiForSeller]
   );
 
   const savePatti = async (): Promise<boolean> => {
@@ -5653,8 +5753,14 @@ const SettlementPage = () => {
       ),
       { mode: 'system' },
     );
-    if (ok) toast.success('Main patti sent to printer');
-    else toast.error('Printer not connected.');
+    if (ok) {
+      try {
+        await saveAndFreezePrintedPattisForSellers(scopeSellers);
+        toast.success('Main patti sent to printer and frozen.');
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : 'Printed, but failed to freeze Sales Patti.');
+      }
+    } else toast.error('Printer not connected.');
   }, [
     pattiData,
     isSettlementFormReadOnly,
@@ -5677,6 +5783,7 @@ const SettlementPage = () => {
     displayMainSalesPattiNo,
     mainPattiPrintHeaderIdentity,
     settlementCopyLabelsResolved,
+    saveAndFreezePrintedPattisForSellers,
   ]);
 
   const runPrintSellerSubPatti = useCallback(
@@ -5738,8 +5845,14 @@ const SettlementPage = () => {
         ),
         { mode: 'system' },
       );
-      if (ok) toast.success('Seller sub-patti sent to printer');
-      else toast.error('Printer not connected.');
+      if (ok) {
+        try {
+          await saveAndFreezePrintedPattisForSellers([seller]);
+          toast.success('Seller sub-patti sent to printer and frozen.');
+        } catch (err) {
+          toast.error(err instanceof Error ? err.message : 'Printed, but failed to freeze Sales Patti.');
+        }
+      } else toast.error('Printer not connected.');
     },
     [
       pattiData,
@@ -5758,6 +5871,7 @@ const SettlementPage = () => {
       firmInfo,
       sellerSalesPattiNumberBySellerId,
       settlementCopyLabelsResolved,
+      saveAndFreezePrintedPattisForSellers,
     ]
   );
 
@@ -5826,7 +5940,12 @@ const SettlementPage = () => {
       toast.error('Print failed or cancelled.');
       return;
     }
-    toast.success('All sub-pattis sent to printer');
+    try {
+      await saveAndFreezePrintedPattisForSellers(arrivalSellersForPatti);
+      toast.success('All sub-pattis sent to printer and frozen.');
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Printed, but failed to freeze Sales Pattis.');
+    }
   }, [
     pattiData,
     isSettlementFormReadOnly,
@@ -5846,6 +5965,7 @@ const SettlementPage = () => {
     firmInfo,
     sellerSalesPattiNumberBySellerId,
     settlementCopyLabelsResolved,
+    saveAndFreezePrintedPattisForSellers,
   ]);
 
   const vehicleExpenseTotals = useMemo(() => {
@@ -6846,8 +6966,19 @@ const SettlementPage = () => {
                     ),
                 { mode: "system" },
               );
-              if (ok) toast.success('Sales Patti sent to printer!');
-              else toast.error('Printer not connected.');
+              if (ok) {
+                try {
+                  await saveAndFreezePrintedPattisForSellers(
+                    arrivalSellersForPatti.length > 0
+                      ? arrivalSellersForPatti
+                      : (selectedSeller ? [selectedSeller] : []),
+                  );
+                  setShowPrint(false);
+                  toast.success('Sales Patti sent to printer and frozen.');
+                } catch (err) {
+                  toast.error(err instanceof Error ? err.message : 'Printed, but failed to freeze Sales Patti.');
+                }
+              } else toast.error('Printer not connected.');
             }}
               className={cn(arrSolidTall, 'flex-1 sm:flex-none gap-2')}
             >

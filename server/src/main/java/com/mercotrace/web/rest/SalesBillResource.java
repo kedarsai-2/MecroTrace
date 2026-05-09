@@ -128,4 +128,32 @@ public class SalesBillResource {
             throw new BadRequestAlertException(e.getMessage(), ENTITY_NAME, "validation");
         }
     }
+
+    /**
+     * {@code POST /api/sales-bills/:id/print-lock} : mark bill as printed and freeze edits.
+     */
+    @PostMapping("/{id}/print-lock")
+    @PreAuthorize("hasAuthority(\"" + AuthoritiesConstants.BILLING_EDIT + "\")")
+    public ResponseEntity<SalesBillDTO> markPrinted(@PathVariable Long id) {
+        LOG.debug("REST request to print-lock sales bill: {}", id);
+        try {
+            return ResponseEntity.ok(salesBillService.markPrinted(id));
+        } catch (IllegalArgumentException e) {
+            throw new BadRequestAlertException(e.getMessage(), ENTITY_NAME, "validation");
+        }
+    }
+
+    /**
+     * {@code POST /api/sales-bills/:id/reopen} : reopen a printed/frozen bill for editing.
+     */
+    @PostMapping("/{id}/reopen")
+    @PreAuthorize("hasAuthority(\"" + AuthoritiesConstants.BILLING_EDIT + "\")")
+    public ResponseEntity<SalesBillDTO> reopen(@PathVariable Long id) {
+        LOG.debug("REST request to reopen sales bill: {}", id);
+        try {
+            return ResponseEntity.ok(salesBillService.reopen(id));
+        } catch (IllegalArgumentException e) {
+            throw new BadRequestAlertException(e.getMessage(), ENTITY_NAME, "validation");
+        }
+    }
 }
