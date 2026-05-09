@@ -297,6 +297,18 @@ public class AuctionService {
         List<AuctionEntry> latestAuctionEntries = latestAuction
             .map(a -> auctionToEntries.getOrDefault(a.getId(), List.of()))
             .orElse(List.of());
+        latestAuctionEntries
+            .stream()
+            .filter(this::isSummaryEditedEntry)
+            .max(Comparator.comparing(AuctionEntry::getLastModifiedDate, Comparator.nullsLast(Comparator.naturalOrder())))
+            .ifPresent(entry -> {
+                dto.setSummaryEdited(Boolean.TRUE);
+                dto.setSummaryEditedAt(entry.getLastModifiedDate());
+                dto.setSummaryEditedBy(entry.getLastModifiedBy());
+            });
+        if (dto.getSummaryEdited() == null) {
+            dto.setSummaryEdited(Boolean.FALSE);
+        }
 
         int soldBags = latestAuctionEntries.stream().mapToInt(e -> e.getQuantity() != null ? e.getQuantity() : 0).sum();
         dto.setSoldBags(soldBags);
@@ -315,6 +327,13 @@ public class AuctionService {
         dto.setStatus(status);
         dto.setParticipatingBuyers(buildParticipatingBuyers(latestAuctionEntries));
         return dto;
+    }
+
+    private boolean isSummaryEditedEntry(AuctionEntry entry) {
+        if (entry == null || entry.getSummarySellerRate() == null || entry.getBidRate() == null) {
+            return false;
+        }
+        return entry.getSummarySellerRate().compareTo(entry.getBidRate()) != 0;
     }
 
     /**

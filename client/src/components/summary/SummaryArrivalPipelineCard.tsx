@@ -1,4 +1,4 @@
-import { Printer, Truck } from 'lucide-react';
+import { Lock, Pencil, Printer, Truck } from 'lucide-react';
 import type { KeyboardEvent, MouseEvent } from 'react';
 import { motion } from 'framer-motion';
 import { cn } from '@/lib/utils';
@@ -88,12 +88,28 @@ type Props = {
   arrival: ArrivalSummary;
   billing: VehicleBillingBagStats | undefined;
   auction: AuctionBagStats | undefined;
+  meta?: SummaryArrivalCardMeta;
   index: number;
   onOpenVehicle: (a: ArrivalSummary) => void;
   onPrint?: (a: ArrivalSummary) => void;
 };
 
-const SummaryArrivalPipelineCard = ({ arrival: a, billing, auction, index, onOpenVehicle, onPrint }: Props) => {
+export type SummaryArrivalCardMeta = {
+  summaryEdited: boolean;
+  summaryEditedAt?: string | null;
+  summaryEditedBy?: string | null;
+  frozen: boolean;
+};
+
+function formatSummaryEditTooltip(meta: SummaryArrivalCardMeta | undefined): string {
+  if (!meta?.summaryEdited) return '';
+  const when = meta.summaryEditedAt ? new Date(meta.summaryEditedAt) : null;
+  const whenText = when && !Number.isNaN(when.getTime()) ? when.toLocaleString() : 'unknown time';
+  const byText = meta.summaryEditedBy?.trim() || 'unknown user';
+  return `Edited in Summary. Last edited ${whenText} by ${byText}.`;
+}
+
+const SummaryArrivalPipelineCard = ({ arrival: a, billing, auction, meta, index, onOpenVehicle, onPrint }: Props) => {
   const denom = pipelineTotalBags(a, auction);
   const location = [a.origin, a.godown].map((x) => (x ?? '').trim()).filter(Boolean).join(', ') || '—';
   const sellerName = (a.primarySellerName ?? '').trim() || '—';
@@ -106,6 +122,7 @@ const SummaryArrivalPipelineCard = ({ arrival: a, billing, auction, index, onOpe
   const weighedDone = billing?.weighedBags ?? 0;
   const billedDone = billing?.billedBags ?? 0;
   const invoicedDone = billing?.invoicedBags ?? 0;
+  const editTooltip = formatSummaryEditTooltip(meta);
 
   const handlePrint = (e: MouseEvent<HTMLButtonElement>) => {
     e.stopPropagation();
@@ -150,6 +167,26 @@ const SummaryArrivalPipelineCard = ({ arrival: a, billing, auction, index, onOpe
           </div>
         </div>
         <div className="shrink-0 text-right">
+          <div className="mb-1 flex justify-end gap-1.5">
+            {meta?.summaryEdited ? (
+              <span
+                title={editTooltip}
+                className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-amber-500/15 text-amber-700 dark:text-amber-300"
+                aria-label={editTooltip}
+              >
+                <Pencil className="h-3.5 w-3.5" aria-hidden />
+              </span>
+            ) : null}
+            {meta?.frozen ? (
+              <span
+                title="Frozen: Settlement Patti is printed for one or more sellers in this vehicle."
+                className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-slate-500/15 text-slate-700 dark:text-slate-200"
+                aria-label="Frozen: Settlement Patti is printed for one or more sellers in this vehicle."
+              >
+                <Lock className="h-3.5 w-3.5" aria-hidden />
+              </span>
+            ) : null}
+          </div>
           <p className="text-lg font-bold tabular-nums leading-none text-foreground">
             {totalBagsHeader}
           </p>

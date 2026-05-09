@@ -3,6 +3,7 @@ package com.mercotrace.service.dto;
 import com.fasterxml.jackson.annotation.JsonAlias;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import java.io.Serializable;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -62,6 +63,16 @@ public class LotSummaryDTO implements Serializable {
     /** True when this seller's Summary/Sales Pad rows are frozen by a printed Sales Patti. */
     @JsonProperty("seller_frozen")
     private Boolean sellerFrozen;
+
+    /** True when Summary/Vehicle Ops changed this lot's seller rate away from the auction bid rate. */
+    @JsonProperty("summary_edited")
+    private Boolean summaryEdited;
+
+    @JsonProperty("summary_edited_at")
+    private Instant summaryEditedAt;
+
+    @JsonProperty("summary_edited_by")
+    private String summaryEditedBy;
 
     /**
      * Distinct buyers with bids on the latest auction for this lot (registered contacts and scribble/temp).
@@ -200,6 +211,30 @@ public class LotSummaryDTO implements Serializable {
 
     public void setSellerFrozen(Boolean sellerFrozen) {
         this.sellerFrozen = sellerFrozen;
+    }
+
+    public Boolean getSummaryEdited() {
+        return summaryEdited;
+    }
+
+    public void setSummaryEdited(Boolean summaryEdited) {
+        this.summaryEdited = summaryEdited;
+    }
+
+    public Instant getSummaryEditedAt() {
+        return summaryEditedAt;
+    }
+
+    public void setSummaryEditedAt(Instant summaryEditedAt) {
+        this.summaryEditedAt = summaryEditedAt;
+    }
+
+    public String getSummaryEditedBy() {
+        return summaryEditedBy;
+    }
+
+    public void setSummaryEditedBy(String summaryEditedBy) {
+        this.summaryEditedBy = summaryEditedBy;
     }
 
     public List<LotParticipatingBuyerDTO> getParticipatingBuyers() {

@@ -32,6 +32,10 @@ export interface LotSummaryDTO {
   seller_total_qty?: number;
   /** True when printed Settlement Patti froze this seller's Summary/Sales Pad rows. */
   seller_frozen?: boolean;
+  /** True when Summary/Vehicle Ops changed seller rate for this lot. */
+  summary_edited?: boolean;
+  summary_edited_at?: string | null;
+  summary_edited_by?: string | null;
   /** Distinct buyers with bids (latest auction); for "By Buyer" lot navigation. */
   participating_buyers?: LotParticipatingBuyerDTO[];
 }
