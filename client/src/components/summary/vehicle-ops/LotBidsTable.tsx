@@ -574,13 +574,13 @@ export function LotBidsTable({
 
       {showTable ? (
         <>
-          {/* Wide table from `md` (768px) — aligns with VehicleOps seller strip / lot layout. */}
-          <div className="hidden max-w-full rounded-xl border border-border/30 bg-background/40 md:block md:overflow-x-auto">
+          {/* Scrollable table on all breakpoints; mobile no longer uses buyer form cards. */}
+          <div className="block max-w-full overflow-x-auto rounded-xl border border-border/30 bg-background/40">
             <Table
               className={cn(
                 'border-collapse',
-                /** Tablet (`md`): auto layout + content width so columns don’t squish; wrapper scrolls horizontally. */
-                'md:table-auto md:w-max',
+                /** Mobile/tablet: auto layout + content width so columns don’t squish; wrapper scrolls horizontally. */
+                'table-auto w-max',
                 /** Desktop (`lg+`): fixed layout + explicit column widths via colgroup. */
                 'lg:table-fixed lg:w-full lg:min-w-[880px]',
                 'text-xs sm:text-sm md:text-xs lg:text-sm',
@@ -766,7 +766,7 @@ export function LotBidsTable({
         </Table>
           </div>
 
-          <div className="md:hidden">
+          <div className="hidden">
         {entries.length > 1 && (
           <div className="mb-2 flex items-center justify-center gap-1.5" role="tablist" aria-label="Buyers in this lot">
             {entries.map((e, ei) => (

@@ -31,9 +31,9 @@ export function SellerListSidebar({
       aria-label="Sellers on this vehicle"
       className={cn(
         'flex min-h-0 gap-2 pb-1 [-webkit-overflow-scrolling:touch]',
-        /* Horizontal strip + touch pan for phone; vertical sidebar from md (768px) when workspace grid is split. */
+        /* Horizontal strip for phone + tablet; vertical sidebar only at desktop (`lg`) when workspace grid is split. */
         'touch-[pan-x_pan-y] overflow-x-auto no-scrollbar',
-        'md:flex-col md:touch-auto md:gap-1.5 md:overflow-y-visible md:overflow-x-visible md:pb-0 md:pr-1 lg:gap-2',
+        'lg:flex-col lg:touch-auto lg:gap-2 lg:overflow-y-visible lg:overflow-x-visible lg:pb-0 lg:pr-1',
       )}
     >
       {sellers.map((seller, i) => {
@@ -74,7 +74,7 @@ export function SellerListSidebar({
               }
             }}
             className={cn(
-              'flex min-w-[220px] shrink-0 touch-manipulation rounded-2xl border text-left transition-colors md:min-w-0 md:max-w-full md:w-full md:rounded-xl lg:rounded-2xl',
+              'flex min-w-[220px] shrink-0 touch-manipulation rounded-2xl border text-left transition-colors lg:min-w-0 lg:max-w-full lg:w-full',
               selected
                 ? 'border-[#6075FF]/50 bg-violet-500/10 shadow-sm dark:bg-violet-500/15'
                 : 'border-border/40 bg-white/80 hover:bg-muted/30 dark:bg-card/80',
@@ -82,16 +82,16 @@ export function SellerListSidebar({
           >
             <span
               className={cn(
-                'w-1.5 shrink-0 self-stretch rounded-l-2xl md:w-1 md:rounded-l-xl lg:w-1.5 lg:rounded-l-2xl',
+                'w-1.5 shrink-0 self-stretch rounded-l-2xl',
                 vehicleOpsAuctionStripClass(sellerAllLotsAuctioned),
               )}
               aria-hidden
             />
-            <span className="flex min-w-0 flex-1 flex-col gap-1 px-3 py-3 md:gap-0.5 md:px-2 md:py-2 lg:gap-1 lg:px-3 lg:py-3">
-              <span className="truncate text-sm font-semibold text-foreground md:text-xs lg:text-sm">
+            <span className="flex min-w-0 flex-1 flex-col gap-1 px-3 py-3">
+              <span className="truncate text-sm font-semibold text-foreground">
                 {name} / {mark}
               </span>
-              <span className="text-[11px] font-medium tabular-nums text-foreground md:text-[10px] lg:text-[11px]">
+              <span className="text-[11px] font-medium tabular-nums text-foreground">
                 {sold} / {pending}
               </span>
             </span>
