@@ -325,7 +325,35 @@ export function LotBidsTable({
       };
       try {
         setAddBidSaving(true);
-        const next = await auctionApi.addBid(lotId, body);
+        let next = await auctionApi.addBid(lotId, body);
+        if (presetMargin !== 0) {
+          const skippedFrozenIds = new Set<number>();
+          for (let i = 0; i < 500; i += 1) {
+            const target = (next.entries ?? []).find(entry => {
+              if (entry.frozen) {
+                skippedFrozenIds.add(entry.auction_entry_id);
+                return false;
+              }
+              return (
+                roundMoney2(Number(entry.preset_margin ?? 0)) !== presetMargin ||
+                ((entry.preset_type ?? 'PROFIT') as 'PROFIT' | 'LOSS') !== body.preset_type
+              );
+            });
+            if (!target) break;
+            next = await auctionApi.updateBid(lotId, target.auction_entry_id, {
+              rate: Number(target.bid_rate) || 0,
+              quantity: Number(target.quantity) || 1,
+              extra_rate: Number(target.extra_rate ?? 0),
+              token_advance: Number(target.token_advance ?? 0),
+              preset_applied: presetMargin,
+              preset_type: body.preset_type,
+              expected_last_modified_ms: target.last_modified_ms ?? undefined,
+            });
+          }
+          if (skippedFrozenIds.size > 0) {
+            toast.info('Preset applied to editable bids. Printed bill rows were skipped.');
+          }
+        }
         onSessionUpdated(next);
         setAddBidRetryAllowIncrease(false);
         setAddBidOpen(false);

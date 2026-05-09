@@ -2991,6 +2991,41 @@ const BillingPage = () => {
     ],
   );
 
+  const syncAddBidPresetToEditableLotBids = useCallback(
+    async (initialSession: AuctionSessionDTO, presetApplied: number, presetType: 'PROFIT' | 'LOSS'): Promise<AuctionSessionDTO> => {
+      if (!addBidSelectedLot || roundMoney2(Number(presetApplied) || 0) === 0) return initialSession;
+      let session = initialSession;
+      const skippedFrozenIds = new Set<number>();
+      for (let i = 0; i < 500; i += 1) {
+        const next = (session.entries ?? []).find(entry => {
+          if (entry.frozen) {
+            skippedFrozenIds.add(entry.auction_entry_id);
+            return false;
+          }
+          return (
+            roundMoney2(Number(entry.preset_margin ?? 0)) !== roundMoney2(presetApplied) ||
+            ((entry.preset_type ?? 'PROFIT') as 'PROFIT' | 'LOSS') !== presetType
+          );
+        });
+        if (!next) break;
+        session = await auctionApi.updateBid(addBidSelectedLot.lot_id, next.auction_entry_id, {
+          rate: Number(next.bid_rate) || 0,
+          quantity: Number(next.quantity) || 1,
+          extra_rate: Number(next.extra_rate ?? 0),
+          token_advance: Number(next.token_advance ?? 0),
+          preset_applied: presetApplied,
+          preset_type: presetType,
+          expected_last_modified_ms: next.last_modified_ms ?? undefined,
+        });
+      }
+      if (skippedFrozenIds.size > 0) {
+        toast.info('Preset applied to editable bids. Printed bill rows were skipped.');
+      }
+      return session;
+    },
+    [addBidSelectedLot],
+  );
+
   const executeBillingAddBid = useCallback(
     async (allowLotIncrease: boolean) => {
       if (!bill || !selectedBuyer || !addBidSelectedLot) {
@@ -3044,7 +3079,8 @@ const BillingPage = () => {
 
       try {
         setAddBidSaving(true);
-        const session = await auctionApi.addBid(addBidSelectedLot.lot_id, body);
+        const addedSession = await auctionApi.addBid(addBidSelectedLot.lot_id, body);
+        const session = await syncAddBidPresetToEditableLotBids(addedSession, presetMargin, body.preset_type);
         setAddBidSession(session);
         setAddBidRemainingQty(Number(session.remaining_bags) || 0);
         setAddBidRetryAllowIncrease(false);
@@ -3078,6 +3114,7 @@ const BillingPage = () => {
       refetchAuctions,
       resetAddBidForm,
       selectedBuyer,
+      syncAddBidPresetToEditableLotBids,
     ],
   );
 

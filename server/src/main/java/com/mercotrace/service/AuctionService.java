@@ -1534,6 +1534,16 @@ public class AuctionService {
             int newQty = merged.getQuantity() + request.getQuantity();
             merged.setQuantity(newQty);
             merged.setAmount(merged.getBidRate().multiply(BigDecimal.valueOf(newQty)));
+            if (request.getPresetApplied() != null) {
+                merged.setPresetMargin(request.getPresetApplied());
+            }
+            if (request.getPresetType() != null) {
+                merged.setPresetType(request.getPresetType());
+            }
+            if (request.getTokenAdvance() != null) {
+                BigDecimal existingToken = merged.getTokenAdvance() != null ? merged.getTokenAdvance() : BigDecimal.ZERO;
+                merged.setTokenAdvance(existingToken.add(request.getTokenAdvance()));
+            }
             merged.setLastModifiedDate(Instant.now());
             auctionEntryRepository.save(merged);
         } else {
