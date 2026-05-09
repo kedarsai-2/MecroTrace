@@ -76,6 +76,69 @@ function sortArrivalSummaries(a: ArrivalSummary, b: ArrivalSummary): number {
   return Number(b.vehicleId) - Number(a.vehicleId);
 }
 
+function normalizeArrivalSearchQuery(query: string): string {
+  return query.trim().toLowerCase();
+}
+
+function arrivalSearchFieldIncludes(fields: Array<string | number | null | undefined>, query: string): boolean {
+  return fields.some((field) => {
+    if (field == null) return false;
+    return String(field).trim().toLowerCase().includes(query);
+  });
+}
+
+function arrivalSearchNumberListIncludes(values: number[] | undefined, query: string): boolean {
+  return Array.isArray(values) && values.some((value) => String(value).includes(query));
+}
+
+function getArrivalSearchTier(arrival: ArrivalSummary, query: string): number | null {
+  if (!query) return 0;
+
+  if (arrivalSearchNumberListIncludes(arrival.lotBagCounts, query)) {
+    return 0;
+  }
+
+  if (arrivalSearchNumberListIncludes(arrival.sellerBagTotals, query)) {
+    return 1;
+  }
+
+  if (arrivalSearchFieldIncludes([arrival.totalBags], query)) {
+    return 2;
+  }
+
+  if (
+    arrivalSearchFieldIncludes(
+      [
+        arrival.vehicleId,
+        arrival.vehicleNumber,
+        arrival.vehicleMarkAlias,
+        arrival.primarySellerName,
+        arrival.origin,
+        arrival.godown,
+        arrival.gatepassNumber,
+      ],
+      query
+    )
+  ) {
+    return 3;
+  }
+
+  return null;
+}
+
+function filterArrivalsBySearchPriority(arrivals: ArrivalSummary[], query: string): ArrivalSummary[] {
+  const q = normalizeArrivalSearchQuery(query);
+  if (!q) return arrivals;
+
+  const ranked = arrivals
+    .map((arrival, index) => ({ arrival, index, tier: getArrivalSearchTier(arrival, q) }))
+    .filter((item): item is { arrival: ArrivalSummary; index: number; tier: number } => item.tier != null);
+
+  return ranked
+    .sort((a, b) => a.tier - b.tier || a.index - b.index)
+    .map((item) => item.arrival);
+}
+
 // ── Types for local arrival data ──────────────────────────
 interface LotEntry {
   lot_id: string;
@@ -1879,18 +1942,7 @@ const ArrivalsPage = () => {
     if (statusFilter === 'PENDING' || statusFilter === 'WEIGHED' || statusFilter === 'AUCTIONED' || statusFilter === 'SETTLED') {
       result = result.filter(a => getArrivalStatus(a) === statusFilter);
     }
-    const q = searchQuery.trim().toLowerCase();
-    if (q) {
-      result = result.filter(a =>
-        String(a.vehicleId ?? '').toLowerCase().includes(q) ||
-        (a.vehicleNumber ?? '').toLowerCase().includes(q) ||
-        (a.vehicleMarkAlias ?? '').toLowerCase().includes(q) ||
-        (a.primarySellerName ?? '').toLowerCase().includes(q) ||
-        (a.origin ?? '').toLowerCase().includes(q) ||
-        (a.godown ?? '').toLowerCase().includes(q) ||
-        (a.gatepassNumber ?? '').toLowerCase().includes(q)
-      );
-    }
+    result = filterArrivalsBySearchPriority(result, searchQuery);
     return result;
   }, [apiArrivals, partialArrivals, searchQuery, statusFilter]);
 
@@ -3072,7 +3124,7 @@ const ArrivalsPage = () => {
                         <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
                         <input
                           type="search"
-                          placeholder="Search seller, vehicle, origin..."
+                          placeholder="Search lots by qty, seller qty, vehicle qty, or seller..."
                           value={searchQuery}
                           onChange={e => setSearchQuery(e.target.value)}
                           className="w-full min-w-0 h-9 pl-9 pr-4 rounded-xl text-xs bg-white dark:bg-card border border-border/40 shadow-sm focus:outline-none focus-visible:ring-1 focus-visible:ring-[#6075FF]"
@@ -4025,7 +4077,7 @@ const ArrivalsPage = () => {
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
               <input
                 type="search"
-                placeholder="Search seller, vehicle, origin..."
+                placeholder="Search lots by qty, seller qty, vehicle qty, or seller..."
                 value={searchQuery}
                 onChange={e => setSearchQuery(e.target.value)}
                 className="w-full h-10 pl-10 pr-4 rounded-xl text-sm bg-white dark:bg-card border border-border/40 shadow-sm focus:outline-none focus-visible:ring-1 focus-visible:ring-[#6075FF] text-foreground placeholder:text-muted-foreground"

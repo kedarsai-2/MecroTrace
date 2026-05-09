@@ -484,22 +484,22 @@ const AuctionBuyerStrips = memo(function AuctionBuyerStrips({
 interface QuickLotNavigationOverlayProps {
   show: boolean;
   quickLotNavigation: { items: LotInfo[]; total: number; start: number };
-  lotNumberSearch: string;
+  lotSearchQuery: string;
   selectedLot: LotInfo | null;
   selectedLotSource: LotSource;
   statusFilter: LotStatus | 'all';
-  onLotNumberSearchChange: (value: string) => void;
+  onLotSearchQueryChange: (value: string) => void;
   onSelectLot: (lot: LotInfo) => void;
 }
 
 const QuickLotNavigationOverlay = memo(function QuickLotNavigationOverlay({
   show,
   quickLotNavigation,
-  lotNumberSearch,
+  lotSearchQuery,
   selectedLot,
   selectedLotSource,
   statusFilter,
-  onLotNumberSearchChange,
+  onLotSearchQueryChange,
   onSelectLot,
 }: QuickLotNavigationOverlayProps) {
   return (
@@ -517,9 +517,9 @@ const QuickLotNavigationOverlay = memo(function QuickLotNavigationOverlay({
               <div className="relative w-40">
                 <Hash className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-muted-foreground" />
                 <input
-                  placeholder="Lot # or AB-200/SA-122/SA1/22"
-                  value={lotNumberSearch}
-                  onChange={(e) => onLotNumberSearchChange(e.target.value)}
+                  placeholder="Search lots"
+                  value={lotSearchQuery}
+                  onChange={(e) => onLotSearchQueryChange(e.target.value)}
                   className="w-full h-7 pl-7 pr-2 rounded-lg bg-muted/50 text-foreground text-xs border border-border focus:outline-none focus:border-primary/50"
                 />
               </div>
@@ -987,6 +987,56 @@ function formatLotDisplayName(lot: {
     lotName,
     lotQty,
   });
+}
+
+function normalizedLotSearchQuery(query: string): string {
+  return query.trim().toLowerCase();
+}
+
+function lotSearchFieldIncludes(fields: Array<string | number | null | undefined>, query: string): boolean {
+  return fields.some((field) => {
+    if (field == null) return false;
+    return String(field).trim().toLowerCase().includes(query);
+  });
+}
+
+function getLotSearchTier(lot: LotInfo, query: string): number | null {
+  if (!query) return 0;
+
+  const lotQty = lotBagCountForIdentifier(lot.bag_count);
+  const sellerQty = lot.seller_total_qty ?? lot.bag_count;
+  const vehicleQty = lot.vehicle_total_qty ?? lot.bag_count;
+
+  if (lotSearchFieldIncludes([lotQty, lot.bag_count, lot.original_bag_count, lot.lot_name, lot.lot_id], query)) {
+    return 0;
+  }
+
+  if (lotSearchFieldIncludes([sellerQty], query)) {
+    return 1;
+  }
+
+  if (lotSearchFieldIncludes([vehicleQty], query)) {
+    return 2;
+  }
+
+  if (lotSearchFieldIncludes([formatLotDisplayName(lot), lot.seller_mark, lot.vehicle_mark], query)) {
+    return 3;
+  }
+
+  return null;
+}
+
+function filterLotsBySearchPriority(lots: LotInfo[], query: string): LotInfo[] {
+  const q = normalizedLotSearchQuery(query);
+  if (!q) return lots;
+
+  const ranked = lots
+    .map((lot, index) => ({ lot, index, tier: getLotSearchTier(lot, q) }))
+    .filter((item): item is { lot: LotInfo; index: number; tier: number } => item.tier != null);
+
+  return ranked
+    .sort((a, b) => a.tier - b.tier || a.index - b.index)
+    .map((item) => item.lot);
 }
 
 // ── Map API DTOs to UI types ──────────────────────────────
@@ -2337,7 +2387,6 @@ const AuctionsPage = () => {
   const [selfSaleContext, setSelfSaleContext] = useState<AuctionSelfSaleContextDTO | null>(null);
   const [lotSearchQuery, setLotSearchQuery] = useState('');
   const [lotNavMode, setLotNavMode] = useState<'all' | 'vehicle' | 'seller' | 'buyer' | 'lot_number'>('all');
-  const [lotNumberSearch, setLotNumberSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<LotStatus | 'all'>('all');
   const [lotsFetchingMore, setLotsFetchingMore] = useState(false);
   const [regularLotsLoadComplete, setRegularLotsLoadComplete] = useState(false);
@@ -2970,30 +3019,12 @@ const AuctionsPage = () => {
   const filteredLots = useMemo(() => {
     if (!showLotSelector) return [];
     let result = statusFilter === 'self_sale' ? selfSaleLots : availableLots;
-    if (lotSearchQuery) {
-      const q = lotSearchQuery.toLowerCase();
-      result = result.filter(l =>
-        l.lot_name.toLowerCase().includes(q) ||
-        l.seller_name.toLowerCase().includes(q) ||
-        l.seller_mark.toLowerCase().includes(q) ||
-        l.vehicle_number.toLowerCase().includes(q) ||
-        l.commodity_name.toLowerCase().includes(q) ||
-        formatLotDisplayName(l).toLowerCase().includes(q)
-      );
-    }
-    if (lotNumberSearch) {
-      const q = lotNumberSearch.toLowerCase();
-      result = result.filter(l =>
-        l.lot_name.toLowerCase().includes(q) ||
-        l.lot_id.toLowerCase().includes(q) ||
-        formatLotDisplayName(l).toLowerCase().includes(q)
-      );
-    }
+    result = filterLotsBySearchPriority(result, lotSearchQuery);
     if (statusFilter !== 'all' && statusFilter !== 'self_sale') {
       result = result.filter(l => getLotStatus(l.lot_id, l.bag_count, l.status) === statusFilter);
     }
     return result;
-  }, [availableLots, selfSaleLots, lotSearchQuery, lotNumberSearch, statusFilter, showLotSelector]);
+  }, [availableLots, selfSaleLots, lotSearchQuery, statusFilter, showLotSelector]);
 
   const selectorLots = useMemo(
     () => (statusFilter === 'self_sale' ? selfSaleLots : availableLots),
@@ -3561,13 +3592,9 @@ const AuctionsPage = () => {
 
   const quickLotNavigation = useMemo(() => {
     if (!showLotList) return { items: [], total: 0, start: 0 };
-    const q = lotNumberSearch.trim().toLowerCase();
+    const q = normalizedLotSearchQuery(lotSearchQuery);
     if (q) {
-      const matches = navigationLots.filter(l =>
-        l.lot_name.toLowerCase().includes(q) ||
-        l.lot_id.toLowerCase().includes(q) ||
-        formatLotDisplayName(l).toLowerCase().includes(q)
-      );
+      const matches = filterLotsBySearchPriority(navigationLots, q);
       return {
         items: matches.slice(0, AUCTION_QUICK_LOT_NAV_LIMIT),
         total: matches.length,
@@ -3591,7 +3618,7 @@ const AuctionsPage = () => {
       total: navigationLots.length,
       start: startIndex + 1,
     };
-  }, [currentLotIndex, lotNumberSearch, navigationLots, showLotList]);
+  }, [currentLotIndex, lotSearchQuery, navigationLots, showLotList]);
 
   const navigateToLot = (direction: 'prev' | 'next') => {
     if (currentLotIndex === -1) return;
@@ -4502,7 +4529,7 @@ const AuctionsPage = () => {
     setEditBidQtyDialog(null);
     setRate('');
     setQty('');
-    setLotNumberSearch('');
+    setLotSearchQuery('');
     userClearedRateRef.current = false;
     resetAuctionPresetUi();
     // Available lots have no bids yet — user must enter a rate, so focus Rate first.
@@ -4727,24 +4754,14 @@ const AuctionsPage = () => {
                   <p className="text-sm text-white/80 md:text-base">Select a lot to begin auction</p>
                 </div>
               </div>
-              {/* General search */}
+              {/* Lot search */}
               <div className="relative mb-3">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-white/50" />
                 <input
-                  placeholder="Search lot, seller, vehicle, or AB-200/SA-122/SA1/22…"
+                  placeholder="Search lots by qty, seller qty, vehicle qty, or code…"
                   value={lotSearchQuery}
                   onChange={e => setLotSearchQuery(e.target.value)}
                   className="w-full h-10 pl-10 pr-4 rounded-xl bg-white/20 backdrop-blur text-white placeholder:text-white/50 text-sm border border-white/10 focus:outline-none focus:border-white/30"
-                />
-              </div>
-              {/* Lot Number search */}
-              <div className="relative">
-                <Hash className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-white/50" />
-                <input
-                  placeholder="Lot # or AB-200/SA-122/SA1/22…"
-                  value={lotNumberSearch}
-                  onChange={e => setLotNumberSearch(e.target.value)}
-                  className="w-full h-10 pl-10 pr-4 rounded-xl bg-white/15 backdrop-blur text-white placeholder:text-white/50 text-sm border border-white/10 focus:outline-none focus:border-white/30"
                 />
               </div>
             </div>
@@ -4762,19 +4779,10 @@ const AuctionsPage = () => {
                 <p className="text-sm text-muted-foreground">{selectorLotsCountLabel} lots available · Select a lot to begin auction</p>
               </div>
               <div className="flex gap-3">
-                <div className="relative w-56">
-                  <Hash className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                  <input
-                    placeholder="Lot # or AB-200/SA-122/SA1/22…"
-                    value={lotNumberSearch}
-                    onChange={e => setLotNumberSearch(e.target.value)}
-                    className="w-full h-10 pl-10 pr-4 rounded-xl bg-muted/50 text-foreground text-sm border border-border focus:outline-none focus:border-primary/50"
-                  />
-                </div>
-                <div className="relative w-64">
+                <div className="relative w-80">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
                   <input
-                    placeholder="Search lot, seller, vehicle, or AB-200/SA-122/SA1/22…"
+                    placeholder="Search lots by qty, seller qty, vehicle qty, or code…"
                     value={lotSearchQuery}
                     onChange={e => setLotSearchQuery(e.target.value)}
                     className="w-full h-10 pl-10 pr-4 rounded-xl bg-muted/50 text-foreground text-sm border border-border focus:outline-none focus:border-primary/50"
@@ -4886,7 +4894,7 @@ const AuctionsPage = () => {
               <Search className="w-10 h-10 text-muted-foreground/30 mx-auto mb-3" />
               <p className="text-sm text-muted-foreground font-medium">No results found</p>
               <p className="text-xs text-muted-foreground/70 mt-1">Try a different search term or filter</p>
-              <Button onClick={() => { setLotSearchQuery(''); setLotNumberSearch(''); setStatusFilter('all'); }} variant="outline" className="mt-4 rounded-xl">
+              <Button onClick={() => { setLotSearchQuery(''); setStatusFilter('all'); }} variant="outline" className="mt-4 rounded-xl">
                 Clear Filters
               </Button>
             </div>
@@ -5385,11 +5393,11 @@ const AuctionsPage = () => {
       <QuickLotNavigationOverlay
         show={showLotList}
         quickLotNavigation={quickLotNavigation}
-        lotNumberSearch={lotNumberSearch}
+        lotSearchQuery={lotSearchQuery}
         selectedLot={selectedLot}
         selectedLotSource={selectedLotSource}
         statusFilter={statusFilter}
-        onLotNumberSearchChange={setLotNumberSearch}
+        onLotSearchQueryChange={setLotSearchQuery}
         onSelectLot={selectLot}
       />
 

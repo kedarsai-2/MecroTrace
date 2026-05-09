@@ -403,6 +403,15 @@ public class ArrivalService {
             if (primarySellerName == null) primarySellerName = "-";
 
             int totalBags = vehicleLots.stream().mapToInt(l -> l.getBagCount() != null ? l.getBagCount() : 0).sum();
+            List<Integer> lotBagCounts = vehicleLots.stream()
+                .map(l -> l.getBagCount() != null ? l.getBagCount() : 0)
+                .toList();
+            List<Integer> sellerBagTotals = vehicleSellers.stream()
+                .map(sv -> vehicleLots.stream()
+                    .filter(l -> sv.getId().equals(l.getSellerVehicleId()))
+                    .mapToInt(l -> l.getBagCount() != null ? l.getBagCount() : 0)
+                    .sum())
+                .toList();
             int bidsCount = (int) vehicleLots.stream().map(Lot::getId).filter(lotIdsWithBids::contains).count();
             int weighedCount = (int) vehicleLots.stream().map(Lot::getId).filter(weighedLotIds::contains).count();
 
@@ -422,6 +431,8 @@ public class ArrivalService {
             dto.setOrigin(v.getOrigin());
             dto.setPrimarySellerName(primarySellerName);
             dto.setTotalBags(totalBags);
+            dto.setLotBagCounts(lotBagCounts);
+            dto.setSellerBagTotals(sellerBagTotals);
             dto.setBidsCount(bidsCount);
             dto.setWeighedCount(weighedCount);
             dto.setPartiallyCompleted(Boolean.TRUE.equals(v.getPartiallyCompleted()));
@@ -961,9 +972,19 @@ public class ArrivalService {
         Optional<VehicleWeight> weightOpt = vehicleWeightRepository.findOneByVehicleId(v.getId());
         Optional<FreightCalculation> freightOpt = freightCalculationRepository.findOneByVehicleId(v.getId());
         List<SellerInVehicle> sellers = sellerInVehicleRepository.findAllByVehicleId(v.getId());
-        int lotCount = (int) lotRepository.findAllBySellerVehicleIdIn(
-            sellers.stream().map(SellerInVehicle::getId).toList()
-        ).stream().count();
+        List<Long> sellerVehicleIds = sellers.stream().map(SellerInVehicle::getId).toList();
+        List<Lot> lots = lotRepository.findAllBySellerVehicleIdIn(sellerVehicleIds);
+        int lotCount = lots.size();
+        int totalBags = lots.stream().mapToInt(l -> l.getBagCount() != null ? l.getBagCount() : 0).sum();
+        List<Integer> lotBagCounts = lots.stream()
+            .map(l -> l.getBagCount() != null ? l.getBagCount() : 0)
+            .toList();
+        List<Integer> sellerBagTotals = sellers.stream()
+            .map(sv -> lots.stream()
+                .filter(l -> sv.getId().equals(l.getSellerVehicleId()))
+                .mapToInt(l -> l.getBagCount() != null ? l.getBagCount() : 0)
+                .sum())
+            .toList();
         double netWeight = weightOpt.map(VehicleWeight::getNetWeight).orElse(0d);
         double freightTotal = freightOpt.map(FreightCalculation::getTotalAmount).orElse(0d);
         FreightMethod method = freightOpt.map(FreightCalculation::getMethod).orElse(null);
@@ -981,6 +1002,9 @@ public class ArrivalService {
         dto.setGodown(v.getGodown());
         dto.setGatepassNumber(v.getGatepassNumber());
         dto.setOrigin(v.getOrigin());
+        dto.setTotalBags(totalBags);
+        dto.setLotBagCounts(lotBagCounts);
+        dto.setSellerBagTotals(sellerBagTotals);
         dto.setPartiallyCompleted(Boolean.TRUE.equals(v.getPartiallyCompleted()));
         dto.setLastModifiedDate(v.getLastModifiedDate());
         return dto;

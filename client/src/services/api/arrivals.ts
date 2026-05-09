@@ -67,6 +67,10 @@ export interface ArrivalSummary {
   primarySellerName?: string;
   /** Total bags across all lots of this arrival */
   totalBags?: number;
+  /** Individual lot bag counts; used by lot-priority search */
+  lotBagCounts?: number[];
+  /** Per-seller total bag counts; used by lot-priority search */
+  sellerBagTotals?: number[];
   /** Number of lots with at least one bid */
   bidsCount?: number;
   /** Number of lots with a weighing session */

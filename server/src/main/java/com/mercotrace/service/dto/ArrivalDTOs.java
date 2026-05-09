@@ -360,6 +360,10 @@ public final class ArrivalDTOs {
         private String primarySellerName;
         /** Total bags across all lots of this arrival. */
         private int totalBags;
+        /** Individual lot bag counts; used by client lot-priority search. */
+        private List<Integer> lotBagCounts;
+        /** Per-seller total bag counts; used by client lot-priority search. */
+        private List<Integer> sellerBagTotals;
         /** Number of lots that have at least one bid (auction entry). */
         private int bidsCount;
         /** Number of lots that have a weighing session. */
@@ -488,6 +492,22 @@ public final class ArrivalDTOs {
 
         public void setTotalBags(int totalBags) {
             this.totalBags = totalBags;
+        }
+
+        public List<Integer> getLotBagCounts() {
+            return lotBagCounts;
+        }
+
+        public void setLotBagCounts(List<Integer> lotBagCounts) {
+            this.lotBagCounts = lotBagCounts;
+        }
+
+        public List<Integer> getSellerBagTotals() {
+            return sellerBagTotals;
+        }
+
+        public void setSellerBagTotals(List<Integer> sellerBagTotals) {
+            this.sellerBagTotals = sellerBagTotals;
         }
 
         public int getBidsCount() {
@@ -864,4 +884,3 @@ public final class ArrivalDTOs {
         public void setSellers(List<ArrivalSellerDTO> sellers) { this.sellers = sellers; }
     }
 }
-
