@@ -9,6 +9,7 @@ import com.mercotrace.service.dto.AuctionBidUpdateRequest;
 import com.mercotrace.service.dto.AuctionResultDTO;
 import com.mercotrace.service.dto.AuctionSelfSaleUnitDTO;
 import com.mercotrace.service.dto.AuctionSessionDTO;
+import com.mercotrace.service.dto.BillingBuyerDTO;
 import com.mercotrace.service.dto.LotSummaryDTO;
 import com.mercotrace.web.rest.errors.BadRequestAlertException;
 import jakarta.persistence.EntityNotFoundException;
@@ -140,6 +141,18 @@ public class ModuleAuctionResource {
         int cappedLimit = limit == null ? 50 : Math.max(1, Math.min(limit, 100));
         LOG.debug("REST request to search temporary buyer marks. q={}, limit={}", q, cappedLimit);
         return ResponseEntity.ok(auctionService.searchTemporaryBuyerMarks(q, cappedLimit));
+    }
+
+    /**
+     * {@code GET  /module-auctions/billing-buyers} : lightweight buyer + bid rows for Billing Create/Search.
+     */
+    @Operation(summary = "Billing buyer bids", description = "Lightweight grouped buyer bid list for Billing Create/Search")
+    @ApiResponses({ @ApiResponse(responseCode = "200", description = "OK") })
+    @GetMapping("/billing-buyers")
+    @PreAuthorize("hasAuthority(\"" + AuthoritiesConstants.AUCTIONS_VIEW + "\")")
+    public ResponseEntity<List<BillingBuyerDTO>> listBillingBuyers() {
+        LOG.debug("REST request to list lightweight Billing buyers");
+        return ResponseEntity.ok(auctionService.listBillingBuyers());
     }
 
     /**

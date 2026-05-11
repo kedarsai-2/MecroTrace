@@ -27,6 +27,8 @@ export type UseAuctionResultsOptions = {
   onProgress?: (p: AuctionResultsProgress) => void;
   /** Optional first pass size for screens that need a fast preview before full background paging. */
   initialPageSize?: number;
+  /** Set false when a screen wants to trigger the heavy result load manually. */
+  enabled?: boolean;
 };
 
 export type RefetchAuctionResultsOptions = {
@@ -48,7 +50,7 @@ export function useAuctionResults(options?: UseAuctionResultsOptions): {
   refetch: (options?: RefetchAuctionResultsOptions) => Promise<void>;
 } {
   const [auctionResults, setAuctionResults] = useState<AuctionResultDTO[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(options?.enabled !== false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [resultsComplete, setResultsComplete] = useState(false);
   const [totalElements, setTotalElements] = useState<number | null>(null);
@@ -60,6 +62,7 @@ export function useAuctionResults(options?: UseAuctionResultsOptions): {
   onProgressRef.current = options?.onProgress;
   const initialPageSizeRef = useRef(options?.initialPageSize);
   initialPageSizeRef.current = options?.initialPageSize;
+  const enabled = options?.enabled !== false;
 
   const refetch = useCallback(async (refetchOptions?: RefetchAuctionResultsOptions) => {
     genRef.current += 1;
@@ -156,11 +159,17 @@ export function useAuctionResults(options?: UseAuctionResultsOptions): {
   }, []);
 
   useEffect(() => {
+    if (!enabled) {
+      setLoading(false);
+      return () => {
+        abortRef.current?.abort();
+      };
+    }
     void refetch();
     return () => {
       abortRef.current?.abort();
     };
-  }, [refetch]);
+  }, [enabled, refetch]);
 
   return {
     auctionResults,

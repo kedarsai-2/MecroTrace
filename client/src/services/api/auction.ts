@@ -156,6 +156,35 @@ export interface AuctionResultDTO {
   entries: AuctionResultEntryDTO[];
 }
 
+export interface BillingBuyerEntryDTO {
+  bidNumber: number;
+  lotId: string;
+  lotName: string;
+  auctionEntryId?: number | null;
+  selfSaleUnitId?: number | null;
+  lotTotalQty?: number | null;
+  sellerName: string;
+  commodityName: string;
+  rate: number;
+  quantity: number;
+  weight?: number;
+  vehicleTotalQty?: number | null;
+  sellerVehicleQty?: number | null;
+  vehicleMark?: string | null;
+  sellerMark?: string | null;
+  presetApplied?: number;
+  isSelfSale?: boolean;
+  tokenAdvance?: number;
+}
+
+export interface BillingBuyerDTO {
+  buyerMark: string;
+  buyerName: string;
+  buyerContactId?: string | null;
+  entries: BillingBuyerEntryDTO[];
+  tokenAdvanceTotal: number;
+}
+
 export interface AuctionSelfSaleContextDTO {
   self_sale_unit_id: number;
   rate: number;
@@ -263,6 +292,12 @@ export const auctionApi = {
     params.set('limit', String(opts?.limit ?? 50));
     const res = await apiFetch(`${BASE}/temporary-buyer-marks/search?${params.toString()}`, { method: 'GET' });
     if (!res.ok) await parseJsonOrThrow(res, 'Failed to search temporary buyer marks');
+    return res.json();
+  },
+
+  async listBillingBuyers(init?: RequestInit): Promise<BillingBuyerDTO[]> {
+    const res = await apiFetch(`${BASE}/billing-buyers`, { method: 'GET', ...init });
+    if (!res.ok) await parseJsonOrThrow(res, 'Failed to load billing buyers');
     return res.json();
   },
 

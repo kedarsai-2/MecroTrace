@@ -121,6 +121,29 @@ export interface SalesBillDTO {
   versions?: BillVersionDTO[];
 }
 
+/** Lightweight row for Billing In Progress / Saved lists. */
+export interface SalesBillSummaryDTO {
+  billId: string;
+  billNumber?: string | null;
+  buyerName: string;
+  buyerMark: string;
+  buyerContactId?: string | null;
+  buyerAsBroker?: boolean;
+  brokerName?: string | null;
+  brokerMark?: string | null;
+  billingName: string;
+  billDate: string;
+  outboundVehicle?: string | null;
+  grandTotal: number;
+  pendingBalance: number;
+  printedAt?: string | null;
+  lockedAt?: string | null;
+  reopenedAt?: string | null;
+  frozen?: boolean;
+  bidsCount?: number;
+  bagQuantity?: number;
+}
+
 /** Create/update request body. */
 export interface SalesBillCreateOrUpdateRequest {
   billId?: string;
@@ -156,6 +179,14 @@ export interface SalesBillCreateOrUpdateRequest {
 /** Paginated response (Spring Page). */
 export interface SalesBillPage {
   content: SalesBillDTO[];
+  totalElements: number;
+  totalPages: number;
+  size: number;
+  number: number;
+}
+
+export interface SalesBillSummaryPage {
+  content: SalesBillSummaryDTO[];
   totalElements: number;
   totalPages: number;
   size: number;
@@ -228,6 +259,31 @@ export const billingApi = {
     }
     const res = await apiFetch(`${BASE}?${searchParams.toString()}`, { method: 'GET', signal: params.signal });
     return handleResponse<SalesBillPage>(res, 'Failed to load sales bills');
+  },
+
+  /**
+   * Lightweight list rows for Billing In Progress / Saved tabs.
+   */
+  async getSummaryPage(params: {
+    page?: number;
+    size?: number;
+    sort?: string;
+    q?: string;
+    status?: 'IN_PROGRESS' | 'NUMBERED' | '';
+    signal?: AbortSignal;
+  } = {}): Promise<SalesBillSummaryPage> {
+    const searchParams = new URLSearchParams();
+    searchParams.set('page', String(params.page ?? 0));
+    searchParams.set('size', String(params.size ?? 100));
+    searchParams.set('sort', params.sort ?? 'billDate,desc');
+    if (params.q != null && params.q.trim() !== '') {
+      searchParams.set('q', params.q.trim());
+    }
+    if (params.status != null && params.status.trim() !== '') {
+      searchParams.set('status', params.status.trim());
+    }
+    const res = await apiFetch(`${BASE}/summaries?${searchParams.toString()}`, { method: 'GET', signal: params.signal });
+    return handleResponse<SalesBillSummaryPage>(res, 'Failed to load sales bill summaries');
   },
 
   /**

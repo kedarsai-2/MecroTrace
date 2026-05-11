@@ -960,6 +960,69 @@ public class AuctionService {
     }
 
     /**
+     * Lightweight Billing Create/Search data. This intentionally avoids the full AuctionResultDTO
+     * graph and its self-sale result reconstruction, but keeps the same billable entries:
+     * completed normal auction bids plus completed re-auction bids, excluding self-sale placeholders.
+     */
+    @Transactional(readOnly = true)
+    public List<BillingBuyerDTO> listBillingBuyers() {
+        Long traderId = resolveTraderId();
+        List<Object[]> rows = auctionEntryRepository.findBillingBuyerEntryRowsForTrader(traderId);
+        Map<String, BillingBuyerDTO> buyers = new LinkedHashMap<>();
+
+        for (Object[] row : rows) {
+            if (row == null || row.length < 22) {
+                continue;
+            }
+
+            Long buyerId = numberToLong(row[0]);
+            String buyerMark = stringOrNull(row[1]);
+            String buyerName = stringOrNull(row[2]);
+            String buyerKey =
+                buyerId != null
+                    ? "r:" + buyerId
+                    : "t:" + normalizeBuyerKeyPart(buyerMark) + "|" + normalizeBuyerKeyPart(buyerName);
+
+            BillingBuyerDTO buyer = buyers.get(buyerKey);
+            if (buyer == null) {
+                buyer = new BillingBuyerDTO();
+                buyer.setBuyerMark(buyerMark);
+                buyer.setBuyerName(buyerName);
+                buyer.setBuyerContactId(buyerId != null ? String.valueOf(buyerId) : null);
+                buyer.setTokenAdvanceTotal(BigDecimal.ZERO);
+                buyers.put(buyerKey, buyer);
+            }
+
+            BillingBuyerDTO.BillingBuyerEntryDTO entry = new BillingBuyerDTO.BillingBuyerEntryDTO();
+            entry.setAuctionEntryId(numberToLong(row[3]));
+            entry.setBidNumber(numberToInt(row[4]));
+            Long lotId = numberToLong(row[5]);
+            entry.setLotId(lotId != null ? String.valueOf(lotId) : null);
+            entry.setLotName(stringOrNull(row[6]));
+            entry.setSelfSaleUnitId(numberToLong(row[7]));
+            entry.setLotTotalQty(numberToInt(row[8]));
+            entry.setSellerName(stringOrNull(row[9]));
+            entry.setCommodityName(stringOrNull(row[10]));
+            entry.setRate(bigDecimalOrZero(row[11]));
+            entry.setQuantity(numberToInt(row[12]));
+            entry.setWeight(BigDecimal.ZERO);
+            entry.setVehicleMark(stringOrNull(row[13]));
+            entry.setSellerMark(stringOrNull(row[14]));
+            entry.setVehicleTotalQty(numberToInt(row[15]));
+            entry.setSellerVehicleQty(numberToInt(row[16]));
+            entry.setPresetApplied(bigDecimalOrZero(row[17]));
+            BigDecimal tokenAdvance = bigDecimalOrZero(row[18]);
+            entry.setTokenAdvance(tokenAdvance);
+            entry.setIsSelfSale(Boolean.TRUE.equals(row[19]));
+
+            buyer.getEntries().add(entry);
+            buyer.setTokenAdvanceTotal(buyer.getTokenAdvanceTotal().add(tokenAdvance));
+        }
+
+        return new ArrayList<>(buyers.values());
+    }
+
+    /**
      * Completed auction results for the given lot IDs (trader-scoped, e.g. for Settlement sellers).
      */
     @Transactional(readOnly = true)
@@ -1721,6 +1784,47 @@ public class AuctionService {
         Long traderId = resolveTraderId();
         dto.setFrozen(entry.getId() != null && salesBillLineItemRepository.existsFrozenBillLineByAuctionEntryId(traderId, entry.getId()));
         return dto;
+    }
+
+    private static String stringOrNull(Object value) {
+        if (value == null) return null;
+        String s = String.valueOf(value).trim();
+        return s.isEmpty() ? null : s;
+    }
+
+    private static String normalizeBuyerKeyPart(String value) {
+        return value == null ? "" : value.trim().toLowerCase(Locale.ROOT);
+    }
+
+    private static Long numberToLong(Object value) {
+        if (value == null) return null;
+        if (value instanceof Number n) return n.longValue();
+        try {
+            return Long.valueOf(String.valueOf(value));
+        } catch (NumberFormatException ex) {
+            return null;
+        }
+    }
+
+    private static Integer numberToInt(Object value) {
+        if (value == null) return null;
+        if (value instanceof Number n) return n.intValue();
+        try {
+            return Integer.valueOf(String.valueOf(value));
+        } catch (NumberFormatException ex) {
+            return null;
+        }
+    }
+
+    private static BigDecimal bigDecimalOrZero(Object value) {
+        if (value == null) return BigDecimal.ZERO;
+        if (value instanceof BigDecimal bd) return bd;
+        if (value instanceof Number) return new BigDecimal(String.valueOf(value));
+        try {
+            return new BigDecimal(String.valueOf(value));
+        } catch (NumberFormatException ex) {
+            return BigDecimal.ZERO;
+        }
     }
 
     private boolean isLotOwnedByTrader(Lot lot, Long traderId) {

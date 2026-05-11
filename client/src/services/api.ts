@@ -58,6 +58,8 @@ export type {
   AuctionEntryDTO,
   AuctionResultDTO,
   AuctionResultEntryDTO,
+  BillingBuyerDTO,
+  BillingBuyerEntryDTO,
   AuctionBidCreateRequest,
   AuctionBidUpdateRequest,
   ListLotsParams,
@@ -68,7 +70,13 @@ export type { WeighingSessionDTO, WeighingSessionCreateRequest } from './api/wei
 export type { PrintLogDTO, PrintLogCreateRequest } from './api/printLog';
 export type { OpenLotDTO, ClosureDTO, CreateClosureRequest } from './api/selfSale';
 export type { StockPurchaseDTO, StockPurchasePage, CreateStockPurchaseRequest } from './api/stockPurchase';
-export type { SalesBillDTO, SalesBillPage, SalesBillCreateOrUpdateRequest } from './api/billing';
+export type {
+  SalesBillDTO,
+  SalesBillPage,
+  SalesBillSummaryDTO,
+  SalesBillSummaryPage,
+  SalesBillCreateOrUpdateRequest,
+} from './api/billing';
 export type {
   ChartOfAccountDTO,
   ChartOfAccountPage,

@@ -119,4 +119,5 @@
     <include file="config/liquibase/changelog/20260504120000_refresh_session_schema.xml" relativeToChangelogFile="false"/>
     <include file="config/liquibase/changelog/20260504121000_refresh_session_authorities_text.xml" relativeToChangelogFile="false"/>
     <include file="config/liquibase/changelog/20260509120000_print_freeze_lock_fields.xml" relativeToChangelogFile="false"/>
+    <include file="config/liquibase/changelog/20260511153000_sales_bill_summary_indexes.xml" relativeToChangelogFile="false"/>
 </databaseChangeLog>

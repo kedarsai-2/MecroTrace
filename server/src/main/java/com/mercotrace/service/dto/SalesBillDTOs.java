@@ -264,6 +264,73 @@ public final class SalesBillDTOs {
         }
     }
 
+    /**
+     * Lightweight row for Billing In Progress / Saved lists.
+     * Deliberately excludes commodity groups, line items, and version snapshots.
+     */
+    public static class SalesBillSummaryDTO implements Serializable {
+
+        @JsonProperty("billId")
+        private String billId;
+        private String billNumber;
+        private String buyerName;
+        private String buyerMark;
+        private String buyerContactId;
+        private Boolean buyerAsBroker;
+        private String brokerName;
+        private String brokerMark;
+        private String billingName;
+        private String billDate;
+        private String outboundVehicle;
+        private BigDecimal grandTotal;
+        private BigDecimal pendingBalance;
+        private Instant printedAt;
+        private Instant lockedAt;
+        private Instant reopenedAt;
+        private Boolean frozen;
+        private Long bidsCount;
+        private Long bagQuantity;
+
+        public String getBillId() { return billId; }
+        public void setBillId(String billId) { this.billId = billId; }
+        public String getBillNumber() { return billNumber; }
+        public void setBillNumber(String billNumber) { this.billNumber = billNumber; }
+        public String getBuyerName() { return buyerName; }
+        public void setBuyerName(String buyerName) { this.buyerName = buyerName; }
+        public String getBuyerMark() { return buyerMark; }
+        public void setBuyerMark(String buyerMark) { this.buyerMark = buyerMark; }
+        public String getBuyerContactId() { return buyerContactId; }
+        public void setBuyerContactId(String buyerContactId) { this.buyerContactId = buyerContactId; }
+        public Boolean getBuyerAsBroker() { return buyerAsBroker; }
+        public void setBuyerAsBroker(Boolean buyerAsBroker) { this.buyerAsBroker = buyerAsBroker; }
+        public String getBrokerName() { return brokerName; }
+        public void setBrokerName(String brokerName) { this.brokerName = brokerName; }
+        public String getBrokerMark() { return brokerMark; }
+        public void setBrokerMark(String brokerMark) { this.brokerMark = brokerMark; }
+        public String getBillingName() { return billingName; }
+        public void setBillingName(String billingName) { this.billingName = billingName; }
+        public String getBillDate() { return billDate; }
+        public void setBillDate(String billDate) { this.billDate = billDate; }
+        public String getOutboundVehicle() { return outboundVehicle; }
+        public void setOutboundVehicle(String outboundVehicle) { this.outboundVehicle = outboundVehicle; }
+        public BigDecimal getGrandTotal() { return grandTotal; }
+        public void setGrandTotal(BigDecimal grandTotal) { this.grandTotal = grandTotal; }
+        public BigDecimal getPendingBalance() { return pendingBalance; }
+        public void setPendingBalance(BigDecimal pendingBalance) { this.pendingBalance = pendingBalance; }
+        public Instant getPrintedAt() { return printedAt; }
+        public void setPrintedAt(Instant printedAt) { this.printedAt = printedAt; }
+        public Instant getLockedAt() { return lockedAt; }
+        public void setLockedAt(Instant lockedAt) { this.lockedAt = lockedAt; }
+        public Instant getReopenedAt() { return reopenedAt; }
+        public void setReopenedAt(Instant reopenedAt) { this.reopenedAt = reopenedAt; }
+        public Boolean getFrozen() { return frozen; }
+        public void setFrozen(Boolean frozen) { this.frozen = frozen; }
+        public Long getBidsCount() { return bidsCount; }
+        public void setBidsCount(Long bidsCount) { this.bidsCount = bidsCount; }
+        public Long getBagQuantity() { return bagQuantity; }
+        public void setBagQuantity(Long bagQuantity) { this.bagQuantity = bagQuantity; }
+    }
+
     /** Full bill (BillData). Frontend expects billId as string (we use id). */
     public static class SalesBillDTO implements Serializable {
         @JsonProperty("billId")

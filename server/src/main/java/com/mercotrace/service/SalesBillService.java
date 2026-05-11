@@ -3,6 +3,7 @@ package com.mercotrace.service;
 import com.mercotrace.service.dto.SalesBillDTOs.SalesBillCreateOrUpdateRequest;
 import com.mercotrace.service.dto.SalesBillDTOs.SalesBillDTO;
 import com.mercotrace.service.dto.SalesBillDTOs.SalesBillReservedBidRowDTO;
+import com.mercotrace.service.dto.SalesBillDTOs.SalesBillSummaryDTO;
 import java.util.List;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -17,6 +18,11 @@ public interface SalesBillService {
      */
     Page<SalesBillDTO> getBills(Pageable pageable, String billNumber, String buyerName,
                                java.time.Instant dateFrom, java.time.Instant dateTo);
+
+    /**
+     * Lightweight paginated rows for Billing In Progress / Saved lists.
+     */
+    Page<SalesBillSummaryDTO> getBillSummaries(Pageable pageable, String q, String status);
 
     /**
      * All billed bid/lot keys for reserved-bid UX (current trader). Small payload vs paginated bill list.

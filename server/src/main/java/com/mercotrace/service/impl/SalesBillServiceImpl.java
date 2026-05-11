@@ -28,11 +28,15 @@ import java.time.Instant;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -45,6 +49,8 @@ public class SalesBillServiceImpl implements SalesBillService {
 
     private static final Logger LOG = LoggerFactory.getLogger(SalesBillServiceImpl.class);
     private static final String DEFAULT_BILL_PREFIX = "MT";
+    private static final Instant MIN_BILL_DATE = Instant.parse("1970-01-01T00:00:00Z");
+    private static final Instant MAX_BILL_DATE = Instant.parse("9999-12-31T23:59:59Z");
 
     private final TraderContextService traderContextService;
     private final SalesBillRepository salesBillRepository;
@@ -83,13 +89,41 @@ public class SalesBillServiceImpl implements SalesBillService {
     public Page<SalesBillDTO> getBills(Pageable pageable, String billNumber, String buyerName,
                                        Instant dateFrom, Instant dateTo) {
         Long traderId = traderContextService.getCurrentTraderId();
-        String bn = (billNumber != null && !billNumber.isBlank()) ? billNumber.trim() : null;
-        String bn2 = (buyerName != null && !buyerName.isBlank()) ? buyerName.trim() : null;
-        if (bn == null && bn2 == null && dateFrom == null && dateTo == null) {
+        String bn = (billNumber != null && !billNumber.isBlank()) ? billNumber.trim() : "";
+        String bn2 = (buyerName != null && !buyerName.isBlank()) ? buyerName.trim() : "";
+        if (bn.isEmpty() && bn2.isEmpty() && dateFrom == null && dateTo == null) {
             return salesBillRepository.findAllByTraderId(traderId, pageable).map(this::toDto);
         }
-        return salesBillRepository.findByTraderIdAndFilters(traderId, bn, bn2, dateFrom, dateTo, pageable)
+        Instant from = dateFrom != null ? dateFrom : MIN_BILL_DATE;
+        Instant to = dateTo != null ? dateTo : MAX_BILL_DATE;
+        return salesBillRepository.findByTraderIdAndFilters(traderId, bn, bn2, from, to, pageable)
             .map(this::toDto);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Page<SalesBillSummaryDTO> getBillSummaries(Pageable pageable, String q, String status) {
+        Long traderId = traderContextService.getCurrentTraderId();
+        String normalizedQ = q != null ? q.trim() : "";
+        String normalizedStatus = status != null ? status.trim().toUpperCase() : "";
+        if (!normalizedStatus.equals("IN_PROGRESS") && !normalizedStatus.equals("NUMBERED")) {
+            normalizedStatus = "";
+        }
+        Page<SalesBill> page = salesBillRepository.findSummaryBillsByTraderId(
+            traderId,
+            normalizedQ,
+            normalizedStatus,
+            withStableBillSummarySort(pageable)
+        );
+        List<Long> billIds = page.getContent().stream().map(SalesBill::getId).toList();
+        Map<Long, SalesBillRepository.SalesBillLineTotalsRow> totalsByBillId = billIds.isEmpty()
+            ? Map.of()
+            : salesBillRepository
+                .findLineTotalsByBillIds(billIds)
+                .stream()
+                .filter(row -> row.getBillId() != null)
+                .collect(Collectors.toMap(SalesBillRepository.SalesBillLineTotalsRow::getBillId, row -> row, (a, b) -> a));
+        return page.map(bill -> toSummaryDto(bill, totalsByBillId.get(bill.getId())));
     }
 
     @Override
@@ -600,6 +634,38 @@ public class SalesBillServiceImpl implements SalesBillService {
         return dto;
     }
 
+    private SalesBillSummaryDTO toSummaryDto(SalesBill bill, SalesBillRepository.SalesBillLineTotalsRow totals) {
+        SalesBillSummaryDTO dto = new SalesBillSummaryDTO();
+        dto.setBillId(String.valueOf(bill.getId()));
+        dto.setBillNumber(bill.getBillNumber());
+        dto.setBuyerName(bill.getBuyerName());
+        dto.setBuyerMark(bill.getBuyerMark());
+        dto.setBuyerContactId(bill.getBuyerContactId() != null ? String.valueOf(bill.getBuyerContactId()) : null);
+        dto.setBuyerAsBroker(Boolean.TRUE.equals(bill.getBuyerAsBroker()));
+        dto.setBrokerName(bill.getBrokerName());
+        dto.setBrokerMark(bill.getBrokerMark());
+        dto.setBillingName(bill.getBillingName());
+        dto.setBillDate(bill.getBillDate() != null ? bill.getBillDate().toString() : null);
+        dto.setOutboundVehicle(bill.getOutboundVehicle());
+        dto.setGrandTotal(bill.getGrandTotal());
+        dto.setPendingBalance(bill.getPendingBalance());
+        dto.setPrintedAt(bill.getPrintedAt());
+        dto.setLockedAt(bill.getLockedAt());
+        dto.setReopenedAt(bill.getReopenedAt());
+        dto.setFrozen(isFrozen(bill.getLockedAt(), bill.getReopenedAt()));
+        dto.setBidsCount(totals != null && totals.getBidsCount() != null ? totals.getBidsCount() : 0L);
+        dto.setBagQuantity(totals != null && totals.getBagQuantity() != null ? totals.getBagQuantity() : 0L);
+        return dto;
+    }
+
+    private static Pageable withStableBillSummarySort(Pageable pageable) {
+        Sort stableTieBreak = Sort.by(Sort.Order.desc("id"));
+        Sort sort = pageable.getSort().isSorted()
+            ? pageable.getSort().and(stableTieBreak)
+            : Sort.by(Sort.Order.desc("billDate"), Sort.Order.desc("id"));
+        return PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(), sort);
+    }
+
     private static int sumLineItemQuantities(CommodityGroupDTO g) {
         if (g.getItems() == null || g.getItems().isEmpty()) {
             return 0;
@@ -630,7 +696,11 @@ public class SalesBillServiceImpl implements SalesBillService {
     }
 
     private static boolean isFrozen(SalesBill bill) {
-        return bill.getLockedAt() != null && bill.getReopenedAt() == null;
+        return isFrozen(bill.getLockedAt(), bill.getReopenedAt());
+    }
+
+    private static boolean isFrozen(Instant lockedAt, Instant reopenedAt) {
+        return lockedAt != null && reopenedAt == null;
     }
 
     private static SalesBillReservedBidRowDTO mapTupleToReservedBidRow(Object[] row) {

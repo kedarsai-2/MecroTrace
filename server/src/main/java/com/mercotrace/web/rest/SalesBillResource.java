@@ -5,6 +5,7 @@ import com.mercotrace.service.SalesBillService;
 import com.mercotrace.service.dto.SalesBillDTOs.SalesBillCreateOrUpdateRequest;
 import com.mercotrace.service.dto.SalesBillDTOs.SalesBillDTO;
 import com.mercotrace.service.dto.SalesBillDTOs.SalesBillReservedBidRowDTO;
+import com.mercotrace.service.dto.SalesBillDTOs.SalesBillSummaryDTO;
 import com.mercotrace.web.rest.errors.BadRequestAlertException;
 import jakarta.validation.Valid;
 import java.net.URI;
@@ -61,6 +62,23 @@ public class SalesBillResource {
     ) {
         LOG.debug("REST request to get sales bills: page={}, billNumber={}, buyerName={}", pageable, billNumber, buyerName);
         Page<SalesBillDTO> page = salesBillService.getBills(pageable, billNumber, buyerName, dateFrom, dateTo);
+        HttpHeaders headers = PaginationUtil.generatePaginationHttpHeaders(ServletUriComponentsBuilder.fromCurrentRequest(), page);
+        return ResponseEntity.ok().headers(headers).body(page);
+    }
+
+    /**
+     * {@code GET /api/sales-bills/summaries} : Lightweight rows for Billing In Progress / Saved lists.
+     */
+    @GetMapping("/summaries")
+    @PreAuthorize("hasAuthority(\"" + AuthoritiesConstants.BILLING_VIEW + "\")")
+    public ResponseEntity<Page<SalesBillSummaryDTO>> getBillSummaries(
+        @org.springdoc.core.annotations.ParameterObject
+        @PageableDefault(size = 100, sort = "billDate", direction = Sort.Direction.DESC) Pageable pageable,
+        @RequestParam(required = false) String q,
+        @RequestParam(required = false) String status
+    ) {
+        LOG.debug("REST request to get sales bill summaries: page={}, q={}, status={}", pageable, q, status);
+        Page<SalesBillSummaryDTO> page = salesBillService.getBillSummaries(pageable, q, status);
         HttpHeaders headers = PaginationUtil.generatePaginationHttpHeaders(ServletUriComponentsBuilder.fromCurrentRequest(), page);
         return ResponseEntity.ok().headers(headers).body(page);
     }

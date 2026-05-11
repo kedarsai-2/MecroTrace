@@ -3,7 +3,7 @@ import { useVirtualizer, measureElement } from '@tanstack/react-virtual';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   ArrowLeft, Receipt, Search, User, Package, IndianRupee, Truck, Hash,
-  Edit3, Lock, Unlock, Save, Printer, Plus, Trash2,
+  ArrowRight, Edit3, Lock, Unlock, Save, Printer, Plus, Trash2,
   Percent, FileText, ChevronDown, ChevronUp,
   AlertCircle, AlertTriangle, BookOpen, X, Loader2, Clock,
 } from 'lucide-react';
@@ -38,6 +38,7 @@ import type {
   AuctionEntryDTO,
   AuctionResultDTO,
   AuctionSessionDTO,
+  BillingBuyerDTO,
   LotSummaryDTO,
 } from '@/services/api/auction';
 import ForbiddenPage from '@/components/ForbiddenPage';
@@ -46,7 +47,7 @@ import { ConfirmDeleteDialog } from '@/components/ConfirmDeleteDialog';
 import { usePermissions } from '@/lib/permissions';
 import useUnsavedChangesGuard from '@/hooks/useUnsavedChangesGuard';
 import type { FullCommodityConfigDto } from '@/services/api/commodities';
-import type { SalesBillDTO, SalesBillReservedBidRowDTO } from '@/services/api/billing';
+import type { SalesBillDTO, SalesBillReservedBidRowDTO, SalesBillSummaryDTO } from '@/services/api/billing';
 import type { ArrivalDetail } from '@/services/api/arrivals';
 import { directPrint } from '@/utils/printTemplates';
 import {
@@ -949,8 +950,8 @@ function billHasAnyLineWeightZeroOrMissing(b: BillData): boolean {
   );
 }
 
-/** Saved bills list paging (SummaryPage-style; uses `totalElements` from Spring page). */
-const BILLING_SAVED_BILLS_PAGE_SIZE = 100;
+/** Saved bills summary paging (server-side; full bill loads only when opened). */
+const BILLING_SAVED_BILLS_PAGE_SIZE = 50;
 const BILLING_SAVED_BILLS_FETCH_CONCURRENCY = 4;
 const BILLING_FOCUS_RESYNC_MIN_INTERVAL_MS = 60_000;
 const BILLING_BUYER_OPTION_RENDER_LIMIT = 120;
@@ -1030,6 +1031,54 @@ async function fetchAuctionLotsByQuery(q: string, signal?: AbortSignal): Promise
   return [...merged.values()].sort((a, b) => Number(a.lot_id) - Number(b.lot_id));
 }
 
+function normalizeBillingBuyersFromApi(list: BillingBuyerDTO[]): BuyerPurchase[] {
+  if (!Array.isArray(list)) return [];
+  return list.map(b => {
+    const entries: BillEntry[] = (Array.isArray(b.entries) ? b.entries : []).map(e => ({
+      bidNumber: Number(e.bidNumber) || 0,
+      lotId: String(e.lotId ?? ''),
+      lotName: String(e.lotName ?? ''),
+      auctionEntryId: e.auctionEntryId != null ? Number(e.auctionEntryId) : null,
+      selfSaleUnitId: e.selfSaleUnitId != null ? Number(e.selfSaleUnitId) : null,
+      lotTotalQty: e.lotTotalQty != null ? Math.floor(Number(e.lotTotalQty) || 0) : undefined,
+      sellerName: String(e.sellerName ?? 'Unknown'),
+      commodityName: String(e.commodityName ?? ''),
+      rate: Number(e.rate) || 0,
+      quantity: Number(e.quantity) || 0,
+      weight: Number(e.weight) || 0,
+      vehicleTotalQty: e.vehicleTotalQty != null ? Number(e.vehicleTotalQty) : undefined,
+      sellerVehicleQty: e.sellerVehicleQty != null ? Number(e.sellerVehicleQty) : undefined,
+      vehicleMark: e.vehicleMark || undefined,
+      sellerMark: e.sellerMark || undefined,
+      presetApplied: Number(e.presetApplied ?? 0),
+      isSelfSale: Boolean(e.isSelfSale),
+      tokenAdvance: Number(e.tokenAdvance) || 0,
+    }));
+    return {
+      buyerMark: String(b.buyerMark ?? ''),
+      buyerName: String(b.buyerName ?? ''),
+      buyerContactId: b.buyerContactId != null ? String(b.buyerContactId) : null,
+      entries,
+      tokenAdvanceTotal: Number(b.tokenAdvanceTotal) || entries.reduce((s, e) => s + (Number(e.tokenAdvance) || 0), 0),
+    };
+  });
+}
+
+function getBillListBidsCount(b: SalesBillSummaryDTO | SalesBillDTO): number {
+  const explicit = Number((b as SalesBillSummaryDTO).bidsCount);
+  if (Number.isFinite(explicit) && explicit >= 0) return Math.floor(explicit);
+  return ((b as SalesBillDTO).commodityGroups || []).reduce((sum, g) => sum + (g.items?.length || 0), 0);
+}
+
+function getBillListBagQuantity(b: SalesBillSummaryDTO | SalesBillDTO): number {
+  const explicit = Number((b as SalesBillSummaryDTO).bagQuantity);
+  if (Number.isFinite(explicit) && explicit >= 0) return explicit;
+  return ((b as SalesBillDTO).commodityGroups || []).reduce(
+    (sum, g) => sum + (g.items || []).reduce((itemSum, item) => itemSum + (Number(item.quantity) || 0), 0),
+    0,
+  );
+}
+
 const BillingPage = () => {
   const navigate = useNavigate();
   const isDesktop = useDesktopMode();
@@ -1039,6 +1088,9 @@ const BillingPage = () => {
   const canCreateContact = can('Contacts', 'Create');
   const canEditContact = can('Contacts', 'Edit');
   const [buyers, setBuyers] = useState<BuyerPurchase[]>([]);
+  const [billingBuyersHydrated, setBillingBuyersHydrated] = useState(false);
+  const [billingBuyersError, setBillingBuyersError] = useState<Error | null>(null);
+  const billingBuyersLoadSeqRef = useRef(0);
   const [selectedBuyer, setSelectedBuyer] = useState<BuyerPurchase | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
 
@@ -1080,9 +1132,12 @@ const BillingPage = () => {
   const [resyncing, setResyncing] = useState(false);
   const [activeCommoditySlide, setActiveCommoditySlide] = useState(0);
   const [activeLotSlides, setActiveLotSlides] = useState<Record<number, number>>({});
-  const [savedBills, setSavedBills] = useState<SalesBillDTO[]>([]);
+  const [savedBills, setSavedBills] = useState<SalesBillSummaryDTO[]>([]);
   const [savedBillsFirstFetchSettled, setSavedBillsFirstFetchSettled] = useState(false);
   const [savedBillsSyncingRemainder, setSavedBillsSyncingRemainder] = useState(false);
+  const [savedBillsPageIndex, setSavedBillsPageIndex] = useState(0);
+  const [savedBillsTotalElements, setSavedBillsTotalElements] = useState(0);
+  const [savedBillsTotalPages, setSavedBillsTotalPages] = useState(0);
   const savedBillsLoadSeqRef = useRef(0);
   const savedBillsLoadRequestedRef = useRef(false);
   const [reservedBidReservationRows, setReservedBidReservationRows] = useState<SalesBillReservedBidRowDTO[]>([]);
@@ -1264,10 +1319,10 @@ const BillingPage = () => {
   const {
     auctionResults: auctionData,
     refetch: refetchAuctions,
-    loading: auctionResultsBootstrapping,
     loadingMore: auctionResultsLoadingMore,
+    resultsComplete: auctionResultsComplete,
     error: auctionResultsError,
-  } = useAuctionResults({ initialPageSize: 30 });
+  } = useAuctionResults({ initialPageSize: 10, enabled: !!billingBuyersError });
 
   // Precompute per-commodity average weight bounds from full config (minWeight/maxWeight).
   const commodityAvgWeightBounds = useMemo(() => {
@@ -1460,6 +1515,7 @@ const BillingPage = () => {
   const searchBidInputRef = useRef<HTMLInputElement | null>(null);
   const deferredBuyerBidMarkInput = useDeferredValue(buyerBidMarkInput);
   const deferredSearchBidInput = useDeferredValue(searchBidInput);
+  const deferredBillListSearchQuery = useDeferredValue(searchQuery);
   const versionTriggerRef = useRef<HTMLButtonElement | null>(null);
   const openPrintPreviewRef = useRef<() => void>(() => {});
   const [pendingDeleteTarget, setPendingDeleteTarget] = useState<{ commIdx: number; itemIdx: number } | null>(null);
@@ -1585,6 +1641,24 @@ const BillingPage = () => {
     return Math.max(0, addBidRemainingQty - q);
   }, [addBidSelectedLot, addBidQty, addBidRemainingQty]);
 
+  const loadBillingBuyers = useCallback(async () => {
+    if (!canView) return;
+    const seq = billingBuyersLoadSeqRef.current + 1;
+    billingBuyersLoadSeqRef.current = seq;
+    setBillingBuyersHydrated(false);
+    try {
+      const list = await auctionApi.listBillingBuyers();
+      if (billingBuyersLoadSeqRef.current !== seq) return;
+      setBuyers(normalizeBillingBuyersFromApi(list));
+      setBillingBuyersError(null);
+    } catch (e) {
+      if (billingBuyersLoadSeqRef.current !== seq) return;
+      setBillingBuyersError(e instanceof Error ? e : new Error('Failed to load billing buyers'));
+    } finally {
+      if (billingBuyersLoadSeqRef.current === seq) setBillingBuyersHydrated(true);
+    }
+  }, [canView]);
+
   const loadReservedBidReservations = useCallback(async () => {
     if (!canView) return;
     const seq = reservedBidsLoadSeqRef.current + 1;
@@ -1606,82 +1680,65 @@ const BillingPage = () => {
   }, [canView]);
 
   const loadSavedBills = useCallback(
-    async (opts?: { keepExistingDuringRefetch?: boolean }) => {
+    async (opts?: { keepExistingDuringRefetch?: boolean; page?: number; tab?: BillingMainTab; query?: string }) => {
       if (!canView) return;
       const keepExisting = opts?.keepExistingDuringRefetch ?? false;
+      const tab = opts?.tab ?? billingMainTabRef.current;
+      if (tab !== 'progress' && tab !== 'saved') return;
+      const requestedPage = Math.max(0, opts?.page ?? savedBillsPageIndex);
+      const query = (opts?.query ?? deferredBillListSearchQuery).trim();
+      const status = tab === 'progress' ? 'IN_PROGRESS' : 'NUMBERED';
       const seq = savedBillsLoadSeqRef.current + 1;
       savedBillsLoadSeqRef.current = seq;
       savedBillsLoadRequestedRef.current = true;
 
-      const clearRemainderSync = () => {
-        if (savedBillsLoadSeqRef.current === seq) setSavedBillsSyncingRemainder(false);
-      };
-
       if (!keepExisting) {
         setSavedBillsFirstFetchSettled(false);
+        setSavedBills([]);
       }
+      setSavedBillsSyncingRemainder(true);
 
       try {
-        const first = await billingApi.getPage({
-          page: 0,
+        const page = await billingApi.getSummaryPage({
+          page: requestedPage,
           size: BILLING_SAVED_BILLS_PAGE_SIZE,
           sort: 'billDate,desc',
+          status,
+          q: query,
         });
         if (savedBillsLoadSeqRef.current !== seq) return;
 
-        const totalElements = Number(first.totalElements ?? first.content?.length ?? 0);
-        const firstItems = [...(first.content ?? [])];
-        const totalPages = Math.ceil(
-          Math.max(totalElements, firstItems.length) / BILLING_SAVED_BILLS_PAGE_SIZE,
-        );
-
-        if (!keepExisting) {
-          setSavedBills(firstItems);
-          setSavedBillsFirstFetchSettled(true);
-        }
-
-        if (totalPages <= 1) {
-          if (keepExisting && savedBillsLoadSeqRef.current === seq) {
-            setSavedBills(firstItems);
-          }
-          clearRemainderSync();
+        const totalElements = Number(page.totalElements ?? page.content?.length ?? 0);
+        const totalPages = Math.max(1, Number(page.totalPages ?? Math.ceil(totalElements / BILLING_SAVED_BILLS_PAGE_SIZE)));
+        const safePage = Math.min(requestedPage, Math.max(0, totalPages - 1));
+        if (safePage !== requestedPage) {
+          setSavedBillsPageIndex(safePage);
           return;
         }
-
-        setSavedBillsSyncingRemainder(true);
-        try {
-          const mergedFull = await fetchRemainingPages<SalesBillDTO>(
-            [...firstItems],
-            totalElements,
-            BILLING_SAVED_BILLS_PAGE_SIZE,
-            BILLING_SAVED_BILLS_FETCH_CONCURRENCY,
-            async page => {
-              const batch = await billingApi.getPage({
-                page,
-                size: BILLING_SAVED_BILLS_PAGE_SIZE,
-                sort: 'billDate,desc',
-              });
-              return batch.content ?? [];
-            },
-          );
-          if (savedBillsLoadSeqRef.current === seq) {
-            setSavedBills(mergedFull);
-          }
-          if (keepExisting && savedBillsLoadSeqRef.current === seq) {
-            setSavedBillsFirstFetchSettled(true);
-          }
-        } finally {
-          clearRemainderSync();
-        }
+        setSavedBills(page.content ?? []);
+        setSavedBillsTotalElements(totalElements);
+        setSavedBillsTotalPages(totalPages);
+        setSavedBillsFirstFetchSettled(true);
       } catch {
         if (!keepExisting && savedBillsLoadSeqRef.current === seq) {
           setSavedBillsFirstFetchSettled(true);
         }
-        clearRemainderSync();
+      } finally {
+        if (savedBillsLoadSeqRef.current === seq) {
+          setSavedBillsSyncingRemainder(false);
+        }
       }
     },
-    [canView],
+    [canView, deferredBillListSearchQuery, savedBillsPageIndex],
   );
+
+  const resetSavedBillPageState = useCallback(() => {
+    setSavedBillsPageIndex(0);
+    setSavedBillsTotalElements(0);
+    setSavedBillsTotalPages(0);
+    setSavedBillsFirstFetchSettled(false);
+    setSavedBills([]);
+  }, []);
 
   const refreshBillingCachesAfterMutation = useCallback(() => {
     void loadReservedBidReservations();
@@ -1711,15 +1768,24 @@ const BillingPage = () => {
 
   useEffect(() => {
     if (!canView) return;
+    void loadBillingBuyers();
+  }, [canView, loadBillingBuyers]);
+
+  useEffect(() => {
+    if (!canView) return;
     void loadReservedBidReservations();
   }, [canView, loadReservedBidReservations]);
 
   useEffect(() => {
     if (!canView) return;
     if (billingMainTab !== 'progress' && billingMainTab !== 'saved') return;
-    if (savedBillsLoadRequestedRef.current) return;
-    void loadSavedBills();
-  }, [canView, billingMainTab, loadSavedBills]);
+    void loadSavedBills({
+      keepExistingDuringRefetch: savedBillsFirstFetchSettled,
+      page: savedBillsPageIndex,
+      tab: billingMainTab,
+      query: deferredBillListSearchQuery,
+    });
+  }, [canView, billingMainTab, savedBillsPageIndex, deferredBillListSearchQuery, loadSavedBills]);
 
   /** After idle tab / failed refresh, auction pages or saved bills can be stale; resync without blanking list. */
   useEffect(() => {
@@ -1728,7 +1794,8 @@ const BillingPage = () => {
       const now = Date.now();
       if (now - lastBillingFocusResyncAtRef.current < BILLING_FOCUS_RESYNC_MIN_INTERVAL_MS) return;
       lastBillingFocusResyncAtRef.current = now;
-      void refetchAuctions({ keepPreviousData: true });
+      void loadBillingBuyers();
+      if (billingBuyersError) void refetchAuctions({ keepPreviousData: true });
       void loadReservedBidReservations();
       if (savedBillsLoadRequestedRef.current || billingMainTabRef.current !== 'create') {
         void loadSavedBills({ keepExistingDuringRefetch: true });
@@ -1747,7 +1814,7 @@ const BillingPage = () => {
       document.removeEventListener('visibilitychange', onVisible);
       window.removeEventListener('focus', onWinFocus);
     };
-  }, [canView, refetchAuctions, loadSavedBills, loadReservedBidReservations]);
+  }, [canView, refetchAuctions, loadBillingBuyers, billingBuyersError, loadSavedBills, loadReservedBidReservations]);
 
   const arrivalDetailsNeeded = useMemo(
     () =>
@@ -1785,7 +1852,8 @@ const BillingPage = () => {
     setResyncing(true);
     try {
       await Promise.all([
-        refetchAuctions(),
+        loadBillingBuyers(),
+        billingBuyersError ? refetchAuctions() : Promise.resolve(),
         commodityApi.list().then(setCommodities),
         commodityApi.getAllFullConfigs().then(setFullConfigs),
         loadReservedBidReservations(),
@@ -1798,7 +1866,7 @@ const BillingPage = () => {
     } finally {
       setResyncing(false);
     }
-  }, [refetchAuctions, loadReservedBidReservations, loadSavedBills, reloadArrivalDetails]);
+  }, [refetchAuctions, loadBillingBuyers, billingBuyersError, loadReservedBidReservations, loadSavedBills, reloadArrivalDetails]);
 
   useEffect(() => {
     if (!isDesktop) return;
@@ -1809,12 +1877,15 @@ const BillingPage = () => {
         e.preventDefault();
       }
       if (k === 'x') {
+        resetSavedBillPageState();
         setBillingMainTab('create');
       }
       if (k === 'y') {
+        resetSavedBillPageState();
         setBillingMainTab('progress');
       }
       if (k === 'z') {
+        resetSavedBillPageState();
         setBillingMainTab('saved');
       }
       if (k === 'l') {
@@ -1857,7 +1928,7 @@ const BillingPage = () => {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [isDesktop, bill, showPrint, commodityAvgWeightBounds, can, editLocked, billFormReadOnly, enableBillingEdit]);
+  }, [isDesktop, bill, showPrint, commodityAvgWeightBounds, can, editLocked, billFormReadOnly, enableBillingEdit, resetSavedBillPageState]);
 
   const openContactFromBilling = async () => {
     if (!canCreateContact) {
@@ -2230,6 +2301,7 @@ const BillingPage = () => {
 
   // Load buyer data from auctions as pages arrive. Arrival detail is only a fallback for older/missing auction result fields.
   useEffect(() => {
+    if (billingBuyersHydrated && !billingBuyersError) return;
     const buyerMap = new Map<string, BuyerPurchase>();
     const lotBagCountByLotId = new Map<string, number>();
 
@@ -2327,7 +2399,7 @@ const BillingPage = () => {
     });
 
     setBuyers(Array.from(buyerMap.values()));
-  }, [auctionData, arrivalLotLookup]);
+  }, [auctionData, arrivalLotLookup, billingBuyersHydrated, billingBuyersError]);
 
   const excludeBillIdForReservation = bill && isBackendBillId(bill.billId) ? bill.billId : null;
   const reservedBidKeysOnOtherBills = useMemo(
@@ -2347,12 +2419,25 @@ const BillingPage = () => {
     [buyers, reservedBidKeysOnOtherBills],
   );
 
-  /** First auction-results page is enough to show matches; reservations must sync before bill creation. */
-  const billingBuyerListReady = !auctionResultsBootstrapping;
+  /** Fast billing-buyers endpoint is primary; auction results remain a fallback if that endpoint fails. */
+  const billingBuyerFastReady = billingBuyersHydrated && !billingBuyersError;
+  const billingBuyerListReady = billingBuyerFastReady || (!!billingBuyersError && auctionResultsComplete);
   const billingBuyerActionReady = billingBuyerListReady && reservedBidsHydrated;
 
   const billingBuyerListBackdropSyncing =
-    auctionResultsLoadingMore || savedBillsSyncingRemainder || (billingBuyerListReady && !reservedBidsHydrated);
+    (!!billingBuyersError && auctionResultsLoadingMore)
+    || savedBillsSyncingRemainder
+    || (billingBuyerListReady && !reservedBidsHydrated);
+  const billingBuyerLoadFailed = !!billingBuyersError && !!auctionResultsError;
+  const billingBuyerLoadingText = billingBuyerLoadFailed
+    ? 'Could not load buyers - use Refresh'
+    : !billingBuyersHydrated && !billingBuyersError
+      ? 'Loading buyer list…'
+      : billingBuyersError && !auctionResultsComplete
+        ? 'Loading auction results fallback…'
+        : !reservedBidsHydrated
+          ? 'Loading billed bid reservations…'
+          : 'Loading buyer list…';
 
   useEffect(() => {
     if (!billingBuyerListReady || !selectedBuyerFromDropdown) return;
@@ -3831,8 +3916,9 @@ const BillingPage = () => {
   billingTabConfirmIfDirtyRef.current = confirmIfDirty;
 
   const requestBillingMainTab = useCallback((next: BillingMainTab) => {
+    resetSavedBillPageState();
     setBillingMainTab(next);
-  }, []);
+  }, [resetSavedBillPageState]);
 
   /** Opens print preview only — does not persist. Use Save/Update first. */
   const canPrintBill = useMemo(
@@ -3900,37 +3986,22 @@ const BillingPage = () => {
   }, []);
 
   const inProgressBills = useMemo(
-    () => savedBills.filter(b => !b.billNumber?.trim()),
-    [savedBills],
+    () => (billingMainTab === 'progress' ? savedBills : []),
+    [billingMainTab, savedBills],
   );
 
   const numberedBills = useMemo(
-    () => savedBills.filter(b => !!b.billNumber?.trim()),
-    [savedBills],
+    () => (billingMainTab === 'saved' ? savedBills : []),
+    [billingMainTab, savedBills],
   );
 
   const filteredInProgressBills = useMemo(() => {
-    if (!searchQuery.trim()) return inProgressBills;
-    const q = searchQuery.toLowerCase();
-    return inProgressBills.filter((b: any) =>
-      b.buyerMark?.toLowerCase().includes(q) ||
-      b.buyerName?.toLowerCase().includes(q) ||
-      b.billingName?.toLowerCase().includes(q) ||
-      b.outboundVehicle?.toLowerCase().includes(q)
-    );
-  }, [inProgressBills, searchQuery]);
+    return inProgressBills;
+  }, [inProgressBills]);
 
   const filteredSavedBillsOnly = useMemo(() => {
-    if (!searchQuery.trim()) return numberedBills;
-    const q = searchQuery.toLowerCase();
-    return numberedBills.filter((b: any) =>
-      b.buyerMark?.toLowerCase().includes(q) ||
-      b.buyerName?.toLowerCase().includes(q) ||
-      b.billNumber?.toLowerCase().includes(q) ||
-      b.billingName?.toLowerCase().includes(q) ||
-      b.outboundVehicle?.toLowerCase().includes(q)
-    );
-  }, [numberedBills, searchQuery]);
+    return numberedBills;
+  }, [numberedBills]);
 
   const savedBillsTableScrollRef = useRef<HTMLDivElement>(null);
   const savedBillsTableVirtualEnabled =
@@ -3944,6 +4015,57 @@ const BillingPage = () => {
     measureElement,
     getItemKey: index => String(filteredSavedBillsOnly[index]?.billId ?? index),
   });
+
+  const savedBillsCurrentPage = savedBillsPageIndex + 1;
+  const savedBillsEffectiveTotalPages = Math.max(1, savedBillsTotalPages);
+  const savedBillsRangeStart = savedBillsTotalElements > 0
+    ? savedBillsPageIndex * BILLING_SAVED_BILLS_PAGE_SIZE + 1
+    : 0;
+  const savedBillsRangeEnd = Math.min(
+    savedBillsTotalElements,
+    savedBillsPageIndex * BILLING_SAVED_BILLS_PAGE_SIZE + savedBills.length,
+  );
+  const savedBillsHasPreviousPage = savedBillsPageIndex > 0;
+  const savedBillsHasNextPage = savedBillsPageIndex + 1 < savedBillsEffectiveTotalPages;
+  const goToSavedBillsPage = useCallback((nextPage: number) => {
+    const clamped = Math.max(0, Math.min(nextPage, Math.max(0, savedBillsEffectiveTotalPages - 1)));
+    setSavedBillsPageIndex(clamped);
+  }, [savedBillsEffectiveTotalPages]);
+  const savedBillsPagination =
+    (billingMainTab === 'progress' || billingMainTab === 'saved') && savedBillsFirstFetchSettled && savedBillsTotalElements > 0 ? (
+      <div className="flex flex-col gap-2 rounded-xl border border-border/60 bg-background/70 px-3 py-2 text-sm sm:flex-row sm:items-center sm:justify-between">
+        <div className="text-muted-foreground">
+          Showing {savedBillsRangeStart.toLocaleString()}-{savedBillsRangeEnd.toLocaleString()} of{' '}
+          {savedBillsTotalElements.toLocaleString()}
+          {savedBillsSyncingRemainder ? ' · Loading…' : ''}
+        </div>
+        <div className="flex items-center gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="gap-1.5"
+            disabled={!savedBillsHasPreviousPage || savedBillsSyncingRemainder}
+            onClick={() => goToSavedBillsPage(savedBillsPageIndex - 1)}
+          >
+            <ArrowLeft className="h-4 w-4" /> Prev
+          </Button>
+          <span className="min-w-[7rem] text-center text-xs text-muted-foreground">
+            Page {savedBillsCurrentPage.toLocaleString()} of {savedBillsEffectiveTotalPages.toLocaleString()}
+          </span>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="gap-1.5"
+            disabled={!savedBillsHasNextPage || savedBillsSyncingRemainder}
+            onClick={() => goToSavedBillsPage(savedBillsPageIndex + 1)}
+          >
+            Next <ArrowRight className="h-4 w-4" />
+          </Button>
+        </div>
+      </div>
+    ) : null;
 
   const applySelectedVersion = useCallback((versionSel: 'latest' | number) => {
     if (!bill) return;
@@ -4104,9 +4226,12 @@ const BillingPage = () => {
     })();
   };
 
-  const openBillFromList = (b: SalesBillDTO) => {
+  const openBillFromList = (row: SalesBillSummaryDTO | SalesBillDTO) => {
     void (async () => {
       if (!(await billingTabConfirmIfDirtyRef.current())) return;
+      const b = Array.isArray((row as SalesBillDTO).commodityGroups)
+        ? (row as SalesBillDTO)
+        : await billingApi.getById(row.billId);
       setSelectedBuyer({
         buyerMark: b.buyerMark,
         buyerName: b.buyerName,
@@ -4773,13 +4898,7 @@ const BillingPage = () => {
                     ? `${buyersForBilling.length} buyer${buyersForBilling.length !== 1 ? 's' : ''} with unbilled bids${
                       billingBuyerListBackdropSyncing ? ' · syncing' : ''
                     }`
-                    : auctionResultsError
-                      ? 'Could not load auctions — use Refresh'
-                      : auctionResultsBootstrapping
-                        ? 'Loading auction results…'
-                        : !reservedBidsHydrated
-                          ? 'Loading billed bid reservations…'
-                          : 'Loading buyer list…'}
+                    : billingBuyerLoadingText}
                 </p>
               </div>
               <div className="flex-shrink-0" />
@@ -4807,7 +4926,10 @@ const BillingPage = () => {
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-white/50" />
                 <input aria-label="Search bills" placeholder="Search mark, vehicle, bill #…"
-                  value={searchQuery} onChange={e => setSearchQuery(e.target.value)}
+                  value={searchQuery} onChange={e => {
+                    setSearchQuery(e.target.value);
+                    setSavedBillsPageIndex(0);
+                  }}
                   className="w-full h-10 pl-10 pr-4 rounded-xl bg-white/20 backdrop-blur text-white placeholder:text-white/50 text-sm border border-white/10 focus:outline-none focus:border-white/30" />
               </div>
             )}
@@ -4825,13 +4947,7 @@ const BillingPage = () => {
                   ? `${buyersForBilling.length} buyers with unbilled bids · Invoicing & generation${
                     billingBuyerListBackdropSyncing ? ' · Background sync…' : ''
                   }`
-                  : auctionResultsError
-                    ? 'Could not load auctions — use Refresh or open Bill Operations again'
-                    : auctionResultsBootstrapping
-                      ? 'Loading auction results…'
-                      : !reservedBidsHydrated
-                        ? 'Loading billed bid reservations…'
-                        : 'Loading buyer list…'}
+                  : billingBuyerLoadingText}
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2 lg:justify-end w-full lg:w-auto" />
@@ -4853,7 +4969,10 @@ const BillingPage = () => {
               <div className="relative w-full min-w-0 lg:flex-1 lg:max-w-md">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
                 <input aria-label="Search bills" placeholder="Bill #, mark, vehicle…"
-                  value={searchQuery} onChange={e => setSearchQuery(e.target.value)}
+                  value={searchQuery} onChange={e => {
+                    setSearchQuery(e.target.value);
+                    setSavedBillsPageIndex(0);
+                  }}
                   className="w-full h-10 pl-10 pr-4 rounded-xl bg-muted/50 text-foreground text-sm border border-border focus:outline-none focus-visible:ring-1 focus-visible:ring-[#6075FF]" />
               </div>
             )}
@@ -5054,13 +5173,7 @@ const BillingPage = () => {
             {!billingBuyerListReady ? (
               <div className="rounded-xl bg-muted/30 p-4 text-center space-y-2">
                 <p className="text-sm text-muted-foreground">
-                  {auctionResultsError
-                    ? 'Could not load auctions. Use Refresh.'
-                    : auctionResultsBootstrapping
-                      ? 'Loading auction results…'
-                      : !reservedBidsHydrated
-                        ? 'Loading billed bid reservations…'
-                        : 'Loading buyer list…'}
+                  {billingBuyerLoadingText}
                 </p>
               </div>
             ) : buyersForBilling.length === 0 ? (
@@ -6836,7 +6949,8 @@ const BillingPage = () => {
 
 
         {billingMainTab === 'progress' && (
-          !savedBillsFirstFetchSettled && savedBills.length === 0 ? (
+          <>
+          {!savedBillsFirstFetchSettled && savedBills.length === 0 ? (
             <div className="glass-card rounded-2xl p-8 flex justify-center text-muted-foreground">
               <Loader2 className="w-8 h-8 animate-spin" />
             </div>
@@ -6862,12 +6976,9 @@ const BillingPage = () => {
                       </tr>
                     </thead>
                     <tbody>
-                      {filteredInProgressBills.map((b: SalesBillDTO) => {
-                        const bidsCount = (b.commodityGroups || []).reduce((sum, g) => sum + (g.items?.length || 0), 0);
-                        const bagQuantity = (b.commodityGroups || []).reduce(
-                          (sum, g) => sum + (g.items || []).reduce((itemSum, item) => itemSum + (Number(item.quantity) || 0), 0),
-                          0,
-                        );
+                      {filteredInProgressBills.map((b: SalesBillSummaryDTO) => {
+                        const bidsCount = getBillListBidsCount(b);
+                        const bagQuantity = getBillListBagQuantity(b);
                         const brokerDisplay = b.buyerAsBroker
                           ? (b.buyerName || b.buyerMark || '-')
                           : (b.brokerName || b.brokerMark || '-');
@@ -6891,7 +7002,7 @@ const BillingPage = () => {
                 </div>
               </div>
             ) : (
-              filteredInProgressBills.map((b: SalesBillDTO, i: number) => (
+              filteredInProgressBills.map((b: SalesBillSummaryDTO, i: number) => (
                 <motion.button type="button" key={String(b.billId)}
                   initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
                   transition={{ delay: i * 0.03 }}
@@ -6913,11 +7024,14 @@ const BillingPage = () => {
                 </motion.button>
               ))
             )
-          )
+          )}
+          {savedBillsPagination}
+          </>
         )}
 
         {billingMainTab === 'saved' && (
-          !savedBillsFirstFetchSettled && savedBills.length === 0 ? (
+          <>
+          {!savedBillsFirstFetchSettled && savedBills.length === 0 ? (
             <div className="glass-card rounded-2xl p-8 flex justify-center text-muted-foreground">
               <Loader2 className="w-8 h-8 animate-spin" />
             </div>
@@ -6974,7 +7088,7 @@ const BillingPage = () => {
                       {savedBillRowVirtualizer.getVirtualItems().map((virtualRow) => {
                         const b = filteredSavedBillsOnly[virtualRow.index];
                         if (!b) return null;
-                        const bidsCount = (b.commodityGroups || []).reduce((sum, g) => sum + (g.items?.length || 0), 0);
+                        const bidsCount = getBillListBidsCount(b);
                         const pendingDays = Math.max(
                           0,
                           Math.floor((Date.now() - new Date(b.billDate).getTime()) / (1000 * 60 * 60 * 24)),
@@ -7021,7 +7135,7 @@ const BillingPage = () => {
                 </div>
               </div>
             ) : (
-              filteredSavedBillsOnly.map((b: SalesBillDTO, i: number) => (
+              filteredSavedBillsOnly.map((b: SalesBillSummaryDTO, i: number) => (
                 <motion.button type="button" key={String(b.billId)}
                   initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
                   transition={{ delay: i * 0.03 }}
@@ -7043,7 +7157,9 @@ const BillingPage = () => {
                 </motion.button>
               ))
             )
-          )
+          )}
+          {savedBillsPagination}
+          </>
         )}
       </div>
       {!isDesktop && <BottomNav />}
