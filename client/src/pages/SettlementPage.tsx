@@ -5270,9 +5270,7 @@ const SettlementPage = () => {
   const runSellerContactSearch = useCallback(async (sellerId: string, query: string) => {
     setSellerContactSearchLoading(prev => ({ ...prev, [sellerId]: true }));
     try {
-      const list = query.trim()
-        ? await contactApi.search(query.trim())
-        : await contactApi.list({ scope: 'participants' });
+      const list = await contactApi.searchRegistry(query.trim(), { limit: 50 });
       setSellerContactSearchById(prev => ({ ...prev, [sellerId]: list }));
     } catch {
       toast.error('Contact search failed');
@@ -7911,15 +7909,14 @@ const SettlementPage = () => {
                                   }
 
                                   const contactsRegistry = await contactApi.list({ scope: 'registry' });
-                                  const traderRegistry = contactsRegistry.filter(c => String(c.trader_id ?? '').trim().length > 0);
-                                  const markExists = traderRegistry.some(
+                                  const markExists = contactsRegistry.some(
                                     c => (c.mark ?? '').trim().toLowerCase() === normalizedMark.toLowerCase()
                                   );
                                   if (markExists) {
                                     toast.error('This mark is already in use by another contact');
                                     return;
                                   }
-                                  const mobileExists = traderRegistry.some(
+                                  const mobileExists = contactsRegistry.some(
                                     c => (c.phone ?? '').trim() === normalizedMobile
                                   );
                                   if (mobileExists) {
@@ -7927,12 +7924,18 @@ const SettlementPage = () => {
                                     return;
                                   }
 
-                                  const created = await contactApi.create({
-                                    name: normalizedName,
-                                    phone: normalizedMobile,
-                                    mark: normalizedMark,
-                                  });
-                                  const reg = await settlementApi.linkSellerContact(seller.sellerId, created.contact_id);
+                                  let contactForSeller = await contactApi.importPortalContactByPhone(normalizedMobile);
+                                  if (contactForSeller) {
+                                    toast.success('This mobile belongs to a global contact. Imported to your contact list.');
+                                  } else {
+                                    contactForSeller = await contactApi.create({
+                                      name: normalizedName,
+                                      phone: normalizedMobile,
+                                      mark: normalizedMark,
+                                      can_login: true,
+                                    });
+                                  }
+                                  const reg = await settlementApi.linkSellerContact(seller.sellerId, contactForSeller.contact_id);
                                   const nextForm: SellerRegFormState = {
                                     ...form,
                                     registrationChosen: true,

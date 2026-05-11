@@ -96,7 +96,7 @@ public class ContactServiceImpl implements ContactService {
             contactDTO.setCurrentBalance(BigDecimal.ZERO);
         }
         if (contactDTO.getCanLogin() == null) {
-            contactDTO.setCanLogin(Boolean.FALSE);
+            contactDTO.setCanLogin(isNewContact && contactDTO.getTraderId() != null ? Boolean.TRUE : Boolean.FALSE);
         }
 
         Contact contact = contactMapper.toEntity(contactDTO);
@@ -251,9 +251,6 @@ public class ContactServiceImpl implements ContactService {
     @Transactional(readOnly = true)
     public List<ContactDTO> listContacts(Long traderId, ContactListScope scope) {
         LOG.debug("Request to list contacts for trader : {}, scope={}", traderId, scope);
-        if (scope == ContactListScope.PARTICIPANTS) {
-            return listParticipantPool(traderId);
-        }
         return listRegistry(traderId);
     }
 
@@ -311,36 +308,6 @@ public class ContactServiceImpl implements ContactService {
             return false;
         }
         return traderPortalContactLinkRepository.existsByTraderIdAndContactId(traderId, contactId);
-    }
-
-    private List<ContactDTO> listParticipantPool(Long traderId) {
-        List<Contact> traderContacts = contactRepository.findAllByTraderIdAndActiveTrue(traderId);
-        Set<String> phoneKeys = new HashSet<>();
-        Set<String> markKeysLower = new HashSet<>();
-        for (Contact c : traderContacts) {
-            String pk = phoneKey(c.getPhone());
-            if (!pk.isEmpty()) {
-                phoneKeys.add(pk);
-            }
-            if (c.getMark() != null && !c.getMark().isBlank()) {
-                markKeysLower.add(c.getMark().trim().toLowerCase(Locale.ROOT));
-            }
-        }
-
-        List<ContactDTO> out = traderContacts.stream().map(contactMapper::toDto).collect(Collectors.toList());
-        for (Contact global : contactRepository.findAllByTraderIdIsNullAndActiveTrue()) {
-            String pk = phoneKey(global.getPhone());
-            if (!pk.isEmpty() && phoneKeys.contains(pk)) {
-                continue;
-            }
-            if (global.getMark() != null && !global.getMark().isBlank()) {
-                if (markKeysLower.contains(global.getMark().trim().toLowerCase(Locale.ROOT))) {
-                    continue;
-                }
-            }
-            out.add(contactMapper.toDto(global));
-        }
-        return out;
     }
 
     private List<ContactDTO> listRegistry(Long traderId) {
@@ -473,55 +440,7 @@ public class ContactServiceImpl implements ContactService {
     public List<ContactDTO> searchParticipants(Long traderId, String query, int limit) {
         int cappedLimit = Math.max(1, Math.min(limit, 100));
         String needle = query == null ? "" : query.trim().toLowerCase(Locale.ROOT);
-        LOG.debug("Request to bounded-search participant contacts. traderId={}, query={}, limit={}", traderId, needle, cappedLimit);
-
-        List<Contact> traderMatches = contactRepository.searchActiveTraderContacts(traderId, needle, PageRequest.of(0, cappedLimit));
-        List<Contact> portalMatches = contactRepository.searchActivePortalParticipants(needle, PageRequest.of(0, cappedLimit));
-
-        List<ContactDTO> out = new ArrayList<>(cappedLimit);
-        Set<String> phoneKeys = new HashSet<>();
-        Set<String> markKeysLower = new HashSet<>();
-
-        for (Contact contact : traderMatches) {
-            if (out.size() >= cappedLimit) {
-                break;
-            }
-            addParticipantSearchResult(contact, out, phoneKeys, markKeysLower);
-        }
-
-        for (Contact contact : portalMatches) {
-            if (out.size() >= cappedLimit) {
-                break;
-            }
-            addParticipantSearchResult(contact, out, phoneKeys, markKeysLower);
-        }
-
-        return out;
-    }
-
-    private void addParticipantSearchResult(
-        Contact contact,
-        List<ContactDTO> out,
-        Set<String> phoneKeys,
-        Set<String> markKeysLower
-    ) {
-        String pk = phoneKey(contact.getPhone());
-        if (!pk.isEmpty() && phoneKeys.contains(pk)) {
-            return;
-        }
-        String markKey = contact.getMark() != null && !contact.getMark().isBlank()
-            ? contact.getMark().trim().toLowerCase(Locale.ROOT)
-            : "";
-        if (!markKey.isEmpty() && markKeysLower.contains(markKey)) {
-            return;
-        }
-
-        out.add(contactMapper.toDto(contact));
-        if (!pk.isEmpty()) {
-            phoneKeys.add(pk);
-        }
-        if (!markKey.isEmpty()) {
-            markKeysLower.add(markKey);
-        }
+        LOG.debug("Request to bounded-search registry contacts for picker. traderId={}, query={}, limit={}", traderId, needle, cappedLimit);
+        return listContactsPage(traderId, ContactListScope.REGISTRY, PageRequest.of(0, cappedLimit), query).getContent();
     }
 }

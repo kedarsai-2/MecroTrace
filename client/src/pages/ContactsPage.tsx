@@ -76,7 +76,7 @@ const ContactsPage = () => {
   const [activeTab, setActiveTab] = useState<ContactTab>('trader');
   const [modalMode, setModalMode] = useState<ModalMode>(null);
   const [selectedContact, setSelectedContact] = useState<Contact | null>(null);
-  const [formData, setFormData] = useState({ name: '', phone: '', mark: '', address: '', enablePortal: false });
+  const [formData, setFormData] = useState({ name: '', phone: '', mark: '', address: '', enablePortal: true });
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
   const [restorePendingPhone, setRestorePendingPhone] = useState<string | null>(null);
@@ -200,7 +200,7 @@ const ContactsPage = () => {
       toast.error('You do not have permission to create contacts.');
       return;
     }
-    setFormData({ name: '', phone: '', mark: '', address: '', enablePortal: false });
+    setFormData({ name: '', phone: '', mark: '', address: '', enablePortal: true });
     setErrors({});
     setModalMode('add');
   };
@@ -266,12 +266,22 @@ const ContactsPage = () => {
     }
     if (!validateForm()) return;
     try {
+      const imported = await contactApi.importPortalContactByPhone(formData.phone.trim());
+      if (imported) {
+        updateContactsCache(prev => prev.some(c => c.contact_id === imported.contact_id) ? prev : [...prev, imported]);
+        invalidateContacts();
+        closeModal();
+        setActiveTab('global');
+        toast.success('This mobile belongs to a global contact. Imported to your contact list.');
+        return;
+      }
       const created = await contactApi.create({
         name: formData.name.trim(),
         phone: formData.phone.trim(),
         mark: formData.mark.trim().toUpperCase(),
         address: formData.address.trim(),
         trader_id: '',
+        can_login: formData.enablePortal,
       });
       updateContactsCache(prev => [...prev, created]);
       invalidateContacts();
@@ -325,6 +335,7 @@ const ContactsPage = () => {
         phone: formData.phone.trim(),
         mark: formData.mark.trim().toUpperCase(),
         address: formData.address.trim(),
+        can_login: formData.enablePortal,
       });
       updateContactsCache(prev => prev.map(c => c.contact_id === updated.contact_id ? updated : c));
       invalidateContacts();
@@ -967,7 +978,7 @@ const ContactsPage = () => {
                       disabled
                     />
                     <label htmlFor="enable-portal-login" className="text-xs text-muted-foreground">
-                      Contact Portal login (managed from self-signup/profile in this version)
+                      Contact Portal login enabled by default
                     </label>
                   </div>
 

@@ -70,10 +70,10 @@ public interface ContactService {
     Optional<ContactDTO> findOneByTraderIdAndPhone(Long traderId, String phone);
 
     /**
-     * Lists contacts for UI lists: registry (Contacts module) or participant pool (Arrivals / Auctions search).
+     * Lists contacts for UI lists: trader-owned contacts plus portal contacts already linked/imported for this trader.
      *
      * @param traderId current trader.
-     * @param scope registry vs participants.
+     * @param scope registry vs picker-safe participant list. Both exclude unimported portal/global contacts.
      */
     List<ContactDTO> listContacts(Long traderId, ContactListScope scope);
 
@@ -81,7 +81,7 @@ public interface ContactService {
      * Paginated/searchable contact list for scalable registry views.
      *
      * @param traderId current trader.
-     * @param scope registry vs participants.
+     * @param scope registry vs picker-safe participant list. Both exclude unimported portal/global contacts.
      * @param pageable requested page and size.
      * @param query optional name, phone, or mark fragment.
      * @return page of contacts after applying the same visibility and dedupe rules as {@link #listContacts}.
@@ -110,7 +110,7 @@ public interface ContactService {
      * @param traderId current trader.
      * @param query mark, name, or phone fragment.
      * @param limit max rows to return.
-     * @return trader contacts first, then portal participants, deduplicated like participant lists.
+     * @return trader contacts and already linked portal contacts, deduplicated like registry lists.
      */
     List<ContactDTO> searchParticipants(Long traderId, String query, int limit);
 }

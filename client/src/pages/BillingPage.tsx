@@ -1,9 +1,9 @@
-import { useState, useEffect, useLayoutEffect, useMemo, useCallback, useRef, useDeferredValue } from 'react';
+import { useState, useEffect, useLayoutEffect, useMemo, useCallback, useRef, useDeferredValue, type ReactNode } from 'react';
 import { useVirtualizer, measureElement } from '@tanstack/react-virtual';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   ArrowLeft, Receipt, Search, User, Package, IndianRupee, Truck, Hash,
-  ArrowRight, Edit3, Lock, Unlock, Save, Printer, Plus, Trash2,
+  Edit3, Lock, Unlock, Save, Printer, Plus, Trash2,
   Percent, FileText, ChevronDown, ChevronUp,
   AlertCircle, AlertTriangle, BookOpen, X, Loader2, Clock,
 } from 'lucide-react';
@@ -958,10 +958,75 @@ const BILLING_BUYER_OPTION_RENDER_LIMIT = 120;
 /** Desktop saved-bills list: column ratios (ex-<colgroup>). Grid avoids broken thead/body sync when rows are `position:absolute` (virtualizer). */
 const SAVED_BILLS_TABLE_GRID_COLS =
   'minmax(0,10fr) minmax(0,12fr) minmax(0,11fr) minmax(0,8fr) minmax(0,10fr) minmax(0,9fr) minmax(0,9fr) minmax(0,10fr) minmax(0,9fr) minmax(0,12fr)';
+const BILLING_MOBILE_LIST_SCROLL_HEIGHT_CLASS =
+  'h-[calc(100dvh-15.25rem)] min-h-[22rem] sm:h-[calc(100dvh-14.5rem)] md:h-[calc(100dvh-13.25rem)]';
+const BILLING_DESKTOP_LIST_SCROLL_HEIGHT_CLASS =
+  'h-[calc(100dvh-12.5rem)] min-h-[28rem] max-h-[840px]';
 const BILLING_ARRIVAL_DETAILS_PAGE_SIZE = 200;
 const BILLING_ARRIVAL_DETAILS_FETCH_CONCURRENCY = 4;
 /** Sales Pad–aligned lot page size for add-bid browser (`id,asc`). */
 const BILLING_ADD_BID_LOTS_PAGE_SIZE = 90;
+
+function BillingVirtualStack({
+  count,
+  estimateItemSize,
+  getItemKey,
+  onReachEnd,
+  containerClassName,
+  footer,
+  children,
+}: {
+  count: number;
+  estimateItemSize: number;
+  getItemKey: (index: number) => string | number;
+  onReachEnd?: () => void;
+  containerClassName?: string;
+  footer?: ReactNode;
+  children: (index: number) => ReactNode;
+}) {
+  const parentRef = useRef<HTMLDivElement | null>(null);
+  const virtualizer = useVirtualizer({
+    count,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => estimateItemSize,
+    overscan: 8,
+    measureElement,
+    getItemKey,
+  });
+  const virtualItems = virtualizer.getVirtualItems();
+  const lastVirtualIndex = virtualItems.length > 0 ? virtualItems[virtualItems.length - 1].index : -1;
+
+  useEffect(() => {
+    if (!onReachEnd || count <= 0) return;
+    if (lastVirtualIndex >= Math.max(0, count - 6)) onReachEnd();
+  }, [count, lastVirtualIndex, onReachEnd]);
+
+  return (
+    <div
+      ref={parentRef}
+      className={cn(
+        BILLING_MOBILE_LIST_SCROLL_HEIGHT_CLASS,
+        'overflow-y-auto overscroll-contain pr-1 [-webkit-overflow-scrolling:touch]',
+        containerClassName,
+      )}
+    >
+      <div className="relative w-full" style={{ height: virtualizer.getTotalSize() }}>
+        {virtualItems.map(virtualRow => (
+          <div
+            key={virtualRow.key}
+            data-index={virtualRow.index}
+            ref={virtualizer.measureElement}
+            className="absolute left-0 top-0 w-full pb-2"
+            style={{ transform: `translateY(${virtualRow.start}px)` }}
+          >
+            {children(virtualRow.index)}
+          </div>
+        ))}
+      </div>
+      {footer}
+    </div>
+  );
+}
 
 function isAbortError(e: unknown): boolean {
   return (
@@ -1135,7 +1200,7 @@ const BillingPage = () => {
   const [savedBills, setSavedBills] = useState<SalesBillSummaryDTO[]>([]);
   const [savedBillsFirstFetchSettled, setSavedBillsFirstFetchSettled] = useState(false);
   const [savedBillsSyncingRemainder, setSavedBillsSyncingRemainder] = useState(false);
-  const [savedBillsPageIndex, setSavedBillsPageIndex] = useState(0);
+  const [savedBillsNextPageIndex, setSavedBillsNextPageIndex] = useState(0);
   const [savedBillsTotalElements, setSavedBillsTotalElements] = useState(0);
   const [savedBillsTotalPages, setSavedBillsTotalPages] = useState(0);
   const savedBillsLoadSeqRef = useRef(0);
@@ -1463,7 +1528,7 @@ const BillingPage = () => {
 
   // Add contact from billing (same fields/validation as Contacts module — add only)
   const [contactSheetOpen, setContactSheetOpen] = useState(false);
-  const [contactForm, setContactForm] = useState({ name: '', phone: '', mark: '', address: '', enablePortal: false });
+  const [contactForm, setContactForm] = useState({ name: '', phone: '', mark: '', address: '', enablePortal: true });
   const [contactErrors, setContactErrors] = useState<Record<string, string>>({});
   const [contactsRegistry, setContactsRegistry] = useState<Contact[]>([]);
   const [restorePendingPhone, setRestorePendingPhone] = useState<string | null>(null);
@@ -1680,21 +1745,31 @@ const BillingPage = () => {
   }, [canView]);
 
   const loadSavedBills = useCallback(
-    async (opts?: { keepExistingDuringRefetch?: boolean; page?: number; tab?: BillingMainTab; query?: string }) => {
+    async (opts?: {
+      keepExistingDuringRefetch?: boolean;
+      page?: number;
+      tab?: BillingMainTab;
+      query?: string;
+      append?: boolean;
+      reset?: boolean;
+    }) => {
       if (!canView) return;
       const keepExisting = opts?.keepExistingDuringRefetch ?? false;
       const tab = opts?.tab ?? billingMainTabRef.current;
       if (tab !== 'progress' && tab !== 'saved') return;
-      const requestedPage = Math.max(0, opts?.page ?? savedBillsPageIndex);
+      const append = opts?.append ?? false;
+      const reset = opts?.reset ?? !append;
+      const requestedPage = Math.max(0, opts?.page ?? 0);
       const query = (opts?.query ?? deferredBillListSearchQuery).trim();
       const status = tab === 'progress' ? 'IN_PROGRESS' : 'NUMBERED';
       const seq = savedBillsLoadSeqRef.current + 1;
       savedBillsLoadSeqRef.current = seq;
       savedBillsLoadRequestedRef.current = true;
 
-      if (!keepExisting) {
+      if (reset && !keepExisting) {
         setSavedBillsFirstFetchSettled(false);
         setSavedBills([]);
+        setSavedBillsNextPageIndex(0);
       }
       setSavedBillsSyncingRemainder(true);
 
@@ -1710,14 +1785,30 @@ const BillingPage = () => {
 
         const totalElements = Number(page.totalElements ?? page.content?.length ?? 0);
         const totalPages = Math.max(1, Number(page.totalPages ?? Math.ceil(totalElements / BILLING_SAVED_BILLS_PAGE_SIZE)));
-        const safePage = Math.min(requestedPage, Math.max(0, totalPages - 1));
-        if (safePage !== requestedPage) {
-          setSavedBillsPageIndex(safePage);
-          return;
-        }
-        setSavedBills(page.content ?? []);
+        const incoming = page.content ?? [];
+        setSavedBills(prev => {
+          if (!append && !keepExisting) return incoming;
+          const offset = append || requestedPage > 0 ? requestedPage * BILLING_SAVED_BILLS_PAGE_SIZE : 0;
+          const next = !append && requestedPage === 0 ? [...incoming, ...prev] : prev.slice();
+          if (append || requestedPage > 0) {
+            incoming.forEach((billRow, i) => {
+              next[offset + i] = billRow;
+            });
+          }
+          const seen = new Set<string>();
+          const merged: SalesBillSummaryDTO[] = [];
+          next.forEach(billRow => {
+            if (!billRow) return;
+            const key = String(billRow.billId);
+            if (seen.has(key)) return;
+            seen.add(key);
+            merged.push(billRow);
+          });
+          return totalElements > 0 ? merged.slice(0, totalElements) : merged;
+        });
         setSavedBillsTotalElements(totalElements);
         setSavedBillsTotalPages(totalPages);
+        setSavedBillsNextPageIndex(Math.min(requestedPage + 1, totalPages));
         setSavedBillsFirstFetchSettled(true);
       } catch {
         if (!keepExisting && savedBillsLoadSeqRef.current === seq) {
@@ -1729,20 +1820,22 @@ const BillingPage = () => {
         }
       }
     },
-    [canView, deferredBillListSearchQuery, savedBillsPageIndex],
+    [canView, deferredBillListSearchQuery],
   );
 
   const resetSavedBillPageState = useCallback(() => {
-    setSavedBillsPageIndex(0);
+    savedBillsLoadSeqRef.current += 1;
+    setSavedBillsNextPageIndex(0);
     setSavedBillsTotalElements(0);
     setSavedBillsTotalPages(0);
     setSavedBillsFirstFetchSettled(false);
+    setSavedBillsSyncingRemainder(false);
     setSavedBills([]);
   }, []);
 
   const refreshBillingCachesAfterMutation = useCallback(() => {
     void loadReservedBidReservations();
-    void loadSavedBills();
+    void loadSavedBills({ keepExistingDuringRefetch: true, page: 0, reset: true });
   }, [loadReservedBidReservations, loadSavedBills]);
 
   const reloadArrivalDetails = useCallback(async () => {
@@ -1780,12 +1873,13 @@ const BillingPage = () => {
     if (!canView) return;
     if (billingMainTab !== 'progress' && billingMainTab !== 'saved') return;
     void loadSavedBills({
-      keepExistingDuringRefetch: savedBillsFirstFetchSettled,
-      page: savedBillsPageIndex,
+      keepExistingDuringRefetch: false,
+      page: 0,
+      reset: true,
       tab: billingMainTab,
       query: deferredBillListSearchQuery,
     });
-  }, [canView, billingMainTab, savedBillsPageIndex, deferredBillListSearchQuery, loadSavedBills]);
+  }, [canView, billingMainTab, deferredBillListSearchQuery, loadSavedBills]);
 
   /** After idle tab / failed refresh, auction pages or saved bills can be stale; resync without blanking list. */
   useEffect(() => {
@@ -1798,7 +1892,7 @@ const BillingPage = () => {
       if (billingBuyersError) void refetchAuctions({ keepPreviousData: true });
       void loadReservedBidReservations();
       if (savedBillsLoadRequestedRef.current || billingMainTabRef.current !== 'create') {
-        void loadSavedBills({ keepExistingDuringRefetch: true });
+        void loadSavedBills({ keepExistingDuringRefetch: true, page: 0, reset: true });
       }
     };
     const onVisible = () => {
@@ -1857,7 +1951,7 @@ const BillingPage = () => {
         commodityApi.list().then(setCommodities),
         commodityApi.getAllFullConfigs().then(setFullConfigs),
         loadReservedBidReservations(),
-        loadSavedBills(),
+        loadSavedBills({ keepExistingDuringRefetch: true, page: 0, reset: true }),
         reloadArrivalDetails().then(setArrivalDetails),
       ]);
       toast.success('Billing data refreshed');
@@ -1935,7 +2029,7 @@ const BillingPage = () => {
       toast.error('You do not have permission to create contacts.');
       return;
     }
-    setContactForm({ name: '', phone: '', mark: '', address: '', enablePortal: false });
+    setContactForm({ name: '', phone: '', mark: '', address: '', enablePortal: true });
     setContactErrors({});
     try {
       const list = await contactApi.list({ scope: 'registry' });
@@ -1977,12 +2071,19 @@ const BillingPage = () => {
     }
     if (!validateBillingContactForm()) return;
     try {
+      const imported = await contactApi.importPortalContactByPhone(contactForm.phone.trim());
+      if (imported) {
+        closeContactSheet();
+        toast.success('This mobile belongs to a global contact. Imported to your contact list.');
+        return;
+      }
       await contactApi.create({
         name: contactForm.name.trim(),
         phone: contactForm.phone.trim(),
         mark: contactForm.mark.trim().toUpperCase(),
         address: contactForm.address.trim(),
         trader_id: '',
+        can_login: contactForm.enablePortal,
       });
       closeContactSheet();
       toast.success(`Contact ${contactForm.name.trim()} registered`);
@@ -2048,7 +2149,7 @@ const BillingPage = () => {
     let active = true;
     setReplaceSearchLoading(true);
     const timer = window.setTimeout(() => {
-      void contactApi.search(q)
+      void contactApi.searchRegistry(q, { limit: 10 })
         .then(results => {
           if (!active) return;
           setReplaceSearchResults(Array.isArray(results) ? results.slice(0, 10) : []);
@@ -2151,7 +2252,7 @@ const BillingPage = () => {
       const trimmedPhone = replaceForm.phone.trim();
       const markLower = trimmedMark.toLowerCase();
       try {
-        const hits = await contactApi.search(trimmedMark);
+        const hits = await contactApi.searchRegistry(trimmedMark, { limit: 10 });
         const usedByRegisteredContact = hits.some(
           c => (c.mark || '').trim().toLowerCase() === markLower,
         );
@@ -2214,12 +2315,18 @@ const BillingPage = () => {
       }
       if (!validateReplacementForm()) return;
       try {
-        resolved = await contactApi.create({
-          name: replaceForm.name.trim() || replaceForm.mark.trim().toUpperCase(),
-          phone: replaceForm.phone.trim(),
-          mark: replaceForm.mark.trim().toUpperCase(),
-          trader_id: '',
-        });
+        resolved = await contactApi.importPortalContactByPhone(replaceForm.phone.trim());
+        if (resolved) {
+          toast.success('This mobile belongs to a global contact. Imported to your contact list.');
+        } else {
+          resolved = await contactApi.create({
+            name: replaceForm.name.trim() || replaceForm.mark.trim().toUpperCase(),
+            phone: replaceForm.phone.trim(),
+            mark: replaceForm.mark.trim().toUpperCase(),
+            trader_id: '',
+            can_login: true,
+          });
+        }
       } catch (err) {
         if (err instanceof ContactApiError && err.errorKey === 'markexists') {
           setReplaceErrors(prev => ({ ...prev, mark: err.message }));
@@ -4003,9 +4110,21 @@ const BillingPage = () => {
     return numberedBills;
   }, [numberedBills]);
 
+  const progressBillsTableScrollRef = useRef<HTMLDivElement>(null);
   const savedBillsTableScrollRef = useRef<HTMLDivElement>(null);
+  const progressBillsTableVirtualEnabled =
+    isDesktop && billingMainTab === 'progress' && savedBillsFirstFetchSettled && filteredInProgressBills.length > 0;
   const savedBillsTableVirtualEnabled =
     isDesktop && billingMainTab === 'saved' && savedBillsFirstFetchSettled && filteredSavedBillsOnly.length > 0;
+
+  const progressBillRowVirtualizer = useVirtualizer({
+    count: progressBillsTableVirtualEnabled ? filteredInProgressBills.length : 0,
+    getScrollElement: () => progressBillsTableScrollRef.current,
+    estimateSize: () => 56,
+    overscan: 12,
+    measureElement,
+    getItemKey: index => String(filteredInProgressBills[index]?.billId ?? index),
+  });
 
   const savedBillRowVirtualizer = useVirtualizer({
     count: savedBillsTableVirtualEnabled ? filteredSavedBillsOnly.length : 0,
@@ -4016,54 +4135,66 @@ const BillingPage = () => {
     getItemKey: index => String(filteredSavedBillsOnly[index]?.billId ?? index),
   });
 
-  const savedBillsCurrentPage = savedBillsPageIndex + 1;
-  const savedBillsEffectiveTotalPages = Math.max(1, savedBillsTotalPages);
-  const savedBillsRangeStart = savedBillsTotalElements > 0
-    ? savedBillsPageIndex * BILLING_SAVED_BILLS_PAGE_SIZE + 1
-    : 0;
-  const savedBillsRangeEnd = Math.min(
-    savedBillsTotalElements,
-    savedBillsPageIndex * BILLING_SAVED_BILLS_PAGE_SIZE + savedBills.length,
-  );
-  const savedBillsHasPreviousPage = savedBillsPageIndex > 0;
-  const savedBillsHasNextPage = savedBillsPageIndex + 1 < savedBillsEffectiveTotalPages;
-  const goToSavedBillsPage = useCallback((nextPage: number) => {
-    const clamped = Math.max(0, Math.min(nextPage, Math.max(0, savedBillsEffectiveTotalPages - 1)));
-    setSavedBillsPageIndex(clamped);
-  }, [savedBillsEffectiveTotalPages]);
-  const savedBillsPagination =
-    (billingMainTab === 'progress' || billingMainTab === 'saved') && savedBillsFirstFetchSettled && savedBillsTotalElements > 0 ? (
-      <div className="flex flex-col gap-2 rounded-xl border border-border/60 bg-background/70 px-3 py-2 text-sm sm:flex-row sm:items-center sm:justify-between">
-        <div className="text-muted-foreground">
-          Showing {savedBillsRangeStart.toLocaleString()}-{savedBillsRangeEnd.toLocaleString()} of{' '}
-          {savedBillsTotalElements.toLocaleString()}
-          {savedBillsSyncingRemainder ? ' · Loading…' : ''}
-        </div>
-        <div className="flex items-center gap-2">
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="gap-1.5"
-            disabled={!savedBillsHasPreviousPage || savedBillsSyncingRemainder}
-            onClick={() => goToSavedBillsPage(savedBillsPageIndex - 1)}
-          >
-            <ArrowLeft className="h-4 w-4" /> Prev
-          </Button>
-          <span className="min-w-[7rem] text-center text-xs text-muted-foreground">
-            Page {savedBillsCurrentPage.toLocaleString()} of {savedBillsEffectiveTotalPages.toLocaleString()}
-          </span>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="gap-1.5"
-            disabled={!savedBillsHasNextPage || savedBillsSyncingRemainder}
-            onClick={() => goToSavedBillsPage(savedBillsPageIndex + 1)}
-          >
-            Next <ArrowRight className="h-4 w-4" />
-          </Button>
-        </div>
+  const savedBillsHasMore =
+    savedBillsFirstFetchSettled
+    && savedBills.length < savedBillsTotalElements
+    && savedBillsNextPageIndex < savedBillsTotalPages;
+
+  const loadNextSavedBillsPage = useCallback(() => {
+    if (billingMainTab !== 'progress' && billingMainTab !== 'saved') return;
+    if (!savedBillsFirstFetchSettled || savedBillsSyncingRemainder || !savedBillsHasMore) return;
+    void loadSavedBills({
+      keepExistingDuringRefetch: true,
+      append: true,
+      page: savedBillsNextPageIndex,
+      tab: billingMainTab,
+      query: deferredBillListSearchQuery,
+    });
+  }, [
+    billingMainTab,
+    deferredBillListSearchQuery,
+    loadSavedBills,
+    savedBillsFirstFetchSettled,
+    savedBillsHasMore,
+    savedBillsNextPageIndex,
+    savedBillsSyncingRemainder,
+  ]);
+
+  const progressBillVirtualItems = progressBillRowVirtualizer.getVirtualItems();
+  const progressBillLastVirtualIndex =
+    progressBillVirtualItems.length > 0 ? progressBillVirtualItems[progressBillVirtualItems.length - 1].index : -1;
+  useEffect(() => {
+    if (!progressBillsTableVirtualEnabled) return;
+    if (progressBillLastVirtualIndex >= Math.max(0, filteredInProgressBills.length - 8)) {
+      loadNextSavedBillsPage();
+    }
+  }, [
+    filteredInProgressBills.length,
+    loadNextSavedBillsPage,
+    progressBillLastVirtualIndex,
+    progressBillsTableVirtualEnabled,
+  ]);
+
+  const savedBillVirtualItems = savedBillRowVirtualizer.getVirtualItems();
+  const savedBillLastVirtualIndex =
+    savedBillVirtualItems.length > 0 ? savedBillVirtualItems[savedBillVirtualItems.length - 1].index : -1;
+  useEffect(() => {
+    if (!savedBillsTableVirtualEnabled) return;
+    if (savedBillLastVirtualIndex >= Math.max(0, filteredSavedBillsOnly.length - 8)) {
+      loadNextSavedBillsPage();
+    }
+  }, [
+    filteredSavedBillsOnly.length,
+    loadNextSavedBillsPage,
+    savedBillLastVirtualIndex,
+    savedBillsTableVirtualEnabled,
+  ]);
+
+  const savedBillsListFooter =
+    (billingMainTab === 'progress' || billingMainTab === 'saved') && savedBillsFirstFetchSettled && savedBillsSyncingRemainder ? (
+      <div className="flex items-center justify-center gap-2 px-3 py-3 text-xs text-muted-foreground">
+        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+        <span>Loading more bills…</span>
       </div>
     ) : null;
 
@@ -4857,7 +4988,7 @@ const BillingPage = () => {
               </div>
               <div className="flex items-center gap-2">
                 <input id="billing-enable-portal" type="checkbox" className="w-4 h-4 rounded border border-emerald-500" checked={contactForm.enablePortal} onChange={e => setContactForm(p => ({ ...p, enablePortal: e.target.checked }))} disabled />
-                <label htmlFor="billing-enable-portal" className="text-xs text-muted-foreground">Contact Portal login (managed from self-signup/profile in this version)</label>
+                <label htmlFor="billing-enable-portal" className="text-xs text-muted-foreground">Contact Portal login enabled by default</label>
               </div>
               <div className="rounded-xl bg-emerald-50 dark:bg-emerald-950/20 border border-emerald-200/50 dark:border-emerald-800/30 px-3 py-2 flex items-start gap-2">
                 <BookOpen className="w-4 h-4 text-emerald-600 dark:text-emerald-400 mt-0.5 shrink-0" />
@@ -4928,7 +5059,6 @@ const BillingPage = () => {
                 <input aria-label="Search bills" placeholder="Search mark, vehicle, bill #…"
                   value={searchQuery} onChange={e => {
                     setSearchQuery(e.target.value);
-                    setSavedBillsPageIndex(0);
                   }}
                   className="w-full h-10 pl-10 pr-4 rounded-xl bg-white/20 backdrop-blur text-white placeholder:text-white/50 text-sm border border-white/10 focus:outline-none focus:border-white/30" />
               </div>
@@ -4971,7 +5101,6 @@ const BillingPage = () => {
                 <input aria-label="Search bills" placeholder="Bill #, mark, vehicle…"
                   value={searchQuery} onChange={e => {
                     setSearchQuery(e.target.value);
-                    setSavedBillsPageIndex(0);
                   }}
                   className="w-full h-10 pl-10 pr-4 rounded-xl bg-muted/50 text-foreground text-sm border border-border focus:outline-none focus-visible:ring-1 focus-visible:ring-[#6075FF]" />
               </div>
@@ -6963,9 +7092,12 @@ const BillingPage = () => {
           ) : (
             isDesktop ? (
               <div className="glass-card rounded-2xl overflow-hidden">
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm">
-                    <thead>
+                <div
+                  ref={progressBillsTableScrollRef}
+                  className={cn(BILLING_DESKTOP_LIST_SCROLL_HEIGHT_CLASS, 'overflow-y-auto overflow-x-auto')}
+                >
+                  <table className="w-full min-w-[920px] text-sm">
+                    <thead className="sticky top-0 z-10">
                       <tr className="bg-[linear-gradient(90deg,#4B7CF3_0%,#5B8CFF_45%,#7B61FF_100%)] border-b border-white/25">
                         <th className="px-4 py-3 text-center font-semibold text-white first:rounded-tl-xl">Mark</th>
                         <th className="px-4 py-3 text-center font-semibold text-white">Buyer Name</th>
@@ -6976,56 +7108,94 @@ const BillingPage = () => {
                       </tr>
                     </thead>
                     <tbody>
-                      {filteredInProgressBills.map((b: SalesBillSummaryDTO) => {
-                        const bidsCount = getBillListBidsCount(b);
-                        const bagQuantity = getBillListBagQuantity(b);
-                        const brokerDisplay = b.buyerAsBroker
-                          ? (b.buyerName || b.buyerMark || '-')
-                          : (b.brokerName || b.brokerMark || '-');
+                      {(() => {
+                        const paddingTop = progressBillVirtualItems.length > 0 ? progressBillVirtualItems[0].start : 0;
+                        const paddingBottom =
+                          progressBillVirtualItems.length > 0
+                            ? progressBillRowVirtualizer.getTotalSize() - progressBillVirtualItems[progressBillVirtualItems.length - 1].end
+                            : 0;
                         return (
-                          <tr
-                            key={String(b.billId)}
-                            onClick={() => openBillFromList(b)}
-                            className="border-b border-border/40 hover:bg-muted/30 cursor-pointer transition-colors"
-                          >
-                            <td className="px-4 py-3 text-center text-foreground">{b.buyerMark || '-'}</td>
-                            <td className="px-4 py-3 text-center text-foreground">{b.buyerName || '-'}</td>
-                            <td className="px-4 py-3 text-center text-foreground">{brokerDisplay}</td>
-                            <td className="px-4 py-3 text-center text-foreground tabular-nums">{bidsCount}</td>
-                            <td className="px-4 py-3 text-center text-foreground tabular-nums">{roundMoney2(bagQuantity).toLocaleString()}</td>
-                            <td className="px-4 py-3 text-center text-foreground">{b.billingName || '-'}</td>
-                          </tr>
+                          <>
+                            {paddingTop > 0 && (
+                              <tr aria-hidden>
+                                <td colSpan={6} style={{ height: paddingTop, padding: 0, border: 0 }} />
+                              </tr>
+                            )}
+                            {progressBillVirtualItems.map((virtualRow) => {
+                              const b = filteredInProgressBills[virtualRow.index];
+                              if (!b) return null;
+                              const bidsCount = getBillListBidsCount(b);
+                              const bagQuantity = getBillListBagQuantity(b);
+                              const brokerDisplay = b.buyerAsBroker
+                                ? (b.buyerName || b.buyerMark || '-')
+                                : (b.brokerName || b.brokerMark || '-');
+                              return (
+                                <tr
+                                  key={virtualRow.key}
+                                  data-index={virtualRow.index}
+                                  ref={progressBillRowVirtualizer.measureElement}
+                                  onClick={() => openBillFromList(b)}
+                                  className="border-b border-border/40 hover:bg-muted/30 cursor-pointer transition-colors"
+                                >
+                                  <td className="px-4 py-3 text-center text-foreground">{b.buyerMark || '-'}</td>
+                                  <td className="px-4 py-3 text-center text-foreground">{b.buyerName || '-'}</td>
+                                  <td className="px-4 py-3 text-center text-foreground">{brokerDisplay}</td>
+                                  <td className="px-4 py-3 text-center text-foreground tabular-nums">{bidsCount}</td>
+                                  <td className="px-4 py-3 text-center text-foreground tabular-nums">{roundMoney2(bagQuantity).toLocaleString()}</td>
+                                  <td className="px-4 py-3 text-center text-foreground">{b.billingName || '-'}</td>
+                                </tr>
+                              );
+                            })}
+                            {paddingBottom > 0 && (
+                              <tr aria-hidden>
+                                <td colSpan={6} style={{ height: paddingBottom, padding: 0, border: 0 }} />
+                              </tr>
+                            )}
+                          </>
                         );
-                      })}
+                      })()}
                     </tbody>
                   </table>
+                  {savedBillsListFooter}
                 </div>
               </div>
             ) : (
-              filteredInProgressBills.map((b: SalesBillSummaryDTO, i: number) => (
-                <motion.button type="button" key={String(b.billId)}
-                  initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
-                  transition={{ delay: i * 0.03 }}
-                  onClick={() => openBillFromList(b)}
-                  className="w-full glass-card rounded-2xl p-4 text-left hover:shadow-lg transition-all">
-                  <div className="flex items-center gap-3">
-                    <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-amber-500 to-orange-500 flex items-center justify-center shadow-md flex-shrink-0">
-                      <Clock className="w-5 h-5 text-white" />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-bold text-foreground truncate">{b.billingName || b.buyerName}</p>
-                      <p className="text-xs text-muted-foreground">{b.buyerMark} · In progress</p>
-                    </div>
-                    <div className="text-right flex-shrink-0">
-                      <p className="text-sm font-bold text-foreground">₹{formatBillingInr(b.grandTotal ?? 0)}</p>
-                      <p className="text-[10px] text-muted-foreground">{new Date(b.billDate).toLocaleDateString()}</p>
-                    </div>
-                  </div>
-                </motion.button>
-              ))
+              <BillingVirtualStack
+                count={filteredInProgressBills.length}
+                estimateItemSize={86}
+                getItemKey={index => String(filteredInProgressBills[index]?.billId ?? index)}
+                onReachEnd={loadNextSavedBillsPage}
+                containerClassName="pb-24"
+                footer={savedBillsListFooter}
+              >
+                {index => {
+                  const b = filteredInProgressBills[index];
+                  if (!b) return null;
+                  return (
+                    <motion.button type="button" key={String(b.billId)}
+                      initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
+                      transition={{ delay: Math.min(index, 8) * 0.02 }}
+                      onClick={() => openBillFromList(b)}
+                      className="w-full glass-card rounded-2xl p-4 text-left hover:shadow-lg transition-all">
+                      <div className="flex items-center gap-3">
+                        <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-amber-500 to-orange-500 flex items-center justify-center shadow-md flex-shrink-0">
+                          <Clock className="w-5 h-5 text-white" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-bold text-foreground truncate">{b.billingName || b.buyerName}</p>
+                          <p className="text-xs text-muted-foreground">{b.buyerMark} · In progress</p>
+                        </div>
+                        <div className="text-right flex-shrink-0">
+                          <p className="text-sm font-bold text-foreground">₹{formatBillingInr(b.grandTotal ?? 0)}</p>
+                          <p className="text-[10px] text-muted-foreground">{new Date(b.billDate).toLocaleDateString()}</p>
+                        </div>
+                      </div>
+                    </motion.button>
+                  );
+                }}
+              </BillingVirtualStack>
             )
           )}
-          {savedBillsPagination}
           </>
         )}
 
@@ -7045,7 +7215,7 @@ const BillingPage = () => {
               <div className="glass-card rounded-2xl overflow-hidden">
                 <div
                   ref={savedBillsTableScrollRef}
-                  className="max-h-[min(72vh,840px)] overflow-y-auto overflow-x-auto"
+                  className={cn(BILLING_DESKTOP_LIST_SCROLL_HEIGHT_CLASS, 'overflow-y-auto overflow-x-auto')}
                 >
                   <div className="min-w-[1100px] text-sm" role="table" aria-label="Saved bills">
                     <div
@@ -7085,7 +7255,7 @@ const BillingPage = () => {
                       style={{ height: savedBillRowVirtualizer.getTotalSize() }}
                       role="rowgroup"
                     >
-                      {savedBillRowVirtualizer.getVirtualItems().map((virtualRow) => {
+                      {savedBillVirtualItems.map((virtualRow) => {
                         const b = filteredSavedBillsOnly[virtualRow.index];
                         if (!b) return null;
                         const bidsCount = getBillListBidsCount(b);
@@ -7132,33 +7302,46 @@ const BillingPage = () => {
                       })}
                     </div>
                   </div>
+                  <div className="min-w-[1100px]">{savedBillsListFooter}</div>
                 </div>
               </div>
             ) : (
-              filteredSavedBillsOnly.map((b: SalesBillSummaryDTO, i: number) => (
-                <motion.button type="button" key={String(b.billId)}
-                  initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
-                  transition={{ delay: i * 0.03 }}
-                  onClick={() => openBillFromList(b)}
-                  className="w-full glass-card rounded-2xl p-4 text-left hover:shadow-lg transition-all">
-                  <div className="flex items-center gap-3">
-                    <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-emerald-500 to-green-500 flex items-center justify-center shadow-md flex-shrink-0">
-                      <FileText className="w-5 h-5 text-white" />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-bold text-foreground">{b.billNumber}</p>
-                      <p className="text-xs text-muted-foreground truncate">{b.billingName} ({b.buyerMark})</p>
-                    </div>
-                    <div className="text-right">
-                      <p className="text-sm font-bold text-foreground">₹{formatBillingInr(b.grandTotal ?? 0)}</p>
-                      <p className="text-[10px] text-muted-foreground">{new Date(b.billDate).toLocaleDateString()}</p>
-                    </div>
-                  </div>
-                </motion.button>
-              ))
+              <BillingVirtualStack
+                count={filteredSavedBillsOnly.length}
+                estimateItemSize={86}
+                getItemKey={index => String(filteredSavedBillsOnly[index]?.billId ?? index)}
+                onReachEnd={loadNextSavedBillsPage}
+                containerClassName="pb-24"
+                footer={savedBillsListFooter}
+              >
+                {index => {
+                  const b = filteredSavedBillsOnly[index];
+                  if (!b) return null;
+                  return (
+                    <motion.button type="button" key={String(b.billId)}
+                      initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
+                      transition={{ delay: Math.min(index, 8) * 0.02 }}
+                      onClick={() => openBillFromList(b)}
+                      className="w-full glass-card rounded-2xl p-4 text-left hover:shadow-lg transition-all">
+                      <div className="flex items-center gap-3">
+                        <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-emerald-500 to-green-500 flex items-center justify-center shadow-md flex-shrink-0">
+                          <FileText className="w-5 h-5 text-white" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-bold text-foreground">{b.billNumber}</p>
+                          <p className="text-xs text-muted-foreground truncate">{b.billingName} ({b.buyerMark})</p>
+                        </div>
+                        <div className="text-right">
+                          <p className="text-sm font-bold text-foreground">₹{formatBillingInr(b.grandTotal ?? 0)}</p>
+                          <p className="text-[10px] text-muted-foreground">{new Date(b.billDate).toLocaleDateString()}</p>
+                        </div>
+                      </div>
+                    </motion.button>
+                  );
+                }}
+              </BillingVirtualStack>
             )
           )}
-          {savedBillsPagination}
           </>
         )}
       </div>

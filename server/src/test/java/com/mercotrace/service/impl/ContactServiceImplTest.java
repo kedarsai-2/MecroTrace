@@ -69,6 +69,29 @@ class ContactServiceImplTest {
     }
 
     @Test
+    void saveDefaultsNewTraderContactsToPortalLoginEnabled() {
+        ContactDTO dto = new ContactDTO();
+        dto.setTraderId(TRADER_ID);
+        dto.setName("Trader Contact");
+        dto.setPhone("9876543210");
+        dto.setMark("TC");
+
+        when(contactMapper.toEntity(any(ContactDTO.class))).thenAnswer(invocation -> toEntity(invocation.getArgument(0)));
+        when(contactRepository.save(any(Contact.class))).thenAnswer(invocation -> {
+            Contact contact = invocation.getArgument(0);
+            contact.setId(99L);
+            return contact;
+        });
+
+        ContactDTO saved = contactService.save(dto);
+
+        assertThat(saved.getCanLogin()).isTrue();
+        ArgumentCaptor<Contact> contactCaptor = ArgumentCaptor.forClass(Contact.class);
+        verify(contactRepository).save(contactCaptor.capture());
+        assertThat(contactCaptor.getValue().getCanLogin()).isTrue();
+    }
+
+    @Test
     void listRegistry_batchesPortalLinkedContactsAndPreservesDedupeRules() {
         Contact traderOwned = contact(1L, TRADER_ID, "Trader Owned", "9876543210", "TO");
         Contact linkedUnique = contact(2L, null, "Portal Unique", "9876543211", "PU");
@@ -97,6 +120,30 @@ class ContactServiceImplTest {
         verify(contactRepository, never()).findById(any());
     }
 
+    @Test
+    void listParticipantsUsesRegistryScopeWithoutLoadingUnlinkedPortalContacts() {
+        Contact traderOwned = contact(1L, TRADER_ID, "Trader Owned", "9876543210", "TO");
+
+        when(contactRepository.findAllByTraderIdAndActiveTrue(TRADER_ID)).thenReturn(List.of(traderOwned));
+        when(traderPortalContactLinkRepository.findAllByTraderIdOrderByLinkedAtDesc(TRADER_ID)).thenReturn(List.of());
+
+        List<ContactDTO> result = contactService.listContacts(TRADER_ID, ContactListScope.PARTICIPANTS);
+
+        assertThat(result).extracting(ContactDTO::getId).containsExactly(1L);
+    }
+
+    @Test
+    void searchParticipantsUsesRegistryScopeWithoutSearchingUnlinkedPortalContacts() {
+        Contact traderOwned = contact(1L, TRADER_ID, "Trader Owned", "9876543210", "TO");
+
+        when(contactRepository.findAllByTraderIdAndActiveTrue(TRADER_ID)).thenReturn(List.of(traderOwned));
+        when(traderPortalContactLinkRepository.findAllByTraderIdOrderByLinkedAtDesc(TRADER_ID)).thenReturn(List.of());
+
+        List<ContactDTO> result = contactService.searchParticipants(TRADER_ID, "trader", 50);
+
+        assertThat(result).extracting(ContactDTO::getId).containsExactly(1L);
+    }
+
     private static Contact contact(Long id, Long traderId, String name, String phone, String mark) {
         Contact contact = new Contact();
         contact.setId(id);
@@ -122,6 +169,21 @@ class ContactServiceImplTest {
         dto.setName(contact.getName());
         dto.setPhone(contact.getPhone());
         dto.setMark(contact.getMark());
+        dto.setCanLogin(contact.getCanLogin());
         return dto;
+    }
+
+    private static Contact toEntity(ContactDTO dto) {
+        Contact contact = new Contact();
+        contact.setId(dto.getId());
+        contact.setTraderId(dto.getTraderId());
+        contact.setName(dto.getName());
+        contact.setPhone(dto.getPhone());
+        contact.setMark(dto.getMark());
+        contact.setOpeningBalance(dto.getOpeningBalance());
+        contact.setCurrentBalance(dto.getCurrentBalance());
+        contact.setCanLogin(dto.getCanLogin());
+        contact.setActive(dto.getActive());
+        return contact;
     }
 }

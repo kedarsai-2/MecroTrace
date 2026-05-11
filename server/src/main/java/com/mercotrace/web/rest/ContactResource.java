@@ -170,6 +170,9 @@ public class ContactResource {
         assertTraderMayEditContactRegistry(traderId, existingDto);
 
         contactDTO.setTraderId(traderId);
+        if (contactDTO.getCanLogin() == null) {
+            contactDTO.setCanLogin(existingDto.getCanLogin());
+        }
 
         // Enforce global mobile uniqueness across trader owner, trader staff and contacts (exclude current contact)
         contactIdentityService.assertMobileAvailableForContact(contactDTO.getPhone(), id);
@@ -266,7 +269,7 @@ public class ContactResource {
      * {@code GET  /contacts} : contacts for the current trader.
      *
      * @param scope {@code registry} (Contacts module: trader-owned + portal participants already used here) or
-     *              {@code participants} (Arrivals/Auctions: trader-owned + all active self-signup contacts).
+     *              {@code participants} (picker-compatible alias that still excludes unimported portal/global contacts).
      */
     @GetMapping("")
     @PreAuthorize("hasAuthority(\"" + AuthoritiesConstants.CONTACTS_VIEW + "\")")
@@ -298,7 +301,7 @@ public class ContactResource {
     }
 
     /**
-     * {@code GET /contacts/participants/search} : bounded participant lookup for latency-sensitive pickers.
+     * {@code GET /contacts/participants/search} : bounded registry lookup for latency-sensitive pickers.
      */
     @GetMapping("/participants/search")
     @PreAuthorize("hasAuthority(\"" + AuthoritiesConstants.CONTACTS_VIEW + "\")")
@@ -326,6 +329,62 @@ public class ContactResource {
         Long traderId = resolveTraderId();
         Optional<ContactDTO> contactDTO = contactService.findOneByTraderIdAndPhone(traderId, phone);
         return ResponseUtil.wrapOrNotFound(contactDTO);
+    }
+
+    /**
+     * {@code POST /contacts/:id/import} : map an existing portal/global contact into the current trader registry.
+     */
+    @PostMapping("/{id}/import")
+    @PreAuthorize("hasAuthority(\"" + AuthoritiesConstants.CONTACTS_CREATE + "\")")
+    public ResponseEntity<ContactDTO> importPortalContact(@PathVariable("id") Long id) {
+        LOG.debug("REST request to import portal Contact : {}", id);
+        Long traderId = resolveTraderId();
+        Optional<com.mercotrace.domain.Contact> existing = contactRepository.findById(id);
+        if (existing.isEmpty()) {
+            return ResponseEntity.notFound().build();
+        }
+        com.mercotrace.domain.Contact contact = existing.get();
+        if (Boolean.FALSE.equals(contact.getActive())) {
+            return ResponseEntity.notFound().build();
+        }
+        if (contact.getTraderId() != null && !Objects.equals(contact.getTraderId(), traderId)) {
+            return ResponseEntity.notFound().build();
+        }
+        contactService.ensureTraderUsesPortalContact(traderId, id);
+        Optional<ContactDTO> contactDTO = contactService.findOne(id).filter(dto -> isReadableParticipantContact(dto, traderId));
+        if (contactDTO.isEmpty()) {
+            return ResponseEntity.notFound().build();
+        }
+        ContactDTO dto = contactDTO.get();
+        dto.setPortalSignupLinked(dto.getTraderId() == null);
+        return ResponseEntity.ok().body(dto);
+    }
+
+    /**
+     * {@code POST /contacts/import-by-phone} : exact-phone import for registration flows.
+     */
+    @PostMapping("/import-by-phone")
+    @PreAuthorize("hasAuthority(\"" + AuthoritiesConstants.CONTACTS_CREATE + "\")")
+    public ResponseEntity<ContactDTO> importPortalContactByPhone(@RequestParam("phone") String phone) {
+        Long traderId = resolveTraderId();
+        String normalizedPhone = contactIdentityService.normalizePhoneOrThrow(phone);
+        LOG.debug("REST request to import portal Contact by phone. traderId={}, phone={}", traderId, normalizedPhone);
+        Optional<com.mercotrace.domain.Contact> existing = contactRepository.findOneByPhoneAndActiveTrue(normalizedPhone);
+        if (existing.isEmpty()) {
+            return ResponseEntity.notFound().build();
+        }
+        com.mercotrace.domain.Contact contact = existing.get();
+        if (contact.getTraderId() != null && !Objects.equals(contact.getTraderId(), traderId)) {
+            return ResponseEntity.notFound().build();
+        }
+        contactService.ensureTraderUsesPortalContact(traderId, contact.getId());
+        Optional<ContactDTO> contactDTO = contactService.findOne(contact.getId()).filter(dto -> isReadableParticipantContact(dto, traderId));
+        if (contactDTO.isEmpty()) {
+            return ResponseEntity.notFound().build();
+        }
+        ContactDTO dto = contactDTO.get();
+        dto.setPortalSignupLinked(dto.getTraderId() == null);
+        return ResponseEntity.ok().body(dto);
     }
 
     /**
@@ -365,7 +424,7 @@ public class ContactResource {
         return traderContextService.getCurrentTraderId();
     }
 
-    /** Trader-owned contacts, plus self-registered (traderId null) participants visible in lists and flows. */
+    /** Trader-owned contacts, plus self-registered (traderId null) participants that may be imported by exact match. */
     private boolean isReadableParticipantContact(ContactDTO dto, Long traderId) {
         if (dto == null || traderId == null) {
             return false;

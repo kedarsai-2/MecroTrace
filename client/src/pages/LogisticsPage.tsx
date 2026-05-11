@@ -815,7 +815,7 @@ const LogisticsPage = () => {
     const q = extractQuery.trim();
     setExtractParticipantSearchLoading(true);
     const t = window.setTimeout(() => {
-      void contactApi.searchParticipants(q, { limit: 50 }).then((c) => {
+      void contactApi.searchRegistry(q, { limit: 50 }).then((c) => {
         if (extractSearchGenRef.current !== myGen) return;
         setExtractParticipantHits(c);
         setExtractParticipantSearchQuery(q);
@@ -1336,7 +1336,8 @@ const LogisticsPage = () => {
         return;
       }
     } else {
-      const m = extractQuery.trim().toUpperCase().slice(0, MAX_MARK_LEN);
+      const rawQuery = extractQuery.trim();
+      const m = rawQuery.toUpperCase().slice(0, MAX_MARK_LEN);
       if (!m) {
         toast.error('Select a buyer from the list or enter a new mark');
         return;
@@ -1381,19 +1382,34 @@ const LogisticsPage = () => {
             buyerId: parseContactIdForAuction(contactHit.contact_id),
           };
         } else {
-          const markUsedOnAnyBid = bids.some(b => (b.buyerMark || '').trim().toLowerCase() === norm);
-          const markInTemps = extractTempMarks.some(t => t.trim().toLowerCase() === norm);
-          const markInContacts = extractParticipantHits.some((c) => {
-            const { buyerMark: bm } = contactMarkOrName(c);
-            return bm.trim().toLowerCase() === norm;
-          });
-          if (markUsedOnAnyBid || markInTemps || markInContacts) {
-            toast.error(
-              'This mark already exists. Pick the matching buyer, temp mark, or contact in the list to merge, or enter an unused mark.',
-            );
-            return;
+          const importedByPhone = await contactApi.importPortalContactByPhone(rawQuery);
+          if (importedByPhone) {
+            const { buyerMark: bm, buyerName: bn } = contactMarkOrName(importedByPhone);
+            target = {
+              buyerMark: bm,
+              buyerName: bn,
+              buyerId: parseContactIdForAuction(importedByPhone.contact_id),
+            };
+            if (sameLogisticsBuyer(target, source)) {
+              toast.error('Cannot extract to the same buyer');
+              return;
+            }
+            toast.success('This mobile belongs to a global contact. Imported to your contact list.');
+          } else {
+            const markUsedOnAnyBid = bids.some(b => (b.buyerMark || '').trim().toLowerCase() === norm);
+            const markInTemps = extractTempMarks.some(t => t.trim().toLowerCase() === norm);
+            const markInContacts = extractParticipantHits.some((c) => {
+              const { buyerMark: bm } = contactMarkOrName(c);
+              return bm.trim().toLowerCase() === norm;
+            });
+            if (markUsedOnAnyBid || markInTemps || markInContacts) {
+              toast.error(
+                'This mark already exists. Pick the matching buyer, temp mark, or contact in the list to merge, or enter an unused mark.',
+              );
+              return;
+            }
+            target = { buyerMark: m, buyerName: m, buyerId: null };
           }
-          target = { buyerMark: m, buyerName: m, buyerId: null };
         }
       }
     }

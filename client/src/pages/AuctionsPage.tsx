@@ -2936,7 +2936,7 @@ const AuctionsPage = () => {
   useEffect(() => {
     if (!canView) return;
     contactApi
-      .searchParticipants('', { limit: AUCTION_BUYER_SUGGESTION_LIMIT })
+      .searchRegistry('', { limit: AUCTION_BUYER_SUGGESTION_LIMIT })
       .then((contacts) => setBuyers(contacts))
       .catch(() => setBuyers([]));
     loadTemporaryBuyerMarks();
@@ -2966,7 +2966,7 @@ const AuctionsPage = () => {
       const startedAt = performance.now();
       setBuyerSearchLoading(true);
       contactApi
-        .searchParticipants(query, { limit: AUCTION_BUYER_SUGGESTION_LIMIT })
+        .searchRegistry(query, { limit: AUCTION_BUYER_SUGGESTION_LIMIT })
         .then((contacts) => {
           if (buyerSearchGenRef.current !== myGen) return;
           setBuyers((prev) => mergeAuctionContacts(prev, contacts));

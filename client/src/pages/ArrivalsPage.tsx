@@ -1689,7 +1689,7 @@ const ArrivalsPage = () => {
   const loadArrivalFormReferenceData = useCallback(async () => {
     if (formReferenceDataLoadRef.current) return formReferenceDataLoadRef.current;
     const promise = Promise.all([
-      contactApi.list({ scope: 'participants' }),
+      contactApi.list({ scope: 'registry' }),
       commodityApi.list(),
       commodityApi.getAllFullConfigs(),
     ])
@@ -2212,7 +2212,7 @@ const ArrivalsPage = () => {
 
   const loadContactsFromApi = useCallback(async () => {
     try {
-      const loaded = await contactApi.list({ scope: 'participants' });
+      const loaded = await contactApi.list({ scope: 'registry' });
       setContacts(loaded);
     } catch (err) {
       console.error('Failed to reload contacts:', err);

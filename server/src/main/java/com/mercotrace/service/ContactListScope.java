@@ -6,6 +6,6 @@ package com.mercotrace.service;
 public enum ContactListScope {
     /** Contacts registry: trader-owned plus portal participants already used by this trader. */
     REGISTRY,
-    /** Arrival / auction picker: trader-owned plus all active self-signup (portal) contacts. */
+    /** Picker-safe contact list: same registry scope, excluding unimported portal/global contacts. */
     PARTICIPANTS,
 }
