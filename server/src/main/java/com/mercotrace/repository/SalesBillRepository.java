@@ -47,6 +47,17 @@ public interface SalesBillRepository extends JpaRepository<SalesBill, Long> {
 
     Page<SalesBill> findAllByTraderId(Long traderId, Pageable pageable);
 
+    /**
+     * Lightweight tuples for billed bid/lot reservations (Buyer Operations exclusions).
+     * One row per line item across all bills for {@code traderId}.
+     */
+    @Query(
+        "SELECT s.id, s.billNumber, s.lockedAt, s.reopenedAt, li.bidNumber, li.lotId, li.lotName " +
+            "FROM SalesBillLineItem li JOIN li.commodityGroup cg JOIN cg.salesBill s " +
+            "WHERE s.traderId = :traderId"
+    )
+    List<Object[]> findReservedBidRowTuples(@Param("traderId") Long traderId);
+
     @Query("SELECT s FROM SalesBill s WHERE s.traderId = :traderId " +
            "AND (:billNumber IS NULL OR :billNumber = '' OR LOWER(s.billNumber) LIKE LOWER(CONCAT('%', :billNumber, '%'))) " +
            "AND (:buyerName IS NULL OR :buyerName = '' OR LOWER(s.buyerName) LIKE LOWER(CONCAT('%', :buyerName, '%')) OR LOWER(s.buyerMark) LIKE LOWER(CONCAT('%', :buyerName, '%')) OR LOWER(s.billingName) LIKE LOWER(CONCAT('%', :buyerName, '%'))) " +

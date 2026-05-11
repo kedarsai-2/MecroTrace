@@ -198,6 +198,72 @@ public final class SalesBillDTOs {
         public void setData(Object data) { this.data = data; }
     }
 
+    /**
+     * One billed line projected for Buyer Operations reserved-bid detection (minimal payload vs full SalesBillDTO).
+     */
+    public static class SalesBillReservedBidRowDTO implements Serializable {
+
+        /** Sales bill PK as string — matches BillingPage bill id. */
+        private String billId;
+        /** Assigned bill number — blank/absent means in progress. */
+        private String billNumber;
+        /** IN_PROGRESS | NUMBERED | FROZEN */
+        private String status;
+        private Integer bidNumber;
+        /** Auction lot key when present — preferred reservation key segment. */
+        private String lotId;
+        /** Legacy fallback reservation key segment when {@code lotId} is absent. */
+        private String lotName;
+
+        public String getBillId() {
+            return billId;
+        }
+
+        public void setBillId(String billId) {
+            this.billId = billId;
+        }
+
+        public String getBillNumber() {
+            return billNumber;
+        }
+
+        public void setBillNumber(String billNumber) {
+            this.billNumber = billNumber;
+        }
+
+        public String getStatus() {
+            return status;
+        }
+
+        public void setStatus(String status) {
+            this.status = status;
+        }
+
+        public Integer getBidNumber() {
+            return bidNumber;
+        }
+
+        public void setBidNumber(Integer bidNumber) {
+            this.bidNumber = bidNumber;
+        }
+
+        public String getLotId() {
+            return lotId;
+        }
+
+        public void setLotId(String lotId) {
+            this.lotId = lotId;
+        }
+
+        public String getLotName() {
+            return lotName;
+        }
+
+        public void setLotName(String lotName) {
+            this.lotName = lotName;
+        }
+    }
+
     /** Full bill (BillData). Frontend expects billId as string (we use id). */
     public static class SalesBillDTO implements Serializable {
         @JsonProperty("billId")

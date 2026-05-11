@@ -28,6 +28,7 @@ import com.mercotrace.service.dto.SalesBillDTOs.BillLineItemDTO;
 import com.mercotrace.service.dto.SalesBillDTOs.CommodityGroupDTO;
 import com.mercotrace.service.dto.SalesBillDTOs.SalesBillCreateOrUpdateRequest;
 import com.mercotrace.service.dto.SalesBillDTOs.SalesBillDTO;
+import com.mercotrace.service.dto.SalesBillDTOs.SalesBillReservedBidRowDTO;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
@@ -435,6 +436,36 @@ class SalesBillServiceImplTest {
         ArgumentCaptor<BillNumberSequence> cap = ArgumentCaptor.forClass(BillNumberSequence.class);
         verify(billNumberSequenceRepository).save(cap.capture());
         assertThat(cap.getValue().getNextValue()).isEqualTo(778L);
+    }
+
+    @Test
+    void listReservedBidRows_mapsTuplesAndDerivesStatus() {
+        when(traderContextService.getCurrentTraderId()).thenReturn(TRADER_ID);
+        Instant lockedAt = Instant.parse("2026-05-01T10:15:30Z");
+
+        Object[] frozen = new Object[] { 900L, "MT-01111", lockedAt, null, 101, " lot-a ", null };
+        Object[] draft = new Object[] { 901L, null, null, null, 7, null, "  Bag Lot  " };
+        Instant reopenedAt = Instant.parse("2026-05-02T09:00:00Z");
+        Object[] reopened = new Object[] { 902L, "MT-01112", lockedAt, reopenedAt, 3, "", "Legacy" };
+
+        when(salesBillRepository.findReservedBidRowTuples(TRADER_ID)).thenReturn(List.of(frozen, draft, reopened));
+
+        List<SalesBillReservedBidRowDTO> rows = service.listReservedBidRows();
+
+        assertThat(rows).hasSize(3);
+
+        assertThat(rows.get(0).getBillId()).isEqualTo("900");
+        assertThat(rows.get(0).getLotId()).isEqualTo("lot-a");
+        assertThat(rows.get(0).getStatus()).isEqualTo("FROZEN");
+        assertThat(rows.get(0).getBidNumber()).isEqualTo(101);
+
+        assertThat(rows.get(1).getStatus()).isEqualTo("IN_PROGRESS");
+        assertThat(rows.get(1).getBillNumber()).isNull();
+
+        assertThat(rows.get(2).getStatus()).isEqualTo("NUMBERED");
+        assertThat(rows.get(2).getLotName()).isEqualTo("Legacy");
+
+        verify(salesBillRepository).findReservedBidRowTuples(TRADER_ID);
     }
 }
 

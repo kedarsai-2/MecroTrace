@@ -4,10 +4,12 @@ import com.mercotrace.security.AuthoritiesConstants;
 import com.mercotrace.service.SalesBillService;
 import com.mercotrace.service.dto.SalesBillDTOs.SalesBillCreateOrUpdateRequest;
 import com.mercotrace.service.dto.SalesBillDTOs.SalesBillDTO;
+import com.mercotrace.service.dto.SalesBillDTOs.SalesBillReservedBidRowDTO;
 import com.mercotrace.web.rest.errors.BadRequestAlertException;
 import jakarta.validation.Valid;
 import java.net.URI;
 import java.time.Instant;
+import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -61,6 +63,17 @@ public class SalesBillResource {
         Page<SalesBillDTO> page = salesBillService.getBills(pageable, billNumber, buyerName, dateFrom, dateTo);
         HttpHeaders headers = PaginationUtil.generatePaginationHttpHeaders(ServletUriComponentsBuilder.fromCurrentRequest(), page);
         return ResponseEntity.ok().headers(headers).body(page);
+    }
+
+    /**
+     * {@code GET /api/sales-bills/reserved-bids} : Lightweight billed bid/lot rows for Buyer Operations exclusions.
+     */
+    @GetMapping("/reserved-bids")
+    @PreAuthorize("hasAuthority(\"" + AuthoritiesConstants.BILLING_VIEW + "\")")
+    public ResponseEntity<List<SalesBillReservedBidRowDTO>> listReservedBidsForTrader() {
+        LOG.debug("REST request to list billed bid reservations");
+        List<SalesBillReservedBidRowDTO> rows = salesBillService.listReservedBidRows();
+        return ResponseEntity.ok(rows);
     }
 
     /**

@@ -1,4 +1,4 @@
-import { useState, useEffect, useLayoutEffect, useMemo, useCallback, useRef } from 'react';
+import { useState, useEffect, useLayoutEffect, useMemo, useCallback, useRef, useDeferredValue } from 'react';
 import { useVirtualizer, measureElement } from '@tanstack/react-virtual';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
@@ -25,7 +25,6 @@ import {
   printLogApi,
   printSettingsApi,
   parsePrintCopiesJson,
-  weighingApi,
   billingApi,
   arrivalsApi,
   contactApi,
@@ -47,7 +46,7 @@ import { ConfirmDeleteDialog } from '@/components/ConfirmDeleteDialog';
 import { usePermissions } from '@/lib/permissions';
 import useUnsavedChangesGuard from '@/hooks/useUnsavedChangesGuard';
 import type { FullCommodityConfigDto } from '@/services/api/commodities';
-import type { SalesBillDTO } from '@/services/api/billing';
+import type { SalesBillDTO, SalesBillReservedBidRowDTO } from '@/services/api/billing';
 import type { ArrivalDetail } from '@/services/api/arrivals';
 import { directPrint } from '@/utils/printTemplates';
 import {
@@ -335,27 +334,22 @@ function billingBuyerDisplayLine(b: { buyerName?: string; buyerMark?: string }):
 }
 
 /**
- * Line keys already used on another sales bill (draft in progress or numbered).
- * Excludes the bill currently open for edit so its own lines stay available.
+ * Reserved keys from lightweight `/reserved-bids` rows (Buyer Operations exclusions).
  */
-function collectReservedBidKeysFromSalesBills(
-  bills: SalesBillDTO[],
+function collectReservedBidKeysFromReservationRows(
+  rows: SalesBillReservedBidRowDTO[],
   excludeBackendBillId: string | null,
 ): Set<string> {
   const set = new Set<string>();
-  for (const b of bills) {
-    if (excludeBackendBillId && String(b.billId) === excludeBackendBillId) continue;
-    for (const g of b.commodityGroups || []) {
-      for (const it of g.items || []) {
-        const bid = Number(it.bidNumber);
-        if (!Number.isFinite(bid)) continue;
-        const lotId = (it.lotId != null && String(it.lotId).trim() !== '' ? String(it.lotId).trim() : '');
-        if (lotId) {
-          set.add(`${bid}::${lotId}`);
-        } else {
-          set.add(`legacy::${bid}::${normalizeLotNameKey(it.lotName || '')}`);
-        }
-      }
+  for (const row of rows) {
+    if (excludeBackendBillId && String(row.billId) === excludeBackendBillId) continue;
+    const bid = Number(row.bidNumber);
+    if (!Number.isFinite(bid)) continue;
+    const lotId = row.lotId != null && String(row.lotId).trim() !== '' ? String(row.lotId).trim() : '';
+    if (lotId) {
+      set.add(`${bid}::${lotId}`);
+    } else {
+      set.add(`legacy::${bid}::${normalizeLotNameKey(row.lotName ?? '')}`);
     }
   }
   return set;
@@ -959,10 +953,10 @@ function billHasAnyLineWeightZeroOrMissing(b: BillData): boolean {
 const BILLING_SAVED_BILLS_PAGE_SIZE = 100;
 const BILLING_SAVED_BILLS_FETCH_CONCURRENCY = 4;
 const BILLING_FOCUS_RESYNC_MIN_INTERVAL_MS = 60_000;
+const BILLING_BUYER_OPTION_RENDER_LIMIT = 120;
 /** Desktop saved-bills list: column ratios (ex-<colgroup>). Grid avoids broken thead/body sync when rows are `position:absolute` (virtualizer). */
 const SAVED_BILLS_TABLE_GRID_COLS =
   'minmax(0,10fr) minmax(0,12fr) minmax(0,11fr) minmax(0,8fr) minmax(0,10fr) minmax(0,9fr) minmax(0,9fr) minmax(0,10fr) minmax(0,9fr) minmax(0,12fr)';
-const BILLING_WEIGHING_PAGE_SIZE = 100;
 const BILLING_ARRIVAL_DETAILS_PAGE_SIZE = 200;
 const BILLING_ARRIVAL_DETAILS_FETCH_CONCURRENCY = 4;
 /** Sales Pad–aligned lot page size for add-bid browser (`id,asc`). */
@@ -973,24 +967,6 @@ function isAbortError(e: unknown): boolean {
     (typeof DOMException !== 'undefined' && e instanceof DOMException && e.name === 'AbortError') ||
     (e instanceof Error && e.name === 'AbortError')
   );
-}
-
-async function fetchAllWeighingSessions(signal?: AbortSignal): Promise<Awaited<ReturnType<typeof weighingApi.list>>> {
-  const merged: Awaited<ReturnType<typeof weighingApi.list>> = [];
-  let page = 0;
-  let totalElements = Infinity;
-  for (;;) {
-    const { items, totalElements: tot } = await weighingApi.listPage(
-      { page, size: BILLING_WEIGHING_PAGE_SIZE },
-      signal ? { signal } : undefined,
-    );
-    totalElements = tot;
-    merged.push(...items);
-    if (items.length < BILLING_WEIGHING_PAGE_SIZE || merged.length >= totalElements) break;
-    page += 1;
-    if (page > 500) break;
-  }
-  return merged;
 }
 
 async function fetchRemainingPages<T>(
@@ -1105,14 +1081,18 @@ const BillingPage = () => {
   const [activeCommoditySlide, setActiveCommoditySlide] = useState(0);
   const [activeLotSlides, setActiveLotSlides] = useState<Record<number, number>>({});
   const [savedBills, setSavedBills] = useState<SalesBillDTO[]>([]);
-  const [savedBillsLoading, setSavedBillsLoading] = useState(false);
+  const [savedBillsFirstFetchSettled, setSavedBillsFirstFetchSettled] = useState(false);
+  const [savedBillsSyncingRemainder, setSavedBillsSyncingRemainder] = useState(false);
   const savedBillsLoadSeqRef = useRef(0);
+  const savedBillsLoadRequestedRef = useRef(false);
+  const [reservedBidReservationRows, setReservedBidReservationRows] = useState<SalesBillReservedBidRowDTO[]>([]);
+  const [reservedBidsHydrated, setReservedBidsHydrated] = useState(false);
+  const reservedBidsLoadSeqRef = useRef(0);
   const lastBillingFocusResyncAtRef = useRef(Date.now());
   const [billPersisting, setBillPersisting] = useState(false);
   const persistBillPromiseRef = useRef<Promise<SalesBillDTO | null> | null>(null);
   const [commodities, setCommodities] = useState<any[]>([]);
   const [fullConfigs, setFullConfigs] = useState<FullCommodityConfigDto[]>([]);
-  const [weighingSessions, setWeighingSessions] = useState<any[]>([]);
   const [arrivalDetails, setArrivalDetails] = useState<ArrivalDetail[]>([]);
   const arrivalDetailsLoadSeqRef = useRef(0);
   const [collapsedCommodityIndexes, setCollapsedCommodityIndexes] = useState<number[]>([]);
@@ -1284,9 +1264,10 @@ const BillingPage = () => {
   const {
     auctionResults: auctionData,
     refetch: refetchAuctions,
-    resultsComplete: auctionResultsComplete,
+    loading: auctionResultsBootstrapping,
+    loadingMore: auctionResultsLoadingMore,
     error: auctionResultsError,
-  } = useAuctionResults();
+  } = useAuctionResults({ initialPageSize: 30 });
 
   // Precompute per-commodity average weight bounds from full config (minWeight/maxWeight).
   const commodityAvgWeightBounds = useMemo(() => {
@@ -1477,6 +1458,8 @@ const BillingPage = () => {
   const [showSearchBidBuyerSuggestions, setShowSearchBidBuyerSuggestions] = useState(false);
   const searchBidBuyerSelectRef = useRef<HTMLDivElement | null>(null);
   const searchBidInputRef = useRef<HTMLInputElement | null>(null);
+  const deferredBuyerBidMarkInput = useDeferredValue(buyerBidMarkInput);
+  const deferredSearchBidInput = useDeferredValue(searchBidInput);
   const versionTriggerRef = useRef<HTMLButtonElement | null>(null);
   const openPrintPreviewRef = useRef<() => void>(() => {});
   const [pendingDeleteTarget, setPendingDeleteTarget] = useState<{ commIdx: number; itemIdx: number } | null>(null);
@@ -1500,21 +1483,6 @@ const BillingPage = () => {
       latestVersionSnapshotRef.current = bill;
     }
   }, [bill, selectedPrintVersion]);
-
-  useEffect(() => {
-    if (!canView) return;
-    let cancelled = false;
-    void fetchAllWeighingSessions()
-      .then((list) => {
-        if (!cancelled) setWeighingSessions(list);
-      })
-      .catch(() => {
-        if (!cancelled) setWeighingSessions([]);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [canView]);
 
   useEffect(() => {
     if (!canView || !addBidDialogOpen) return;
@@ -1617,44 +1585,108 @@ const BillingPage = () => {
     return Math.max(0, addBidRemainingQty - q);
   }, [addBidSelectedLot, addBidQty, addBidRemainingQty]);
 
-  // Load saved bills from backend (all pages; no 200 cap)
-  const loadSavedBills = useCallback(async () => {
+  const loadReservedBidReservations = useCallback(async () => {
     if (!canView) return;
-    const seq = savedBillsLoadSeqRef.current + 1;
-    savedBillsLoadSeqRef.current = seq;
-    setSavedBillsLoading(true);
+    const seq = reservedBidsLoadSeqRef.current + 1;
+    reservedBidsLoadSeqRef.current = seq;
     try {
-      const first = await billingApi.getPage({
-        page: 0,
-        size: BILLING_SAVED_BILLS_PAGE_SIZE,
-        sort: 'billDate,desc',
-      });
-      const totalElements = Number(first.totalElements ?? first.content?.length ?? 0);
-      const merged = await fetchRemainingPages<SalesBillDTO>(
-        first.content ?? [],
-        totalElements,
-        BILLING_SAVED_BILLS_PAGE_SIZE,
-        BILLING_SAVED_BILLS_FETCH_CONCURRENCY,
-        async page => {
-          const batch = await billingApi.getPage({
-            page,
-            size: BILLING_SAVED_BILLS_PAGE_SIZE,
-            sort: 'billDate,desc',
-          });
-          return batch.content ?? [];
-        },
-      );
-      if (savedBillsLoadSeqRef.current === seq) {
-        setSavedBills(merged);
+      const rows = await billingApi.getReservedBids();
+      if (reservedBidsLoadSeqRef.current === seq) {
+        setReservedBidReservationRows(rows);
       }
     } catch {
-      /* Keep prior savedBills so reserved-bid keys do not disappear after transient API failure. */
+      toast.warning(
+        'Could not refresh billed bid reservations. Exclusions may be incomplete until Billing refresh succeeds.',
+      );
     } finally {
-      if (savedBillsLoadSeqRef.current === seq) {
-        setSavedBillsLoading(false);
+      if (reservedBidsLoadSeqRef.current === seq) {
+        setReservedBidsHydrated(true);
       }
     }
   }, [canView]);
+
+  const loadSavedBills = useCallback(
+    async (opts?: { keepExistingDuringRefetch?: boolean }) => {
+      if (!canView) return;
+      const keepExisting = opts?.keepExistingDuringRefetch ?? false;
+      const seq = savedBillsLoadSeqRef.current + 1;
+      savedBillsLoadSeqRef.current = seq;
+      savedBillsLoadRequestedRef.current = true;
+
+      const clearRemainderSync = () => {
+        if (savedBillsLoadSeqRef.current === seq) setSavedBillsSyncingRemainder(false);
+      };
+
+      if (!keepExisting) {
+        setSavedBillsFirstFetchSettled(false);
+      }
+
+      try {
+        const first = await billingApi.getPage({
+          page: 0,
+          size: BILLING_SAVED_BILLS_PAGE_SIZE,
+          sort: 'billDate,desc',
+        });
+        if (savedBillsLoadSeqRef.current !== seq) return;
+
+        const totalElements = Number(first.totalElements ?? first.content?.length ?? 0);
+        const firstItems = [...(first.content ?? [])];
+        const totalPages = Math.ceil(
+          Math.max(totalElements, firstItems.length) / BILLING_SAVED_BILLS_PAGE_SIZE,
+        );
+
+        if (!keepExisting) {
+          setSavedBills(firstItems);
+          setSavedBillsFirstFetchSettled(true);
+        }
+
+        if (totalPages <= 1) {
+          if (keepExisting && savedBillsLoadSeqRef.current === seq) {
+            setSavedBills(firstItems);
+          }
+          clearRemainderSync();
+          return;
+        }
+
+        setSavedBillsSyncingRemainder(true);
+        try {
+          const mergedFull = await fetchRemainingPages<SalesBillDTO>(
+            [...firstItems],
+            totalElements,
+            BILLING_SAVED_BILLS_PAGE_SIZE,
+            BILLING_SAVED_BILLS_FETCH_CONCURRENCY,
+            async page => {
+              const batch = await billingApi.getPage({
+                page,
+                size: BILLING_SAVED_BILLS_PAGE_SIZE,
+                sort: 'billDate,desc',
+              });
+              return batch.content ?? [];
+            },
+          );
+          if (savedBillsLoadSeqRef.current === seq) {
+            setSavedBills(mergedFull);
+          }
+          if (keepExisting && savedBillsLoadSeqRef.current === seq) {
+            setSavedBillsFirstFetchSettled(true);
+          }
+        } finally {
+          clearRemainderSync();
+        }
+      } catch {
+        if (!keepExisting && savedBillsLoadSeqRef.current === seq) {
+          setSavedBillsFirstFetchSettled(true);
+        }
+        clearRemainderSync();
+      }
+    },
+    [canView],
+  );
+
+  const refreshBillingCachesAfterMutation = useCallback(() => {
+    void loadReservedBidReservations();
+    void loadSavedBills();
+  }, [loadReservedBidReservations, loadSavedBills]);
 
   const reloadArrivalDetails = useCallback(async () => {
     const first = await arrivalsApi.listDetailPage({
@@ -1679,8 +1711,15 @@ const BillingPage = () => {
 
   useEffect(() => {
     if (!canView) return;
+    void loadReservedBidReservations();
+  }, [canView, loadReservedBidReservations]);
+
+  useEffect(() => {
+    if (!canView) return;
+    if (billingMainTab !== 'progress' && billingMainTab !== 'saved') return;
+    if (savedBillsLoadRequestedRef.current) return;
     void loadSavedBills();
-  }, [canView, loadSavedBills]);
+  }, [canView, billingMainTab, loadSavedBills]);
 
   /** After idle tab / failed refresh, auction pages or saved bills can be stale; resync without blanking list. */
   useEffect(() => {
@@ -1690,7 +1729,10 @@ const BillingPage = () => {
       if (now - lastBillingFocusResyncAtRef.current < BILLING_FOCUS_RESYNC_MIN_INTERVAL_MS) return;
       lastBillingFocusResyncAtRef.current = now;
       void refetchAuctions({ keepPreviousData: true });
-      void loadSavedBills();
+      void loadReservedBidReservations();
+      if (savedBillsLoadRequestedRef.current || billingMainTabRef.current !== 'create') {
+        void loadSavedBills({ keepExistingDuringRefetch: true });
+      }
     };
     const onVisible = () => {
       if (document.visibilityState !== 'visible') return;
@@ -1705,11 +1747,11 @@ const BillingPage = () => {
       document.removeEventListener('visibilitychange', onVisible);
       window.removeEventListener('focus', onWinFocus);
     };
-  }, [canView, refetchAuctions, loadSavedBills]);
+  }, [canView, refetchAuctions, loadSavedBills, loadReservedBidReservations]);
 
   const arrivalDetailsNeeded = useMemo(
     () =>
-      auctionResultsComplete &&
+      auctionData.length > 0 &&
       auctionData.some(
         auction =>
           !String(auction.sellerName ?? '').trim() ||
@@ -1717,7 +1759,7 @@ const BillingPage = () => {
           !String(auction.vehicleMark ?? '').trim() ||
           !String(auction.sellerMark ?? '').trim(),
       ),
-    [auctionData, auctionResultsComplete],
+    [auctionData],
   );
 
   useEffect(() => {
@@ -1746,7 +1788,7 @@ const BillingPage = () => {
         refetchAuctions(),
         commodityApi.list().then(setCommodities),
         commodityApi.getAllFullConfigs().then(setFullConfigs),
-        fetchAllWeighingSessions().then(setWeighingSessions).catch(() => setWeighingSessions([])),
+        loadReservedBidReservations(),
         loadSavedBills(),
         reloadArrivalDetails().then(setArrivalDetails),
       ]);
@@ -1756,7 +1798,7 @@ const BillingPage = () => {
     } finally {
       setResyncing(false);
     }
-  }, [refetchAuctions, loadSavedBills, reloadArrivalDetails]);
+  }, [refetchAuctions, loadReservedBidReservations, loadSavedBills, reloadArrivalDetails]);
 
   useEffect(() => {
     if (!isDesktop) return;
@@ -2186,9 +2228,8 @@ const BillingPage = () => {
     return map;
   }, [arrivalDetails]);
 
-  // Load buyer data from completed auctions. Arrival detail is only a fallback for older/missing auction result fields.
+  // Load buyer data from auctions as pages arrive. Arrival detail is only a fallback for older/missing auction result fields.
   useEffect(() => {
-    if (!auctionResultsComplete) return;
     const buyerMap = new Map<string, BuyerPurchase>();
     const lotBagCountByLotId = new Map<string, number>();
 
@@ -2286,12 +2327,12 @@ const BillingPage = () => {
     });
 
     setBuyers(Array.from(buyerMap.values()));
-  }, [auctionData, arrivalLotLookup, auctionResultsComplete]);
+  }, [auctionData, arrivalLotLookup]);
 
   const excludeBillIdForReservation = bill && isBackendBillId(bill.billId) ? bill.billId : null;
   const reservedBidKeysOnOtherBills = useMemo(
-    () => collectReservedBidKeysFromSalesBills(savedBills, excludeBillIdForReservation),
-    [savedBills, excludeBillIdForReservation],
+    () => collectReservedBidKeysFromReservationRows(reservedBidReservationRows, excludeBillIdForReservation),
+    [reservedBidReservationRows, excludeBillIdForReservation],
   );
 
   const buyersForBilling = useMemo(
@@ -2306,8 +2347,12 @@ const BillingPage = () => {
     [buyers, reservedBidKeysOnOtherBills],
   );
 
-  /** Avoid showing all buyers then shrinking after saved-bills fetch, or partial auction pages. */
-  const billingBuyerListReady = auctionResultsComplete && !savedBillsLoading;
+  /** First auction-results page is enough to show matches; reservations must sync before bill creation. */
+  const billingBuyerListReady = !auctionResultsBootstrapping;
+  const billingBuyerActionReady = billingBuyerListReady && reservedBidsHydrated;
+
+  const billingBuyerListBackdropSyncing =
+    auctionResultsLoadingMore || savedBillsSyncingRemainder || (billingBuyerListReady && !reservedBidsHydrated);
 
   useEffect(() => {
     if (!billingBuyerListReady || !selectedBuyerFromDropdown) return;
@@ -2707,8 +2752,12 @@ const BillingPage = () => {
   );
 
   const findBuyerByInput = useCallback((): BuyerPurchase | null => {
-    if (!billingBuyerListReady) {
-      toast.error('Buyer list still loading. Wait a moment or use Refresh.');
+    if (!billingBuyerActionReady) {
+      toast.error(
+        billingBuyerListReady
+          ? 'Billed bid reservations are still syncing. Wait a moment or use Refresh.'
+          : 'Buyer list still loading. Wait a moment or use Refresh.',
+      );
       return null;
     }
     if (selectedBuyerFromDropdown) {
@@ -2761,7 +2810,7 @@ const BillingPage = () => {
       return null;
     }
     return null;
-  }, [billingBuyerListReady, buyerBidMarkInput, buyersForBilling, selectedBuyerFromDropdown]);
+  }, [billingBuyerActionReady, billingBuyerListReady, buyerBidMarkInput, buyersForBilling, selectedBuyerFromDropdown]);
 
   const handleGetBidsForMark = useCallback(async () => {
     const buyer = findBuyerByInput();
@@ -3211,6 +3260,10 @@ const BillingPage = () => {
   }, [executeBillingAddBid]);
 
   const openSearchBidDialogForBuyer = useCallback((picked: BuyerPurchase) => {
+    if (!billingBuyerActionReady) {
+      toast.error('Billed bid reservations are still syncing. Wait a moment or use Refresh.');
+      return;
+    }
     setSearchBidSourceBuyer(picked);
     setSearchBidInput(picked.buyerMark || picked.buyerName);
     const visibleKeys = picked.entries
@@ -3220,7 +3273,7 @@ const BillingPage = () => {
     setSearchBidMigrateQtyByKey({});
     setShowSearchBidBuyerSuggestions(false);
     setSearchBidDialogOpen(true);
-  }, []);
+  }, [billingBuyerActionReady]);
 
   const toggleSearchBidSelection = useCallback((entry: BillEntry) => {
     const key = getBidSelectionKey(entry);
@@ -3276,9 +3329,9 @@ const BillingPage = () => {
     selectedBuyer,
   ]);
 
-  const searchBidBuyerOptions = useMemo(() => {
+  const searchBidBuyerMatches = useMemo(() => {
     if (!bill || !billingBuyerListReady) return [];
-    const q = searchBidInput.trim().toLowerCase();
+    const q = deferredSearchBidInput.trim().toLowerCase();
     const isSameBuyer = (b: BuyerPurchase) =>
       (b.buyerMark || '').toLowerCase() === (bill.buyerMark || '').toLowerCase()
       && (b.buyerName || '').toLowerCase() === (bill.buyerName || '').toLowerCase();
@@ -3289,7 +3342,12 @@ const BillingPage = () => {
         (b.buyerMark || '').toLowerCase().includes(q)
         || (b.buyerName || '').toLowerCase().includes(q),
     );
-  }, [bill, billingBuyerListReady, buyersForBilling, searchBidInput]);
+  }, [bill, billingBuyerListReady, buyersForBilling, deferredSearchBidInput]);
+  const searchBidBuyerOptions = useMemo(
+    () => searchBidBuyerMatches.slice(0, BILLING_BUYER_OPTION_RENDER_LIMIT),
+    [searchBidBuyerMatches],
+  );
+  const searchBidBuyerOverflowCount = Math.max(0, searchBidBuyerMatches.length - searchBidBuyerOptions.length);
 
   const searchBidLiveBuyer = useMemo(() => {
     if (!searchBidSourceBuyer) return null;
@@ -3697,7 +3755,7 @@ const BillingPage = () => {
     }
 
     setHasSavedOnce(isBackendBillId(String(saved.billId)));
-    void loadSavedBills();
+    void refreshBillingCachesAfterMutation();
     toast.success(`Draft for ${currentBuyerLabel} moved to Bill In Progress.`);
     return true;
   }
@@ -3730,7 +3788,7 @@ const BillingPage = () => {
       const bn = (dtoAfter.billNumber ?? '').trim();
       toast.success(bn ? `Bill ${bn} updated.` : 'Bill saved.');
     }
-    void loadSavedBills();
+    void refreshBillingCachesAfterMutation();
   };
 
   /** True when local bill differs from last baseline (load or successful save). Used to require Save before Print for persisted bills. */
@@ -3757,7 +3815,7 @@ const BillingPage = () => {
     }
     setHasSavedOnce(isBackendBillId(String(saved.billId)));
     billDirtyBaselineRef.current = serializeBillForDirty(bill);
-    void loadSavedBills();
+    void refreshBillingCachesAfterMutation();
     toast.success('Bill progress saved.');
     return true;
   };
@@ -3814,17 +3872,21 @@ const BillingPage = () => {
   };
   openPrintPreviewRef.current = openPrintPreview;
 
-  const filteredBuyerOptions = useMemo(() => {
+  const filteredBuyerMatches = useMemo(() => {
     if (!billingBuyerListReady) return [];
-    const q = buyerBidMarkInput.trim().toLowerCase();
-    /** Show every unbilled buyer when empty (scrollable panel); the old slice(0,12) hid everyone past 12 with no hint to type. */
+    const q = deferredBuyerBidMarkInput.trim().toLowerCase();
     if (!q) return buyersForBilling;
     return buyersForBilling.filter(
       b =>
         b.buyerMark?.toLowerCase().includes(q)
         || b.buyerName?.toLowerCase().includes(q),
     );
-  }, [billingBuyerListReady, buyersForBilling, buyerBidMarkInput]);
+  }, [billingBuyerListReady, buyersForBilling, deferredBuyerBidMarkInput]);
+  const filteredBuyerOptions = useMemo(
+    () => filteredBuyerMatches.slice(0, BILLING_BUYER_OPTION_RENDER_LIMIT),
+    [filteredBuyerMatches],
+  );
+  const filteredBuyerOverflowCount = Math.max(0, filteredBuyerMatches.length - filteredBuyerOptions.length);
 
   useEffect(() => {
     const onPointerDown = (e: MouseEvent) => {
@@ -3872,7 +3934,7 @@ const BillingPage = () => {
 
   const savedBillsTableScrollRef = useRef<HTMLDivElement>(null);
   const savedBillsTableVirtualEnabled =
-    isDesktop && billingMainTab === 'saved' && !savedBillsLoading && filteredSavedBillsOnly.length > 0;
+    isDesktop && billingMainTab === 'saved' && savedBillsFirstFetchSettled && filteredSavedBillsOnly.length > 0;
 
   const savedBillRowVirtualizer = useVirtualizer({
     count: savedBillsTableVirtualEnabled ? filteredSavedBillsOnly.length : 0,
@@ -4708,10 +4770,16 @@ const BillingPage = () => {
                 <p className="text-white/70 text-xs mt-0.5">
                   Sales bill ·{' '}
                   {billingBuyerListReady
-                    ? `${buyersForBilling.length} buyer${buyersForBilling.length !== 1 ? 's' : ''} with unbilled bids`
+                    ? `${buyersForBilling.length} buyer${buyersForBilling.length !== 1 ? 's' : ''} with unbilled bids${
+                      billingBuyerListBackdropSyncing ? ' · syncing' : ''
+                    }`
                     : auctionResultsError
                       ? 'Could not load auctions — use Refresh'
-                      : 'Loading buyer list…'}
+                      : auctionResultsBootstrapping
+                        ? 'Loading auction results…'
+                        : !reservedBidsHydrated
+                          ? 'Loading billed bid reservations…'
+                          : 'Loading buyer list…'}
                 </p>
               </div>
               <div className="flex-shrink-0" />
@@ -4754,10 +4822,16 @@ const BillingPage = () => {
               </h2>
               <p className="text-sm text-muted-foreground mt-0.5">
                 {billingBuyerListReady
-                  ? `${buyersForBilling.length} buyers with unbilled bids · Invoicing & generation`
+                  ? `${buyersForBilling.length} buyers with unbilled bids · Invoicing & generation${
+                    billingBuyerListBackdropSyncing ? ' · Background sync…' : ''
+                  }`
                   : auctionResultsError
                     ? 'Could not load auctions — use Refresh or open Bill Operations again'
-                    : 'Loading auction results and billing status…'}
+                    : auctionResultsBootstrapping
+                      ? 'Loading auction results…'
+                      : !reservedBidsHydrated
+                        ? 'Loading billed bid reservations…'
+                        : 'Loading buyer list…'}
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2 lg:justify-end w-full lg:w-auto" />
@@ -4823,27 +4897,39 @@ const BillingPage = () => {
                   <div className={cn("absolute z-50 top-full mt-1 w-full max-h-56 overflow-y-auto rounded-xl border border-border bg-background shadow-lg", searchBidDialogOpen && "z-[20]")}>
                     {!billingBuyerListReady ? (
                       <p className="px-3 py-2 text-xs text-muted-foreground">Loading buyer list…</p>
-                    ) : filteredBuyerOptions.length === 0 && buyerBidMarkInput.trim() ? (
+                    ) : filteredBuyerMatches.length === 0 && buyerBidMarkInput.trim() ? (
                       <p className="px-3 py-2 text-xs text-muted-foreground">No buyers match your search.</p>
                     ) : (
-                      filteredBuyerOptions.map((b, idx) => (
-                        <button
-                          type="button"
-                          key={`${b.buyerContactId ?? 'n'}::${b.buyerMark ?? ''}::${b.buyerName ?? ''}::${idx}`}
-                          onClick={() => {
-                            setSelectedBuyerFromDropdown(b);
-                            setBuyerBidMarkInput(b.buyerMark || b.buyerName);
-                            setShowBuyerSuggestions(false);
-                          }}
-                          className={cn(
-                            'w-full text-left px-3 py-2.5 border-b border-border/40 last:border-b-0 hover:bg-muted/40 transition-colors',
-                            selectedBuyerFromDropdown?.buyerMark === b.buyerMark && selectedBuyerFromDropdown?.buyerName === b.buyerName && 'bg-primary/10',
-                          )}
-                        >
-                          <p className="text-xs font-semibold text-foreground">{b.buyerMark} - {b.buyerName}</p>
-                          <p className="text-[11px] text-muted-foreground">{b.entries.length} bid(s)</p>
-                        </button>
-                      ))
+                      <>
+                        {!reservedBidsHydrated && (
+                          <p className="px-3 py-2 text-[11px] font-semibold text-muted-foreground border-b border-border/40">
+                            Checking billed bid reservations…
+                          </p>
+                        )}
+                        {filteredBuyerOptions.map((b, idx) => (
+                          <button
+                            type="button"
+                            key={`${b.buyerContactId ?? 'n'}::${b.buyerMark ?? ''}::${b.buyerName ?? ''}::${idx}`}
+                            onClick={() => {
+                              setSelectedBuyerFromDropdown(b);
+                              setBuyerBidMarkInput(b.buyerMark || b.buyerName);
+                              setShowBuyerSuggestions(false);
+                            }}
+                            className={cn(
+                              'w-full text-left px-3 py-2.5 border-b border-border/40 last:border-b-0 hover:bg-muted/40 transition-colors',
+                              selectedBuyerFromDropdown?.buyerMark === b.buyerMark && selectedBuyerFromDropdown?.buyerName === b.buyerName && 'bg-primary/10',
+                            )}
+                          >
+                            <p className="text-xs font-semibold text-foreground">{b.buyerMark} - {b.buyerName}</p>
+                            <p className="text-[11px] text-muted-foreground">{b.entries.length} bid(s)</p>
+                          </button>
+                        ))}
+                        {filteredBuyerOverflowCount > 0 && (
+                          <p className="px-3 py-2 text-[11px] text-muted-foreground">
+                            Showing first {filteredBuyerOptions.length}. Type mark/name to search all buyers.
+                          </p>
+                        )}
+                      </>
                     )}
                   </div>
                 )}
@@ -4967,7 +5053,15 @@ const BillingPage = () => {
             )}
             {!billingBuyerListReady ? (
               <div className="rounded-xl bg-muted/30 p-4 text-center space-y-2">
-                <p className="text-sm text-muted-foreground">Loading auction results and billing status…</p>
+                <p className="text-sm text-muted-foreground">
+                  {auctionResultsError
+                    ? 'Could not load auctions. Use Refresh.'
+                    : auctionResultsBootstrapping
+                      ? 'Loading auction results…'
+                      : !reservedBidsHydrated
+                        ? 'Loading billed bid reservations…'
+                        : 'Loading buyer list…'}
+                </p>
               </div>
             ) : buyersForBilling.length === 0 ? (
               <div className="rounded-xl bg-muted/30 p-4 text-center space-y-2">
@@ -5040,20 +5134,32 @@ const BillingPage = () => {
                           <div className={cn("absolute top-full mt-1 w-full min-w-[12rem] max-h-44 overflow-y-auto rounded-xl border border-border/50 bg-background shadow-lg", searchBidDialogOpen ? "z-[20]" : "z-[100]")}>
                             {!billingBuyerListReady ? (
                               <p className="px-3 py-2 text-xs text-muted-foreground">Loading buyer list…</p>
-                            ) : searchBidBuyerOptions.length === 0 ? (
+                            ) : searchBidBuyerMatches.length === 0 ? (
                               <p className="px-3 py-2 text-xs text-muted-foreground">No buyer found.</p>
                             ) : (
-                              searchBidBuyerOptions.map((b, idx) => (
-                                <button
-                                  key={`${b.buyerContactId ?? 'n'}::${b.buyerMark ?? ''}::${b.buyerName ?? ''}::${idx}`}
-                                  type="button"
-                                  onClick={() => openSearchBidDialogForBuyer(b)}
-                                  className="w-full text-left px-3 py-2 border-b border-border/40 last:border-b-0 hover:bg-muted/40"
-                                >
-                                  <p className="text-xs font-semibold">{b.buyerMark} - {b.buyerName}</p>
-                                  <p className="text-[11px] text-muted-foreground">{b.entries.length} bid(s)</p>
-                                </button>
-                              ))
+                              <>
+                                {!reservedBidsHydrated && (
+                                  <p className="px-3 py-2 text-[11px] font-semibold text-muted-foreground border-b border-border/40">
+                                    Checking billed bid reservations…
+                                  </p>
+                                )}
+                                {searchBidBuyerOptions.map((b, idx) => (
+                                  <button
+                                    key={`${b.buyerContactId ?? 'n'}::${b.buyerMark ?? ''}::${b.buyerName ?? ''}::${idx}`}
+                                    type="button"
+                                    onClick={() => openSearchBidDialogForBuyer(b)}
+                                    className="w-full text-left px-3 py-2 border-b border-border/40 last:border-b-0 hover:bg-muted/40"
+                                  >
+                                    <p className="text-xs font-semibold">{b.buyerMark} - {b.buyerName}</p>
+                                    <p className="text-[11px] text-muted-foreground">{b.entries.length} bid(s)</p>
+                                  </button>
+                                ))}
+                                {searchBidBuyerOverflowCount > 0 && (
+                                  <p className="px-3 py-2 text-[11px] text-muted-foreground">
+                                    Showing first {searchBidBuyerOptions.length}. Type mark/name to search all buyers.
+                                  </p>
+                                )}
+                              </>
                             )}
                           </div>
                         )}
@@ -6730,7 +6836,7 @@ const BillingPage = () => {
 
 
         {billingMainTab === 'progress' && (
-          savedBillsLoading ? (
+          !savedBillsFirstFetchSettled && savedBills.length === 0 ? (
             <div className="glass-card rounded-2xl p-8 flex justify-center text-muted-foreground">
               <Loader2 className="w-8 h-8 animate-spin" />
             </div>
@@ -6811,7 +6917,7 @@ const BillingPage = () => {
         )}
 
         {billingMainTab === 'saved' && (
-          savedBillsLoading ? (
+          !savedBillsFirstFetchSettled && savedBills.length === 0 ? (
             <div className="glass-card rounded-2xl p-8 flex justify-center text-muted-foreground">
               <Loader2 className="w-8 h-8 animate-spin" />
             </div>

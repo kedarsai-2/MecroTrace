@@ -70,6 +70,17 @@ export interface BillVersionDTO {
   data?: unknown;
 }
 
+/** Lightweight projection for billed bid exclusions (Buyer Operations). */
+export interface SalesBillReservedBidRowDTO {
+  billId: string;
+  billNumber?: string | null;
+  /** IN_PROGRESS | NUMBERED | FROZEN */
+  status?: string | null;
+  bidNumber: number;
+  lotId?: string | null;
+  lotName?: string | null;
+}
+
 /** Full bill (backend SalesBillDTO). Matches BillingPage BillData. */
 export interface SalesBillDTO {
   billId: string;
@@ -217,6 +228,14 @@ export const billingApi = {
     }
     const res = await apiFetch(`${BASE}?${searchParams.toString()}`, { method: 'GET', signal: params.signal });
     return handleResponse<SalesBillPage>(res, 'Failed to load sales bills');
+  },
+
+  /**
+   * Lightweight billed bid/lot rows for reserved-bid exclusions (Buyer Operations).
+   */
+  async getReservedBids(opts?: { signal?: AbortSignal }): Promise<SalesBillReservedBidRowDTO[]> {
+    const res = await apiFetch(`${BASE}/reserved-bids`, { method: 'GET', signal: opts?.signal });
+    return handleResponse<SalesBillReservedBidRowDTO[]>(res, 'Failed to load billed bid reservations');
   },
 
   /**

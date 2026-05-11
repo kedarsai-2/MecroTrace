@@ -94,6 +94,21 @@ public class SalesBillServiceImpl implements SalesBillService {
 
     @Override
     @Transactional(readOnly = true)
+    public List<SalesBillReservedBidRowDTO> listReservedBidRows() {
+        Long traderId = traderContextService.getCurrentTraderId();
+        List<Object[]> tuples = salesBillRepository.findReservedBidRowTuples(traderId);
+        List<SalesBillReservedBidRowDTO> out = new ArrayList<>(tuples.size());
+        for (Object[] tuple : tuples) {
+            SalesBillReservedBidRowDTO row = mapTupleToReservedBidRow(tuple);
+            if (row != null) {
+                out.add(row);
+            }
+        }
+        return out;
+    }
+
+    @Override
+    @Transactional(readOnly = true)
     public SalesBillDTO getById(Long id) {
         Long traderId = traderContextService.getCurrentTraderId();
         SalesBill bill = salesBillRepository.findByIdWithGroupsAndVersions(id)
@@ -616,6 +631,64 @@ public class SalesBillServiceImpl implements SalesBillService {
 
     private static boolean isFrozen(SalesBill bill) {
         return bill.getLockedAt() != null && bill.getReopenedAt() == null;
+    }
+
+    private static SalesBillReservedBidRowDTO mapTupleToReservedBidRow(Object[] row) {
+        if (row == null || row.length < 7) {
+            return null;
+        }
+        Long billPk = numberToLong(row[0]);
+        if (billPk == null) {
+            return null;
+        }
+        String billNum = normalizeBlankOrNull(row[1] instanceof String ? (String) row[1] : row[1] != null ? String.valueOf(row[1]) : null);
+        Instant lockedAt = row[2] instanceof Instant ? (Instant) row[2] : null;
+        Instant reopenedAt = row[3] instanceof Instant ? (Instant) row[3] : null;
+        Integer bid = numberToInt(row[4]);
+        if (bid == null) {
+            return null;
+        }
+        String rawLotId = row[5] instanceof String ? (String) row[5] : row[5] != null ? String.valueOf(row[5]) : null;
+        String trimmedLotId = rawLotId != null && !rawLotId.isBlank() ? rawLotId.trim() : null;
+
+        SalesBillReservedBidRowDTO dto = new SalesBillReservedBidRowDTO();
+        dto.setBillId(String.valueOf(billPk));
+        dto.setBillNumber(billNum != null ? billNum : null);
+        dto.setStatus(deriveReservationBillStatus(billNum, lockedAt, reopenedAt));
+        dto.setBidNumber(bid);
+        dto.setLotId(trimmedLotId);
+        String lotNameRaw = row[6] instanceof String ? (String) row[6] : row[6] != null ? String.valueOf(row[6]) : null;
+        dto.setLotName(lotNameRaw != null ? lotNameRaw : "");
+        return dto;
+    }
+
+    private static Integer numberToInt(Object o) {
+        if (o == null) return null;
+        if (o instanceof Number) return ((Number) o).intValue();
+        return null;
+    }
+
+    private static Long numberToLong(Object o) {
+        if (o == null) return null;
+        if (o instanceof Number) return ((Number) o).longValue();
+        return null;
+    }
+
+    private static String normalizeBlankOrNull(String s) {
+        if (s == null || s.isBlank()) return null;
+        return s.trim();
+    }
+
+    /** BillingPage reserved-bid status label (stable contract for UI). */
+    private static String deriveReservationBillStatus(String billNumberOrNull, Instant lockedAt, Instant reopenedAt) {
+        boolean frozen = lockedAt != null && reopenedAt == null;
+        if (frozen) {
+            return "FROZEN";
+        }
+        if (billNumberOrNull != null) {
+            return "NUMBERED";
+        }
+        return "IN_PROGRESS";
     }
 
     private static void assertNotFrozen(SalesBill bill, String message) {

@@ -4,6 +4,11 @@ import { auctionApi, type AuctionResultDTO } from '@/services/api/auction';
 const PAGE_SIZE = 100;
 const MAX_PAGES = 50;
 
+function normalizeInitialPageSize(size: number | undefined): number {
+  const n = Math.floor(Number(size) || PAGE_SIZE);
+  return Math.max(1, Math.min(PAGE_SIZE, n));
+}
+
 function isAbortError(e: unknown): boolean {
   return (
     (typeof DOMException !== 'undefined' && e instanceof DOMException && e.name === 'AbortError') ||
@@ -20,6 +25,8 @@ export type AuctionResultsProgress = {
 export type UseAuctionResultsOptions = {
   /** Fires after each merged page (same array reference semantics as internal state updates). */
   onProgress?: (p: AuctionResultsProgress) => void;
+  /** Optional first pass size for screens that need a fast preview before full background paging. */
+  initialPageSize?: number;
 };
 
 export type RefetchAuctionResultsOptions = {
@@ -51,8 +58,10 @@ export function useAuctionResults(options?: UseAuctionResultsOptions): {
   const abortRef = useRef<AbortController | null>(null);
   const onProgressRef = useRef(options?.onProgress);
   onProgressRef.current = options?.onProgress;
+  const initialPageSizeRef = useRef(options?.initialPageSize);
+  initialPageSizeRef.current = options?.initialPageSize;
 
-  const refetch = useCallback(async (options?: RefetchAuctionResultsOptions) => {
+  const refetch = useCallback(async (refetchOptions?: RefetchAuctionResultsOptions) => {
     genRef.current += 1;
     const gen = genRef.current;
     abortRef.current?.abort();
@@ -60,16 +69,44 @@ export function useAuctionResults(options?: UseAuctionResultsOptions): {
     abortRef.current = ac;
     const { signal } = ac;
 
-    if (!options?.keepPreviousData) {
+    const keepPreviousData = !!refetchOptions?.keepPreviousData;
+    if (!keepPreviousData) {
       setAuctionResults([]);
     }
-    setLoading(!options?.keepPreviousData);
+    setLoading(!keepPreviousData);
     setLoadingMore(false);
     setResultsComplete(false);
     setTotalElements(null);
     setError(null);
 
     try {
+      const firstPageSize = keepPreviousData
+        ? PAGE_SIZE
+        : normalizeInitialPageSize(initialPageSizeRef.current);
+
+      if (firstPageSize < PAGE_SIZE) {
+        const { items, totalElements: tot } = await auctionApi.listResultsPage(
+          { page: 0, size: firstPageSize, sort: 'completedAt,desc' },
+          { signal }
+        );
+        if (gen !== genRef.current) return;
+
+        setAuctionResults(items);
+        setTotalElements(tot);
+        onProgressRef.current?.({ items, pageIndex: 0, totalElements: tot });
+        setLoading(false);
+
+        const doneByShort = items.length < firstPageSize;
+        const doneByTotal = tot > 0 && items.length >= tot;
+        if (doneByShort || doneByTotal) {
+          setLoadingMore(false);
+          setResultsComplete(true);
+          return;
+        }
+
+        setLoadingMore(true);
+      }
+
       let page = 0;
       let merged: AuctionResultDTO[] = [];
       while (page < MAX_PAGES) {
