@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <changeSet id="20260511153000-1" author="codex">
+        <preConditions onFail="MARK_RAN">
+            <not>
+                <indexExists indexName="idx_sales_bill_trader_bill_date_id" tableName="sales_bill"/>
+            </not>
+        </preConditions>
+        <createIndex tableName="sales_bill" indexName="idx_sales_bill_trader_bill_date_id">
+            <column name="trader_id"/>
+            <column name="bill_date"/>
+            <column name="id"/>
+        </createIndex>
+    </changeSet>
+
+    <changeSet id="20260511153000-2" author="codex" dbms="postgresql">
+        <sql>
+            CREATE INDEX IF NOT EXISTS idx_sales_bill_trader_in_progress_date
+            ON sales_bill (trader_id, bill_date DESC, id DESC)
+            WHERE bill_number IS NULL OR bill_number = '';
+        </sql>
+        <sql>
+            CREATE INDEX IF NOT EXISTS idx_sales_bill_trader_numbered_date
+            ON sales_bill (trader_id, bill_date DESC, id DESC)
+            WHERE bill_number IS NOT NULL AND bill_number &lt;&gt; '';
+        </sql>
+    </changeSet>
+</databaseChangeLog>

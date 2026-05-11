@@ -21,7 +21,7 @@ import com.mercotrace.repository.SettlementVoucherTempRepository;
 import com.mercotrace.repository.VehicleRepository;
 import com.mercotrace.repository.VehicleWeightRepository;
 import com.mercotrace.repository.VoucherLineRepository;
-import com.mercotrace.repository.WeighingSessionRepository;
+import com.mercotrace.security.SecurityUtils;
 import com.mercotrace.service.AuctionService;
 import com.mercotrace.service.ContactService;
 import com.mercotrace.service.SettlementService;
@@ -36,6 +36,7 @@ import com.mercotrace.service.dto.SettlementDTOs;
 import com.mercotrace.service.dto.SettlementDTOs.*;
 import java.math.BigDecimal;
 import java.math.MathContext;
+import java.time.Instant;
 import java.util.*;
 import java.util.stream.Collectors;
 import org.slf4j.Logger;
@@ -65,7 +66,6 @@ public class SettlementServiceImpl implements SettlementService {
     private final LotRepository lotRepository;
     private final AuctionService auctionService;
     private final PattiRepository pattiRepository;
-    private final WeighingSessionRepository weighingSessionRepository;
     private final SellerInVehicleRepository sellerInVehicleRepository;
     private final ContactRepository contactRepository;
     private final VehicleRepository vehicleRepository;
@@ -90,7 +90,6 @@ public class SettlementServiceImpl implements SettlementService {
         LotRepository lotRepository,
         AuctionService auctionService,
         PattiRepository pattiRepository,
-        WeighingSessionRepository weighingSessionRepository,
         SellerInVehicleRepository sellerInVehicleRepository,
         ContactRepository contactRepository,
         VehicleRepository vehicleRepository,
@@ -114,7 +113,6 @@ public class SettlementServiceImpl implements SettlementService {
         this.lotRepository = lotRepository;
         this.auctionService = auctionService;
         this.pattiRepository = pattiRepository;
-        this.weighingSessionRepository = weighingSessionRepository;
         this.sellerInVehicleRepository = sellerInVehicleRepository;
         this.contactRepository = contactRepository;
         this.vehicleRepository = vehicleRepository;
@@ -164,10 +162,31 @@ public class SettlementServiceImpl implements SettlementService {
         Map<Long, Lot> lotMap = traderLots.stream().collect(Collectors.toMap(Lot::getId, l -> l));
         Map<Long, SellerInVehicle> sivMap = sivs.stream().collect(Collectors.toMap(SellerInVehicle::getId, s -> s));
 
-        List<WeighingSession> weighingSessions = weighingSessionRepository.findAllByTraderIdOrderByCreatedDateDesc(
-            traderId, Pageable.ofSize(MAX_RESULTS_FOR_SELLERS)).getContent();
-        Map<Integer, BigDecimal> bidToWeight = weighingSessions.stream()
-            .collect(Collectors.toMap(WeighingSession::getBidNumber, WeighingSession::getNetWeight, (a, b) -> a));
+        Map<Long, Integer> vehicleTotalBagsByVehicleId = new HashMap<>();
+        for (Lot l : traderLots) {
+            SellerInVehicle sivLot = sivMap.get(l.getSellerVehicleId());
+            if (sivLot == null || sivLot.getVehicleId() == null) {
+                continue;
+            }
+            int bc = l.getBagCount() != null ? l.getBagCount() : 0;
+            vehicleTotalBagsByVehicleId.merge(sivLot.getVehicleId(), bc, Integer::sum);
+        }
+
+        List<String> allLotIdStrs = traderLots.stream().map(l -> String.valueOf(l.getId())).toList();
+        Map<String, Map<Integer, BigDecimal>> lotBidToWeight = new HashMap<>();
+        Map<String, BigDecimal> billingWeightByLotId = new HashMap<>();
+        if (!allLotIdStrs.isEmpty()) {
+            List<Object[]> billingRows = salesBillLineItemRepository.sumWeightGroupedByLotIdAndBidNumber(traderId, allLotIdStrs);
+            for (Object[] row : billingRows) {
+                if (row[0] != null && row[1] != null && row[2] != null) {
+                    String lid = (String) row[0];
+                    Integer bid = (Integer) row[1];
+                    BigDecimal w = (BigDecimal) row[2];
+                    lotBidToWeight.computeIfAbsent(lid, k -> new HashMap<>()).put(bid, w);
+                    billingWeightByLotId.merge(lid, w, BigDecimal::add);
+                }
+            }
+        }
 
         Map<String, SellerSettlementDTO> sellerMap = new LinkedHashMap<>();
         for (AuctionResultDTO ar : results) {
@@ -224,20 +243,9 @@ public class SettlementServiceImpl implements SettlementService {
                 );
                 se.setPresetMargin(entry.getPresetApplied());
                 se.setQuantity(entry.getQuantity());
-                BigDecimal weight = bidToWeight.getOrDefault(entry.getBidNumber(), entry.getQuantity() != null ? BigDecimal.valueOf(entry.getQuantity() * 50) : BigDecimal.ZERO);
+                BigDecimal weight = lotBidToWeight.getOrDefault(lotIdStr, Map.of()).getOrDefault(entry.getBidNumber(), BigDecimal.ZERO);
                 se.setWeight(weight);
                 lotDto.getEntries().add(se);
-            }
-        }
-
-        Map<String, BigDecimal> billingWeightByLotId = new HashMap<>();
-        List<String> allLotIdStrs = traderLots.stream().map(l -> String.valueOf(l.getId())).toList();
-        if (!allLotIdStrs.isEmpty()) {
-            List<Object[]> billingRows = salesBillLineItemRepository.sumWeightGroupedByLotId(traderId, allLotIdStrs);
-            for (Object[] row : billingRows) {
-                if (row[0] != null && row[1] != null) {
-                    billingWeightByLotId.put((String) row[0], (BigDecimal) row[1]);
-                }
             }
         }
 
@@ -295,9 +303,20 @@ public class SettlementServiceImpl implements SettlementService {
             }
             seller.setArrivalTotalBags(arrivalBags);
             seller.setBillingNetWeightKg(billingNet);
+            if (sivRow != null && sivRow.getVehicleId() != null) {
+                Integer vt = vehicleTotalBagsByVehicleId.get(sivRow.getVehicleId());
+                seller.setVehicleTotalQty(vt != null ? vt : arrivalBags);
+                Vehicle veh = vehicleMap.get(sivRow.getVehicleId());
+                if (veh != null
+                    && veh.getVehicleMarkAlias() != null
+                    && !veh.getVehicleMarkAlias().isBlank()) {
+                    seller.setVehicleMark(veh.getVehicleMarkAlias().trim());
+                }
+            }
         }
 
         List<SellerSettlementDTO> allSellers = new ArrayList<>(sellerMap.values());
+        applyFrozenPattiState(traderId, allSellers);
         if (search != null && !search.isBlank()) {
             String q = search.toLowerCase().trim();
             allSellers = allSellers.stream()
@@ -516,6 +535,7 @@ public class SettlementServiceImpl implements SettlementService {
             return Optional.empty();
         }
         Patti patti = opt.get();
+        assertNotFrozen(patti, "Printed Sales Patti is frozen. Press Edit to reopen before changing it.");
         applyOriginalSnapshotIfEmpty(patti, request.getOriginalSnapshotJson());
         patti.setSellerName(request.getSellerName());
         patti.setGrossAmount(request.getGrossAmount());
@@ -529,6 +549,43 @@ public class SettlementServiceImpl implements SettlementService {
         mapRequestDeductionsAndClustersToEntity(request, patti);
         pattiRepository.save(patti);
         return pattiRepository.findById(id).map(this::toPattiDTO);
+    }
+
+    @Override
+    @Transactional(readOnly = false)
+    public PattiDTO markPattiPrinted(Long id) {
+        Long traderId = traderContextService.getCurrentTraderId();
+        Patti patti = pattiRepository
+            .findById(id)
+            .filter(p -> traderId.equals(p.getTraderId()))
+            .orElseThrow(() -> new IllegalArgumentException("Sales Patti not found: " + id));
+        Instant now = Instant.now();
+        if (patti.getPrintedAt() == null) {
+            patti.setPrintedAt(now);
+        }
+        patti.setLockedAt(now);
+        patti.setLockedBy(currentActor());
+        patti.setReopenedAt(null);
+        patti.setReopenedBy(null);
+        patti.setReopenReason(null);
+        return toPattiDTO(pattiRepository.save(patti));
+    }
+
+    @Override
+    @Transactional(readOnly = false)
+    public PattiDTO reopenPatti(Long id) {
+        Long traderId = traderContextService.getCurrentTraderId();
+        Patti patti = pattiRepository
+            .findById(id)
+            .filter(p -> traderId.equals(p.getTraderId()))
+            .orElseThrow(() -> new IllegalArgumentException("Sales Patti not found: " + id));
+        if (patti.getLockedAt() == null || patti.getReopenedAt() != null) {
+            return toPattiDTO(patti);
+        }
+        patti.setReopenedAt(Instant.now());
+        patti.setReopenedBy(currentActor());
+        patti.setReopenReason(null);
+        return toPattiDTO(pattiRepository.save(patti));
     }
 
     @Override
@@ -665,21 +722,6 @@ public class SettlementServiceImpl implements SettlementService {
         }
         List<Lot> sellerLots = lotsBySellerVehicleId.getOrDefault(sivId, List.of());
 
-        List<WeighingSession> weighingSessions =
-            weighingSessionRepository.findAllByTraderIdOrderByCreatedDateDesc(traderId, Pageable.ofSize(MAX_RESULTS_FOR_SELLERS))
-                .getContent();
-        Map<Integer, BigDecimal> bidToWeight =
-            weighingSessions
-                .stream()
-                .filter(ws -> ws.getBidNumber() != null)
-                .collect(
-                    Collectors.toMap(
-                        WeighingSession::getBidNumber,
-                        ws -> ws.getNetWeight() != null ? ws.getNetWeight() : BigDecimal.ZERO,
-                        (a, b) -> a
-                    )
-                );
-
         List<String> allLotIdStrs = allVehicleLots.stream().map(l -> String.valueOf(l.getId())).toList();
         Map<String, BigDecimal> billingByLot = new HashMap<>();
         if (!allLotIdStrs.isEmpty()) {
@@ -691,28 +733,15 @@ public class SettlementServiceImpl implements SettlementService {
             }
         }
 
-        List<Long> lotIds = allVehicleLots.stream().map(Lot::getId).toList();
-        Map<Long, AuctionResultDTO> arByLot = new HashMap<>();
-        if (!lotIds.isEmpty()) {
-            Page<AuctionResultDTO> arPage = auctionService.listResultsByLotIds(lotIds, Pageable.unpaged());
-            for (AuctionResultDTO ar : arPage.getContent()) {
-                arByLot.put(ar.getLotId(), ar);
-            }
-        }
-
         double totalVehicleActualWeightKg = 0d;
         for (Lot lot : allVehicleLots) {
             BigDecimal billingKg = billingByLot.get(String.valueOf(lot.getId()));
-            AuctionResultDTO ar = arByLot.get(lot.getId());
-            BigDecimal actualW = resolveLotWeightKgForCharges(billingKg, ar, bidToWeight);
-            totalVehicleActualWeightKg += actualW.doubleValue();
+            totalVehicleActualWeightKg += (billingKg != null ? billingKg.doubleValue() : 0d);
         }
         double sellerActualWeightKg = 0d;
         for (Lot lot : sellerLots) {
             BigDecimal billingKg = billingByLot.get(String.valueOf(lot.getId()));
-            AuctionResultDTO ar = arByLot.get(lot.getId());
-            BigDecimal actualW = resolveLotWeightKgForCharges(billingKg, ar, bidToWeight);
-            sellerActualWeightKg += actualW.doubleValue();
+            sellerActualWeightKg += (billingKg != null ? billingKg.doubleValue() : 0d);
         }
 
         BigDecimal sellerFreight = BigDecimal.ZERO;
@@ -733,9 +762,7 @@ public class SettlementServiceImpl implements SettlementService {
                 continue;
             }
             BigDecimal billingKg = billingByLot.get(String.valueOf(lot.getId()));
-            AuctionResultDTO ar = arByLot.get(lot.getId());
-            BigDecimal actualW = resolveLotWeightKgForCharges(billingKg, ar, bidToWeight);
-            double actual = actualW.doubleValue();
+            double actual = billingKg != null ? billingKg.doubleValue() : 0d;
 
             List<HamaliSlab> slabs = hamaliSlabRepository.findAllByCommodityIdOrderByThresholdWeight(commodityId);
             slabs.sort(Comparator.comparing(HamaliSlab::getThresholdWeight));
@@ -883,32 +910,6 @@ public class SettlementServiceImpl implements SettlementService {
             return 0d;
         }
         return f * Math.max(1d, w / t);
-    }
-
-    private static BigDecimal resolveLotWeightKgForCharges(
-        BigDecimal billingKg,
-        AuctionResultDTO ar,
-        Map<Integer, BigDecimal> bidToWeight
-    ) {
-        if (billingKg != null && billingKg.compareTo(BigDecimal.ZERO) > 0) {
-            return billingKg;
-        }
-        if (ar == null || ar.getEntries() == null || ar.getEntries().isEmpty()) {
-            return BigDecimal.ZERO;
-        }
-        BigDecimal sum = BigDecimal.ZERO;
-        for (AuctionResultEntryDTO e : ar.getEntries()) {
-            Integer bid = e.getBidNumber();
-            BigDecimal w =
-                bid != null
-                    ? bidToWeight.getOrDefault(
-                        bid,
-                        e.getQuantity() != null ? BigDecimal.valueOf(e.getQuantity().longValue() * 50L) : BigDecimal.ZERO
-                    )
-                    : BigDecimal.ZERO;
-            sum = sum.add(w != null ? w : BigDecimal.ZERO);
-        }
-        return sum;
     }
 
     @Override
@@ -1218,6 +1219,40 @@ public class SettlementServiceImpl implements SettlementService {
 
     private record Scope(Long traderId, String sellerId) {}
 
+    private void applyFrozenPattiState(Long traderId, List<SellerSettlementDTO> sellers) {
+        if (sellers == null || sellers.isEmpty()) {
+            return;
+        }
+        List<String> sellerIds = sellers.stream()
+            .map(SellerSettlementDTO::getSellerId)
+            .filter(Objects::nonNull)
+            .map(String::trim)
+            .filter(s -> !s.isBlank())
+            .distinct()
+            .toList();
+        if (sellerIds.isEmpty()) {
+            return;
+        }
+        Map<String, Patti> frozenBySeller = pattiRepository
+            .findAllByTraderIdAndSellerIdInAndLockedAtIsNotNullAndReopenedAtIsNullAndInProgressFalse(traderId, sellerIds)
+            .stream()
+            .collect(Collectors.toMap(Patti::getSellerId, p -> p, (a, b) -> {
+                Instant aLocked = a.getLockedAt();
+                Instant bLocked = b.getLockedAt();
+                if (aLocked == null) return b;
+                if (bLocked == null) return a;
+                return bLocked.isAfter(aLocked) ? b : a;
+            }));
+        for (SellerSettlementDTO seller : sellers) {
+            Patti patti = frozenBySeller.get(seller.getSellerId());
+            seller.setFrozen(patti != null);
+            if (patti != null) {
+                seller.setFrozenPattiId(patti.getPattiId());
+                seller.setFrozenAt(patti.getLockedAt());
+            }
+        }
+    }
+
     private PattiDTO toPattiDTO(Patti e) {
         PattiDTO dto = new PattiDTO();
         dto.setId(e.getId());
@@ -1234,6 +1269,13 @@ public class SettlementServiceImpl implements SettlementService {
         dto.setUseAverageWeight(e.getUseAverageWeight());
         dto.setInProgress(Boolean.TRUE.equals(e.getInProgress()));
         dto.setExtensionJson(e.getExtensionJson());
+        dto.setPrintedAt(e.getPrintedAt());
+        dto.setLockedAt(e.getLockedAt());
+        dto.setLockedBy(e.getLockedBy());
+        dto.setReopenedAt(e.getReopenedAt());
+        dto.setReopenedBy(e.getReopenedBy());
+        dto.setReopenReason(e.getReopenReason());
+        dto.setFrozen(isFrozen(e));
         for (PattiRateCluster c : e.getRateClusters()) {
             RateClusterDTO rc = new RateClusterDTO();
             rc.setRate(c.getRate());
@@ -1293,5 +1335,19 @@ public class SettlementServiceImpl implements SettlementService {
         if (serial != null) {
             dto.setSellerSerialNo(serial);
         }
+    }
+
+    private static boolean isFrozen(Patti patti) {
+        return patti.getLockedAt() != null && patti.getReopenedAt() == null;
+    }
+
+    private static void assertNotFrozen(Patti patti, String message) {
+        if (isFrozen(patti)) {
+            throw new IllegalArgumentException(message);
+        }
+    }
+
+    private static String currentActor() {
+        return SecurityUtils.getCurrentUserLogin().orElse("system");
     }
 }

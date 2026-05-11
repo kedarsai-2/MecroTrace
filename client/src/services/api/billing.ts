@@ -70,6 +70,17 @@ export interface BillVersionDTO {
   data?: unknown;
 }
 
+/** Lightweight projection for billed bid exclusions (Buyer Operations). */
+export interface SalesBillReservedBidRowDTO {
+  billId: string;
+  billNumber?: string | null;
+  /** IN_PROGRESS | NUMBERED | FROZEN */
+  status?: string | null;
+  bidNumber: number;
+  lotId?: string | null;
+  lotName?: string | null;
+}
+
 /** Full bill (backend SalesBillDTO). Matches BillingPage BillData. */
 export interface SalesBillDTO {
   billId: string;
@@ -100,7 +111,37 @@ export interface SalesBillDTO {
   brokerageValue: number;
   globalOtherCharges: number;
   pendingBalance: number;
+  printedAt?: string | null;
+  lockedAt?: string | null;
+  lockedBy?: string | null;
+  reopenedAt?: string | null;
+  reopenedBy?: string | null;
+  reopenReason?: string | null;
+  frozen?: boolean;
   versions?: BillVersionDTO[];
+}
+
+/** Lightweight row for Billing In Progress / Saved lists. */
+export interface SalesBillSummaryDTO {
+  billId: string;
+  billNumber?: string | null;
+  buyerName: string;
+  buyerMark: string;
+  buyerContactId?: string | null;
+  buyerAsBroker?: boolean;
+  brokerName?: string | null;
+  brokerMark?: string | null;
+  billingName: string;
+  billDate: string;
+  outboundVehicle?: string | null;
+  grandTotal: number;
+  pendingBalance: number;
+  printedAt?: string | null;
+  lockedAt?: string | null;
+  reopenedAt?: string | null;
+  frozen?: boolean;
+  bidsCount?: number;
+  bagQuantity?: number;
 }
 
 /** Create/update request body. */
@@ -138,6 +179,14 @@ export interface SalesBillCreateOrUpdateRequest {
 /** Paginated response (Spring Page). */
 export interface SalesBillPage {
   content: SalesBillDTO[];
+  totalElements: number;
+  totalPages: number;
+  size: number;
+  number: number;
+}
+
+export interface SalesBillSummaryPage {
+  content: SalesBillSummaryDTO[];
   totalElements: number;
   totalPages: number;
   size: number;
@@ -213,6 +262,39 @@ export const billingApi = {
   },
 
   /**
+   * Lightweight list rows for Billing In Progress / Saved tabs.
+   */
+  async getSummaryPage(params: {
+    page?: number;
+    size?: number;
+    sort?: string;
+    q?: string;
+    status?: 'IN_PROGRESS' | 'NUMBERED' | '';
+    signal?: AbortSignal;
+  } = {}): Promise<SalesBillSummaryPage> {
+    const searchParams = new URLSearchParams();
+    searchParams.set('page', String(params.page ?? 0));
+    searchParams.set('size', String(params.size ?? 100));
+    searchParams.set('sort', params.sort ?? 'billDate,desc');
+    if (params.q != null && params.q.trim() !== '') {
+      searchParams.set('q', params.q.trim());
+    }
+    if (params.status != null && params.status.trim() !== '') {
+      searchParams.set('status', params.status.trim());
+    }
+    const res = await apiFetch(`${BASE}/summaries?${searchParams.toString()}`, { method: 'GET', signal: params.signal });
+    return handleResponse<SalesBillSummaryPage>(res, 'Failed to load sales bill summaries');
+  },
+
+  /**
+   * Lightweight billed bid/lot rows for reserved-bid exclusions (Buyer Operations).
+   */
+  async getReservedBids(opts?: { signal?: AbortSignal }): Promise<SalesBillReservedBidRowDTO[]> {
+    const res = await apiFetch(`${BASE}/reserved-bids`, { method: 'GET', signal: opts?.signal });
+    return handleResponse<SalesBillReservedBidRowDTO[]>(res, 'Failed to load billed bid reservations');
+  },
+
+  /**
    * Get one sales bill by id.
    */
   async getById(id: string | number): Promise<SalesBillDTO> {
@@ -251,5 +333,19 @@ export const billingApi = {
       method: 'POST',
     });
     return handleResponse<SalesBillDTO>(res, 'Failed to assign bill number');
+  },
+
+  async markPrinted(id: string | number): Promise<SalesBillDTO> {
+    const res = await apiFetch(`${BASE}/${encodeURIComponent(String(id))}/print-lock`, {
+      method: 'POST',
+    });
+    return handleResponse<SalesBillDTO>(res, 'Failed to freeze printed bill');
+  },
+
+  async reopen(id: string | number): Promise<SalesBillDTO> {
+    const res = await apiFetch(`${BASE}/${encodeURIComponent(String(id))}/reopen`, {
+      method: 'POST',
+    });
+    return handleResponse<SalesBillDTO>(res, 'Failed to reopen bill');
   },
 };

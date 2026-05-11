@@ -12,6 +12,14 @@ import org.springframework.stereotype.Repository;
 @Repository
 public interface SalesBillLineItemRepository extends JpaRepository<SalesBillLineItem, Long> {
 
+    @Query(
+        "SELECT i.lotId, i.bidNumber, COALESCE(SUM(i.weight), 0) FROM SalesBillLineItem i " +
+        "JOIN i.commodityGroup g JOIN g.salesBill b " +
+        "WHERE b.traderId = :traderId AND i.lotId IS NOT NULL AND i.lotId IN :lotIds " +
+        "GROUP BY i.lotId, i.bidNumber"
+    )
+    List<Object[]> sumWeightGroupedByLotIdAndBidNumber(@Param("traderId") Long traderId, @Param("lotIds") Collection<String> lotIds);
+
     /**
      * Sum persisted billing line weights per lot (commodity group line items), trader-scoped.
      * Used by Settlement Sales Pad net weight vs Arrivals.
@@ -119,4 +127,31 @@ public interface SalesBillLineItemRepository extends JpaRepository<SalesBillLine
         @Param("lotIdStrs") Collection<String> lotIdStrs,
         @Param("lotIdsLong") Collection<Long> lotIdsLong
     );
+
+    @Query(
+        "SELECT CASE WHEN COUNT(i) > 0 THEN true ELSE false END FROM SalesBillLineItem i " +
+        "JOIN i.commodityGroup g JOIN g.salesBill b " +
+        "WHERE b.traderId = :traderId AND b.lockedAt IS NOT NULL AND b.reopenedAt IS NULL " +
+        "AND i.auctionEntryId = :auctionEntryId"
+    )
+    boolean existsFrozenBillLineByAuctionEntryId(@Param("traderId") Long traderId, @Param("auctionEntryId") Long auctionEntryId);
+
+    @Query(
+        "SELECT DISTINCT i.auctionEntryId FROM SalesBillLineItem i " +
+        "JOIN i.commodityGroup g JOIN g.salesBill b " +
+        "WHERE b.traderId = :traderId AND b.lockedAt IS NOT NULL AND b.reopenedAt IS NULL " +
+        "AND i.auctionEntryId IN :auctionEntryIds"
+    )
+    List<Long> findFrozenBillAuctionEntryIds(
+        @Param("traderId") Long traderId,
+        @Param("auctionEntryIds") Collection<Long> auctionEntryIds
+    );
+
+    @Query(
+        "SELECT CASE WHEN COUNT(i) > 0 THEN true ELSE false END FROM SalesBillLineItem i " +
+        "JOIN i.commodityGroup g JOIN g.salesBill b " +
+        "WHERE b.traderId = :traderId AND b.lockedAt IS NOT NULL AND b.reopenedAt IS NULL " +
+        "AND i.lotId = :lotId"
+    )
+    boolean existsFrozenBillLineByLotId(@Param("traderId") Long traderId, @Param("lotId") String lotId);
 }

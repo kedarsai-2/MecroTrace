@@ -2,6 +2,7 @@ import { apiFetch } from './http';
 import type { FreightMethod } from '@/types/models';
 
 export interface ArrivalLotPayload {
+  lot_id?: number;
   lot_name: string;
   lot_serial_number?: number;
   quantity: number;
@@ -12,6 +13,7 @@ export interface ArrivalLotPayload {
 
 /** When from contact: contact_id set. When free-text: contact_id null/omitted, seller_name + seller_phone required. */
 export interface ArrivalSellerPayload {
+  seller_vehicle_id?: number;
   contact_id?: number | null;
   seller_serial_number?: number;
   seller_name: string;
@@ -67,6 +69,10 @@ export interface ArrivalSummary {
   primarySellerName?: string;
   /** Total bags across all lots of this arrival */
   totalBags?: number;
+  /** Individual lot bag counts; used by lot-priority search */
+  lotBagCounts?: number[];
+  /** Per-seller total bag counts; used by lot-priority search */
+  sellerBagTotals?: number[];
   /** Number of lots with at least one bid */
   bidsCount?: number;
   /** Number of lots with a weighing session */
@@ -142,6 +148,7 @@ export interface ArrivalLotFullDetail {
 }
 
 export interface ArrivalSellerFullDetail {
+  sellerVehicleId?: number;
   contactId?: number;
   sellerSerialNumber?: number | null;
   sellerName: string;
@@ -189,6 +196,7 @@ export class ArrivalDeletionBlockedError extends Error {
 export function formatArrivalDeletionBlockerCodes(codes: string[]): string {
   const labels: Record<string, string> = {
     BILLING: 'Billing',
+    AUCTION: 'Auction',
     AUCTION_SELF_SALE: 'Auction self-sale',
     SELF_SALE_CLOSURE: 'Self-sale closure',
     CDN: 'CDN',

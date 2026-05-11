@@ -76,6 +76,69 @@ function sortArrivalSummaries(a: ArrivalSummary, b: ArrivalSummary): number {
   return Number(b.vehicleId) - Number(a.vehicleId);
 }
 
+function normalizeArrivalSearchQuery(query: string): string {
+  return query.trim().toLowerCase();
+}
+
+function arrivalSearchFieldIncludes(fields: Array<string | number | null | undefined>, query: string): boolean {
+  return fields.some((field) => {
+    if (field == null) return false;
+    return String(field).trim().toLowerCase().includes(query);
+  });
+}
+
+function arrivalSearchNumberListIncludes(values: number[] | undefined, query: string): boolean {
+  return Array.isArray(values) && values.some((value) => String(value).includes(query));
+}
+
+function getArrivalSearchTier(arrival: ArrivalSummary, query: string): number | null {
+  if (!query) return 0;
+
+  if (arrivalSearchNumberListIncludes(arrival.lotBagCounts, query)) {
+    return 0;
+  }
+
+  if (arrivalSearchNumberListIncludes(arrival.sellerBagTotals, query)) {
+    return 1;
+  }
+
+  if (arrivalSearchFieldIncludes([arrival.totalBags], query)) {
+    return 2;
+  }
+
+  if (
+    arrivalSearchFieldIncludes(
+      [
+        arrival.vehicleId,
+        arrival.vehicleNumber,
+        arrival.vehicleMarkAlias,
+        arrival.primarySellerName,
+        arrival.origin,
+        arrival.godown,
+        arrival.gatepassNumber,
+      ],
+      query
+    )
+  ) {
+    return 3;
+  }
+
+  return null;
+}
+
+function filterArrivalsBySearchPriority(arrivals: ArrivalSummary[], query: string): ArrivalSummary[] {
+  const q = normalizeArrivalSearchQuery(query);
+  if (!q) return arrivals;
+
+  const ranked = arrivals
+    .map((arrival, index) => ({ arrival, index, tier: getArrivalSearchTier(arrival, q) }))
+    .filter((item): item is { arrival: ArrivalSummary; index: number; tier: number } => item.tier != null);
+
+  return ranked
+    .sort((a, b) => a.tier - b.tier || a.index - b.index)
+    .map((item) => item.arrival);
+}
+
 // ── Types for local arrival data ──────────────────────────
 interface LotEntry {
   lot_id: string;
@@ -936,7 +999,6 @@ const ArrivalsPage = () => {
   const [expandedDetail, setExpandedDetail] = useState<ArrivalFullDetail | null>(null);
   const [expandedDetailLoading, setExpandedDetailLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
-  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('');
   const summaryMode: 'arrivals' | 'sellers' | 'lots' = 'arrivals';
   type StatusFilter = 'ALL' | ArrivalStatus;
   const SUMMARY_STATUS_FILTERS: StatusFilter[] = ['ALL', 'PENDING', 'WEIGHED', 'AUCTIONED', 'SETTLED', 'PARTIALLY_COMPLETED'];
@@ -1324,7 +1386,7 @@ const ArrivalsPage = () => {
     setStep(2);
 
     const mappedSellers: SellerEntry[] = (detail?.sellers ?? []).map((s, idx) => ({
-      seller_vehicle_id: `edit-${s?.contactId ?? idx}-${idx}`,
+      seller_vehicle_id: s?.sellerVehicleId != null ? String(s.sellerVehicleId) : `edit-${s?.contactId ?? idx}-${idx}`,
       contact_id: String(s?.contactId ?? ''),
       seller_serial_number: s?.sellerSerialNumber ?? null,
       seller_name: s?.sellerName ?? '',
@@ -1518,18 +1580,24 @@ const ArrivalsPage = () => {
     partially_completed: true,
     sellers: sellers.map(s => {
       const hasContactId = s.contact_id !== '' && !Number.isNaN(Number(s.contact_id));
+      const sellerVehicleId = Number(s.seller_vehicle_id);
       return {
+        seller_vehicle_id: Number.isFinite(sellerVehicleId) && sellerVehicleId > 0 ? sellerVehicleId : undefined,
         contact_id: hasContactId ? Number(s.contact_id) : null,
         seller_name: s.seller_name,
         seller_phone: s.seller_phone,
         seller_mark: s.seller_mark || undefined,
-        lots: s.lots.map(l => ({
-          lot_name: l.lot_name,
-          quantity: l.quantity,
-          commodity_name: l.commodity_name,
-          broker_tag: l.broker_tag || undefined,
-          variant: l.variant || undefined,
-        })),
+        lots: s.lots.map(l => {
+          const lotId = Number(l.lot_id);
+          return {
+            lot_id: Number.isFinite(lotId) && lotId > 0 ? lotId : undefined,
+            lot_name: l.lot_name,
+            quantity: l.quantity,
+            commodity_name: l.commodity_name,
+            broker_tag: l.broker_tag || undefined,
+            variant: l.variant || undefined,
+          };
+        }),
       };
     }),
   }), [isMultiSeller, vehicleNumber, vehicleMarkAlias, loadedWeight, emptyWeight, deductedWeight, freightMethod, freightRate, freightKgs, noRental, advancePaid, brokerName, brokerContactId, narration, godown, gatepassNumber, origin, sellers]);
@@ -1621,7 +1689,7 @@ const ArrivalsPage = () => {
   const loadArrivalFormReferenceData = useCallback(async () => {
     if (formReferenceDataLoadRef.current) return formReferenceDataLoadRef.current;
     const promise = Promise.all([
-      contactApi.list({ scope: 'participants' }),
+      contactApi.list({ scope: 'registry' }),
       commodityApi.list(),
       commodityApi.getAllFullConfigs(),
     ])
@@ -1715,7 +1783,7 @@ const ArrivalsPage = () => {
     const g = gatepassNumber.trim();
     if (!g) return false;
     if (g.length < 1 || g.length > 30) return true;
-    return !/^[a-zA-Z0-9]+$/.test(g);
+    return !/^[a-zA-Z0-9-]+$/.test(g);
   }, [gatepassNumber]);
 
   const isBrokerNameInvalid = useMemo(() => {
@@ -1869,13 +1937,6 @@ const ArrivalsPage = () => {
   );
   const totalNetWeightTons = useMemo(() => (totalNetWeightKg > 0 ? totalNetWeightKg / 1000 : 0), [totalNetWeightKg]);
 
-  useEffect(() => {
-    const id = window.setTimeout(() => {
-      setDebouncedSearchQuery(searchQuery.trim());
-    }, 250);
-    return () => window.clearTimeout(id);
-  }, [searchQuery]);
-
   const filteredArrivals = useMemo(() => {
     const source =
       statusFilter === 'PARTIALLY_COMPLETED'
@@ -1887,8 +1948,9 @@ const ArrivalsPage = () => {
     if (statusFilter === 'PENDING' || statusFilter === 'WEIGHED' || statusFilter === 'AUCTIONED' || statusFilter === 'SETTLED') {
       result = result.filter(a => getArrivalStatus(a) === statusFilter);
     }
+    result = filterArrivalsBySearchPriority(result, searchQuery);
     return result;
-  }, [apiArrivals, partialArrivals, statusFilter]);
+  }, [apiArrivals, partialArrivals, searchQuery, statusFilter]);
 
   const statusCounts = useMemo(() => {
     const counts: Record<StatusFilter, number> = {
@@ -1906,9 +1968,9 @@ const ArrivalsPage = () => {
     if (s === 'PARTIALLY_COMPLETED') return 'Partially Completed';
     return s.charAt(0) + s.slice(1).toLowerCase();
   };
-  const isSearchDebouncing = searchQuery.trim() !== debouncedSearchQuery.trim();
-  const activeArrivalsLoading =
-    isSearchDebouncing ||
+  const hasLoadedArrivalRows = apiArrivals.length > 0 || partialArrivals.length > 0;
+  const hasArrivalSearch = searchQuery.trim().length > 0;
+  const activeArrivalsLoading = !hasLoadedArrivalRows &&
     (statusFilter === 'ALL'
       ? apiArrivalsLoading || partialArrivalsLoading
       : statusFilter === 'PARTIALLY_COMPLETED'
@@ -2038,9 +2100,6 @@ const ArrivalsPage = () => {
     setCompletedArrivalsComplete(false);
     setPartialArrivalsTotal(null);
     setPartialArrivalsComplete(false);
-    setApiArrivals([]);
-    setPartialArrivals([]);
-    const q = debouncedSearchQuery.trim();
 
     const mergeSummaryMap = (map: Map<string, ArrivalSummary>, items: ArrivalSummary[]) => {
       for (const it of items) map.set(String(it.vehicleId), it);
@@ -2058,7 +2117,6 @@ const ArrivalsPage = () => {
               size: ARRIVALS_PAGE_SIZE,
               sort: ARRIVAL_LIST_SORT,
               partiallyCompleted: false,
-              q,
             },
             { signal }
           );
@@ -2107,7 +2165,6 @@ const ArrivalsPage = () => {
               size: ARRIVALS_PAGE_SIZE,
               sort: ARRIVAL_LIST_SORT,
               partiallyCompleted: true,
-              q,
             },
             { signal }
           );
@@ -2151,11 +2208,11 @@ const ArrivalsPage = () => {
         setPartialArrivalsLoading(false);
       });
     }
-  }, [debouncedSearchQuery]);
+  }, []);
 
   const loadContactsFromApi = useCallback(async () => {
     try {
-      const loaded = await contactApi.list({ scope: 'participants' });
+      const loaded = await contactApi.list({ scope: 'registry' });
       setContacts(loaded);
     } catch (err) {
       console.error('Failed to reload contacts:', err);
@@ -3073,7 +3130,7 @@ const ArrivalsPage = () => {
                         <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
                         <input
                           type="search"
-                          placeholder="Search seller, vehicle, origin..."
+                          placeholder="Search lots by qty, seller qty, vehicle qty, or seller..."
                           value={searchQuery}
                           onChange={e => setSearchQuery(e.target.value)}
                           className="w-full min-w-0 h-9 pl-9 pr-4 rounded-xl text-xs bg-white dark:bg-card border border-border/40 shadow-sm focus:outline-none focus-visible:ring-1 focus-visible:ring-[#6075FF]"
@@ -3103,7 +3160,16 @@ const ArrivalsPage = () => {
                     )}
                     {summaryMode === 'arrivals' && (
                       filteredArrivals.length === 0 ? (
-                        statusFilter !== 'ALL' ? (
+                        hasArrivalSearch ? (
+                          <div className="glass-card p-12 rounded-2xl text-center">
+                            <Search className="w-12 h-12 text-muted-foreground/50 mx-auto mb-4" />
+                            <h3 className="text-lg font-bold text-foreground mb-1">No results found</h3>
+                            <p className="text-sm text-muted-foreground mb-4">Try a different search term or filter.</p>
+                            <Button onClick={() => { setSearchQuery(''); setStatusFilter('ALL'); }} variant="outline" className="rounded-xl">
+                              Clear Filters
+                            </Button>
+                          </div>
+                        ) : statusFilter !== 'ALL' ? (
                           <div className="glass-card p-12 rounded-2xl text-center">
                             <Filter className="w-12 h-12 text-muted-foreground/50 mx-auto mb-4" />
                             <h3 className="text-lg font-bold text-foreground mb-1">No {statusLabel(statusFilter)} arrivals</h3>
@@ -3454,7 +3520,7 @@ const ArrivalsPage = () => {
                             "text-xs font-bold uppercase tracking-wider mb-2 block leading-snug sm:mb-2 sm:flex sm:min-h-[2.85rem] sm:items-end sm:pb-0.5",
                             isGatepassNumberInvalid ? "text-red-500" : "text-muted-foreground",
                           )}>
-                            Gatepass (optional) {isGatepassNumberInvalid && '⚠ 1–30, alphanumeric'}
+                            Gatepass (optional) {isGatepassNumberInvalid && '⚠ 1–30, letters, digits, hyphens'}
                           </label>
                           <Input placeholder="Gatepass no. (optional)" value={gatepassNumber} onChange={e => setGatepassNumber(e.target.value.length <= 30 ? e.target.value : gatepassNumber)} className={cn("h-11 w-full min-w-0 rounded-xl text-sm", isGatepassNumberInvalid && "border-red-500 ring-2 ring-red-500/30 bg-red-50 dark:bg-red-950/20")} maxLength={30} />
                         </div>
@@ -3592,7 +3658,7 @@ const ArrivalsPage = () => {
                         <div className="w-6 h-6 rounded-lg bg-gradient-to-br from-emerald-500 to-teal-500 flex items-center justify-center">
                           <Users className="w-3 h-3 text-white" />
                         </div>
-                        <h3 className="text-sm font-bold text-foreground">Sellers & Lots</h3>
+                        <h3 className="text-sm font-bold text-foreground">Sellers & Lots{vehicleTotalBags > 0 ? ` (${vehicleTotalBags})` : ''}</h3>
                         <div className="flex-1 h-px bg-border/30" />
                       </div>
                     )}
@@ -4017,7 +4083,7 @@ const ArrivalsPage = () => {
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
               <input
                 type="search"
-                placeholder="Search seller, vehicle, origin..."
+                placeholder="Search lots by qty, seller qty, vehicle qty, or seller..."
                 value={searchQuery}
                 onChange={e => setSearchQuery(e.target.value)}
                 className="w-full h-10 pl-10 pr-4 rounded-xl text-sm bg-white dark:bg-card border border-border/40 shadow-sm focus:outline-none focus-visible:ring-1 focus-visible:ring-[#6075FF] text-foreground placeholder:text-muted-foreground"
@@ -4051,7 +4117,16 @@ const ArrivalsPage = () => {
                 <p className="text-muted-foreground">Loading arrivals…</p>
               </div>
             ) : filteredArrivals.length === 0 ? (
-              statusFilter !== 'ALL' ? (
+              hasArrivalSearch ? (
+                <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="glass-card p-8 rounded-2xl text-center">
+                  <Search className="w-12 h-12 text-muted-foreground/50 mx-auto mb-4" />
+                  <h3 className="text-lg font-bold text-foreground mb-1">No results found</h3>
+                  <p className="text-sm text-muted-foreground mb-4">Try a different search term or filter.</p>
+                  <Button onClick={() => { setSearchQuery(''); setStatusFilter('ALL'); }} variant="outline" className="rounded-xl">
+                    Clear Filters
+                  </Button>
+                </motion.div>
+              ) : statusFilter !== 'ALL' ? (
                 <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="glass-card p-8 rounded-2xl text-center">
                   <Filter className="w-12 h-12 text-muted-foreground/50 mx-auto mb-4" />
                   <h3 className="text-lg font-bold text-foreground mb-1">No {statusLabel(statusFilter)} arrivals</h3>
@@ -4495,7 +4570,7 @@ const ArrivalsPage = () => {
                             "text-xs font-bold uppercase tracking-wider mb-2 block leading-snug sm:mb-2 sm:flex sm:min-h-[2.85rem] sm:items-end sm:pb-0.5",
                             isGatepassNumberInvalid ? "text-red-500" : "text-muted-foreground",
                           )}>
-                            Gatepass (optional) {isGatepassNumberInvalid && '⚠ 1–30'}
+                            Gatepass (optional) {isGatepassNumberInvalid && '⚠ 1–30, letters, digits, hyphens'}
                           </label>
                           <Input placeholder="Gatepass (optional)" value={gatepassNumber} onChange={e => setGatepassNumber(e.target.value.length <= 30 ? e.target.value : gatepassNumber)} className={cn("h-12 w-full min-w-0 rounded-xl", isGatepassNumberInvalid && "border-red-500 ring-2 ring-red-500/30 bg-red-50 dark:bg-red-950/20")} maxLength={30} />
                         </div>
@@ -4631,7 +4706,7 @@ const ArrivalsPage = () => {
                         <div className="w-6 h-6 rounded-lg bg-gradient-to-br from-emerald-500 to-teal-500 flex items-center justify-center">
                           <Users className="w-3 h-3 text-white" />
                         </div>
-                        <h3 className="text-sm font-bold text-foreground">Sellers & Lots</h3>
+                        <h3 className="text-sm font-bold text-foreground">Sellers & Lots{vehicleTotalBags > 0 ? ` (${vehicleTotalBags})` : ''}</h3>
                         <div className="flex-1 h-px bg-border/30" />
                       </div>
                     )}

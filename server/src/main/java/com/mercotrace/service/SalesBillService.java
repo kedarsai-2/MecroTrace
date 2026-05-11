@@ -2,6 +2,9 @@ package com.mercotrace.service;
 
 import com.mercotrace.service.dto.SalesBillDTOs.SalesBillCreateOrUpdateRequest;
 import com.mercotrace.service.dto.SalesBillDTOs.SalesBillDTO;
+import com.mercotrace.service.dto.SalesBillDTOs.SalesBillReservedBidRowDTO;
+import com.mercotrace.service.dto.SalesBillDTOs.SalesBillSummaryDTO;
+import java.util.List;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 
@@ -15,6 +18,16 @@ public interface SalesBillService {
      */
     Page<SalesBillDTO> getBills(Pageable pageable, String billNumber, String buyerName,
                                java.time.Instant dateFrom, java.time.Instant dateTo);
+
+    /**
+     * Lightweight paginated rows for Billing In Progress / Saved lists.
+     */
+    Page<SalesBillSummaryDTO> getBillSummaries(Pageable pageable, String q, String status);
+
+    /**
+     * All billed bid/lot keys for reserved-bid UX (current trader). Small payload vs paginated bill list.
+     */
+    List<SalesBillReservedBidRowDTO> listReservedBidRows();
 
     /**
      * Get one bill by id (current trader only).
@@ -36,4 +49,14 @@ public interface SalesBillService {
      * If the bill already has a number, this is a no-op and returns the existing bill.
      */
     SalesBillDTO assignNumber(Long id);
+
+    /**
+     * Mark a bill as printed and freeze it until explicitly reopened.
+     */
+    SalesBillDTO markPrinted(Long id);
+
+    /**
+     * Reopen a printed/frozen bill for editing with audit timestamp/user.
+     */
+    SalesBillDTO reopen(Long id);
 }

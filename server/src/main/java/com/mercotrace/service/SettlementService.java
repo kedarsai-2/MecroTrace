@@ -44,6 +44,16 @@ public interface SettlementService {
     Optional<PattiDTO> updatePatti(Long id, PattiSaveRequest request);
 
     /**
+     * Mark a Sales Patti as printed and freeze it until explicitly reopened.
+     */
+    PattiDTO markPattiPrinted(Long id);
+
+    /**
+     * Reopen a printed/frozen Sales Patti for editing with audit timestamp/user.
+     */
+    PattiDTO reopenPatti(Long id);
+
+    /**
      * List pattis for current trader. Paginated.
      */
     Page<PattiDTO> listPattis(Pageable pageable);

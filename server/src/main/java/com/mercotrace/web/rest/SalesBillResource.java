@@ -4,10 +4,13 @@ import com.mercotrace.security.AuthoritiesConstants;
 import com.mercotrace.service.SalesBillService;
 import com.mercotrace.service.dto.SalesBillDTOs.SalesBillCreateOrUpdateRequest;
 import com.mercotrace.service.dto.SalesBillDTOs.SalesBillDTO;
+import com.mercotrace.service.dto.SalesBillDTOs.SalesBillReservedBidRowDTO;
+import com.mercotrace.service.dto.SalesBillDTOs.SalesBillSummaryDTO;
 import com.mercotrace.web.rest.errors.BadRequestAlertException;
 import jakarta.validation.Valid;
 import java.net.URI;
 import java.time.Instant;
+import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -61,6 +64,34 @@ public class SalesBillResource {
         Page<SalesBillDTO> page = salesBillService.getBills(pageable, billNumber, buyerName, dateFrom, dateTo);
         HttpHeaders headers = PaginationUtil.generatePaginationHttpHeaders(ServletUriComponentsBuilder.fromCurrentRequest(), page);
         return ResponseEntity.ok().headers(headers).body(page);
+    }
+
+    /**
+     * {@code GET /api/sales-bills/summaries} : Lightweight rows for Billing In Progress / Saved lists.
+     */
+    @GetMapping("/summaries")
+    @PreAuthorize("hasAuthority(\"" + AuthoritiesConstants.BILLING_VIEW + "\")")
+    public ResponseEntity<Page<SalesBillSummaryDTO>> getBillSummaries(
+        @org.springdoc.core.annotations.ParameterObject
+        @PageableDefault(size = 100, sort = "billDate", direction = Sort.Direction.DESC) Pageable pageable,
+        @RequestParam(required = false) String q,
+        @RequestParam(required = false) String status
+    ) {
+        LOG.debug("REST request to get sales bill summaries: page={}, q={}, status={}", pageable, q, status);
+        Page<SalesBillSummaryDTO> page = salesBillService.getBillSummaries(pageable, q, status);
+        HttpHeaders headers = PaginationUtil.generatePaginationHttpHeaders(ServletUriComponentsBuilder.fromCurrentRequest(), page);
+        return ResponseEntity.ok().headers(headers).body(page);
+    }
+
+    /**
+     * {@code GET /api/sales-bills/reserved-bids} : Lightweight billed bid/lot rows for Buyer Operations exclusions.
+     */
+    @GetMapping("/reserved-bids")
+    @PreAuthorize("hasAuthority(\"" + AuthoritiesConstants.BILLING_VIEW + "\")")
+    public ResponseEntity<List<SalesBillReservedBidRowDTO>> listReservedBidsForTrader() {
+        LOG.debug("REST request to list billed bid reservations");
+        List<SalesBillReservedBidRowDTO> rows = salesBillService.listReservedBidRows();
+        return ResponseEntity.ok(rows);
     }
 
     /**
@@ -124,6 +155,34 @@ public class SalesBillResource {
         try {
             SalesBillDTO result = salesBillService.assignNumber(id);
             return ResponseEntity.ok(result);
+        } catch (IllegalArgumentException e) {
+            throw new BadRequestAlertException(e.getMessage(), ENTITY_NAME, "validation");
+        }
+    }
+
+    /**
+     * {@code POST /api/sales-bills/:id/print-lock} : mark bill as printed and freeze edits.
+     */
+    @PostMapping("/{id}/print-lock")
+    @PreAuthorize("hasAuthority(\"" + AuthoritiesConstants.BILLING_EDIT + "\")")
+    public ResponseEntity<SalesBillDTO> markPrinted(@PathVariable Long id) {
+        LOG.debug("REST request to print-lock sales bill: {}", id);
+        try {
+            return ResponseEntity.ok(salesBillService.markPrinted(id));
+        } catch (IllegalArgumentException e) {
+            throw new BadRequestAlertException(e.getMessage(), ENTITY_NAME, "validation");
+        }
+    }
+
+    /**
+     * {@code POST /api/sales-bills/:id/reopen} : reopen a printed/frozen bill for editing.
+     */
+    @PostMapping("/{id}/reopen")
+    @PreAuthorize("hasAuthority(\"" + AuthoritiesConstants.BILLING_EDIT + "\")")
+    public ResponseEntity<SalesBillDTO> reopen(@PathVariable Long id) {
+        LOG.debug("REST request to reopen sales bill: {}", id);
+        try {
+            return ResponseEntity.ok(salesBillService.reopen(id));
         } catch (IllegalArgumentException e) {
             throw new BadRequestAlertException(e.getMessage(), ENTITY_NAME, "validation");
         }

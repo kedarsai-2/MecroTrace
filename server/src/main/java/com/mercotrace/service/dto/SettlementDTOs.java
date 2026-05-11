@@ -89,6 +89,13 @@ public final class SettlementDTOs {
         private String extensionJson;
         /** Parsed from original_snapshot_json (immutable first-open snapshot). */
         private Object originalData;
+        private Instant printedAt;
+        private Instant lockedAt;
+        private String lockedBy;
+        private Instant reopenedAt;
+        private String reopenedBy;
+        private String reopenReason;
+        private Boolean frozen;
 
         public Long getId() { return id; }
         public void setId(Long id) { this.id = id; }
@@ -130,6 +137,20 @@ public final class SettlementDTOs {
         public void setExtensionJson(String extensionJson) { this.extensionJson = extensionJson; }
         public Object getOriginalData() { return originalData; }
         public void setOriginalData(Object originalData) { this.originalData = originalData; }
+        public Instant getPrintedAt() { return printedAt; }
+        public void setPrintedAt(Instant printedAt) { this.printedAt = printedAt; }
+        public Instant getLockedAt() { return lockedAt; }
+        public void setLockedAt(Instant lockedAt) { this.lockedAt = lockedAt; }
+        public String getLockedBy() { return lockedBy; }
+        public void setLockedBy(String lockedBy) { this.lockedBy = lockedBy; }
+        public Instant getReopenedAt() { return reopenedAt; }
+        public void setReopenedAt(Instant reopenedAt) { this.reopenedAt = reopenedAt; }
+        public String getReopenedBy() { return reopenedBy; }
+        public void setReopenedBy(String reopenedBy) { this.reopenedBy = reopenedBy; }
+        public String getReopenReason() { return reopenReason; }
+        public void setReopenReason(String reopenReason) { this.reopenReason = reopenReason; }
+        public Boolean getFrozen() { return frozen; }
+        public void setFrozen(Boolean frozen) { this.frozen = frozen; }
     }
 
     /** Request to create or update a patti (frontend sends full PattiData-like payload). */
@@ -271,6 +292,15 @@ public final class SettlementDTOs {
         /** Arrivals vehicle PK; used to load freight without scanning the arrivals list. */
         private Long vehicleId;
         private String vehicleNumber;
+        /**
+         * {@link com.mercotrace.domain.Vehicle#getVehicleMarkAlias()} — same segment as Auction / Billing lot identifier.
+         */
+        private String vehicleMark;
+        /**
+         * Sum of {@link Lot#getBagCount()} for all lots on this vehicle (arrivals). Used with {@link #vehicleMark} for
+         * {@code formatAuctionLotIdentifier}-style labels.
+         */
+        private Integer vehicleTotalQty;
         /** Sum of {@link Lot#getBagCount()} for this seller's lots (Arrivals). */
         private Integer arrivalTotalBags;
         /**
@@ -280,6 +310,10 @@ public final class SettlementDTOs {
         private BigDecimal vehicleArrivalNetBillableKg;
         /** Σ billing line weights ({@code sales_bill_line_item.weight}) for this seller's lots. */
         private BigDecimal billingNetWeightKg;
+        /** True when this seller already has a printed Sales Patti still in non-edit/frozen mode. */
+        private Boolean frozen;
+        private String frozenPattiId;
+        private Instant frozenAt;
         /** When set, seller is linked to a registry contact ({@code seller_in_vehicle.contact_id}). */
         private String contactId;
         /**
@@ -301,6 +335,10 @@ public final class SettlementDTOs {
         public void setVehicleId(Long vehicleId) { this.vehicleId = vehicleId; }
         public String getVehicleNumber() { return vehicleNumber; }
         public void setVehicleNumber(String vehicleNumber) { this.vehicleNumber = vehicleNumber; }
+        public String getVehicleMark() { return vehicleMark; }
+        public void setVehicleMark(String vehicleMark) { this.vehicleMark = vehicleMark; }
+        public Integer getVehicleTotalQty() { return vehicleTotalQty; }
+        public void setVehicleTotalQty(Integer vehicleTotalQty) { this.vehicleTotalQty = vehicleTotalQty; }
         public Integer getArrivalTotalBags() { return arrivalTotalBags; }
         public void setArrivalTotalBags(Integer arrivalTotalBags) { this.arrivalTotalBags = arrivalTotalBags; }
         public BigDecimal getVehicleArrivalNetBillableKg() { return vehicleArrivalNetBillableKg; }
@@ -309,6 +347,12 @@ public final class SettlementDTOs {
         }
         public BigDecimal getBillingNetWeightKg() { return billingNetWeightKg; }
         public void setBillingNetWeightKg(BigDecimal billingNetWeightKg) { this.billingNetWeightKg = billingNetWeightKg; }
+        public Boolean getFrozen() { return frozen; }
+        public void setFrozen(Boolean frozen) { this.frozen = frozen; }
+        public String getFrozenPattiId() { return frozenPattiId; }
+        public void setFrozenPattiId(String frozenPattiId) { this.frozenPattiId = frozenPattiId; }
+        public Instant getFrozenAt() { return frozenAt; }
+        public void setFrozenAt(Instant frozenAt) { this.frozenAt = frozenAt; }
         public String getContactId() { return contactId; }
         public void setContactId(String contactId) { this.contactId = contactId; }
         public String getSellerPhone() { return sellerPhone; }

@@ -16,6 +16,7 @@ public interface AuctionEntryMapper extends EntityMapper<AuctionEntryDTO, Auctio
 
     @Override
     @Mapping(target = "lastModifiedMs", ignore = true)
+    @Mapping(target = "frozen", ignore = true)
     AuctionEntryDTO toDto(AuctionEntry entity);
 
     @Override

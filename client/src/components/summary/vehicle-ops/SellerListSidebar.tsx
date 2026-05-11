@@ -31,7 +31,7 @@ export function SellerListSidebar({
       aria-label="Sellers on this vehicle"
       className={cn(
         'flex min-h-0 gap-2 pb-1 [-webkit-overflow-scrolling:touch]',
-        /* Horizontal strip + touch pan for phone/tablet; vertical sidebar from lg (1024px) with VehicleOpsSellerWorkspace grid. */
+        /* Horizontal strip for phone + tablet; vertical sidebar only at desktop (`lg`) when workspace grid is split. */
         'touch-[pan-x_pan-y] overflow-x-auto no-scrollbar',
         'lg:flex-col lg:touch-auto lg:gap-2 lg:overflow-y-visible lg:overflow-x-visible lg:pb-0 lg:pr-1',
       )}
@@ -74,7 +74,7 @@ export function SellerListSidebar({
               }
             }}
             className={cn(
-              'flex min-w-[220px] shrink-0 touch-manipulation rounded-2xl border text-left transition-colors lg:min-w-0',
+              'flex min-w-[220px] shrink-0 touch-manipulation rounded-2xl border text-left transition-colors lg:min-w-0 lg:max-w-full lg:w-full',
               selected
                 ? 'border-[#6075FF]/50 bg-violet-500/10 shadow-sm dark:bg-violet-500/15'
                 : 'border-border/40 bg-white/80 hover:bg-muted/30 dark:bg-card/80',

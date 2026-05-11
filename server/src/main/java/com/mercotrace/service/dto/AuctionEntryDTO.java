@@ -76,6 +76,10 @@ public class AuctionEntryDTO implements Serializable {
     @JsonProperty("last_modified_ms")
     private Long lastModifiedMs;
 
+    /** True when this exact bid is part of a printed, non-reopened Sales Bill. */
+    @JsonProperty("frozen")
+    private Boolean frozen;
+
     public Long getId() {
         return id;
     }
@@ -234,6 +238,14 @@ public class AuctionEntryDTO implements Serializable {
 
     public void setLastModifiedMs(Long lastModifiedMs) {
         this.lastModifiedMs = lastModifiedMs;
+    }
+
+    public Boolean getFrozen() {
+        return frozen;
+    }
+
+    public void setFrozen(Boolean frozen) {
+        this.frozen = frozen;
     }
 }
 

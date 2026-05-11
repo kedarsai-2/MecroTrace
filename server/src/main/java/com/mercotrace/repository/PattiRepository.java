@@ -1,6 +1,8 @@
 package com.mercotrace.repository;
 
 import com.mercotrace.domain.Patti;
+import java.util.Collection;
+import java.util.List;
 import java.util.Optional;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -20,6 +22,13 @@ public interface PattiRepository extends JpaRepository<Patti, Long> {
     Page<Patti> findAllByTraderIdAndInProgressFalseOrderByCreatedDateDesc(Long traderId, Pageable pageable);
 
     Page<Patti> findAllByTraderIdAndInProgressTrueOrderByCreatedDateDesc(Long traderId, Pageable pageable);
+
+    boolean existsByTraderIdAndSellerIdAndLockedAtIsNotNullAndReopenedAtIsNullAndInProgressFalse(Long traderId, String sellerId);
+
+    List<Patti> findAllByTraderIdAndSellerIdInAndLockedAtIsNotNullAndReopenedAtIsNullAndInProgressFalse(
+        Long traderId,
+        Collection<String> sellerIds
+    );
 
     boolean existsByPattiId(String pattiId);
 

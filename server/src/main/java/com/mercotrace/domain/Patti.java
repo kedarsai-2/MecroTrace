@@ -69,6 +69,24 @@ public class Patti extends AbstractAuditingEntity<Long> implements Serializable 
     @Column(name = "original_snapshot_json", columnDefinition = "TEXT")
     private String originalSnapshotJson;
 
+    @Column(name = "printed_at")
+    private Instant printedAt;
+
+    @Column(name = "locked_at")
+    private Instant lockedAt;
+
+    @Column(name = "locked_by", length = 100)
+    private String lockedBy;
+
+    @Column(name = "reopened_at")
+    private Instant reopenedAt;
+
+    @Column(name = "reopened_by", length = 100)
+    private String reopenedBy;
+
+    @Column(name = "reopen_reason", length = 500)
+    private String reopenReason;
+
     @OneToMany(mappedBy = "patti", cascade = CascadeType.ALL, orphanRemoval = true)
     @OrderBy("rate DESC")
     private List<PattiRateCluster> rateClusters = new ArrayList<>();
@@ -204,5 +222,53 @@ public class Patti extends AbstractAuditingEntity<Long> implements Serializable 
 
     public void setOriginalSnapshotJson(String originalSnapshotJson) {
         this.originalSnapshotJson = originalSnapshotJson;
+    }
+
+    public Instant getPrintedAt() {
+        return printedAt;
+    }
+
+    public void setPrintedAt(Instant printedAt) {
+        this.printedAt = printedAt;
+    }
+
+    public Instant getLockedAt() {
+        return lockedAt;
+    }
+
+    public void setLockedAt(Instant lockedAt) {
+        this.lockedAt = lockedAt;
+    }
+
+    public String getLockedBy() {
+        return lockedBy;
+    }
+
+    public void setLockedBy(String lockedBy) {
+        this.lockedBy = lockedBy;
+    }
+
+    public Instant getReopenedAt() {
+        return reopenedAt;
+    }
+
+    public void setReopenedAt(Instant reopenedAt) {
+        this.reopenedAt = reopenedAt;
+    }
+
+    public String getReopenedBy() {
+        return reopenedBy;
+    }
+
+    public void setReopenedBy(String reopenedBy) {
+        this.reopenedBy = reopenedBy;
+    }
+
+    public String getReopenReason() {
+        return reopenReason;
+    }
+
+    public void setReopenReason(String reopenReason) {
+        this.reopenReason = reopenReason;
     }
 }

@@ -37,6 +37,13 @@ export interface PattiDTO {
   createdAt: string;
   useAverageWeight?: boolean;
   inProgress?: boolean;
+  printedAt?: string | null;
+  lockedAt?: string | null;
+  lockedBy?: string | null;
+  reopenedAt?: string | null;
+  reopenedBy?: string | null;
+  reopenReason?: string | null;
+  frozen?: boolean;
   /** Optional JSON: per-seller lot overrides and removed lot ids (see SettlementPage extension v1). */
   extensionJson?: string;
   /** Parsed first-open snapshot (from original_snapshot_json). */
@@ -92,6 +99,10 @@ export interface SellerSettlementDTO {
   /** Arrivals `vehicle.id` — load freight via GET /arrivals/:id without list scan. */
   vehicleId?: number;
   vehicleNumber: string;
+  /** Arrivals `vehicle.vehicle_mark_alias` — segment 1 of auction/billing lot identifier. */
+  vehicleMark?: string;
+  /** Sum of lot bag counts on this vehicle (all sellers). Segment 1 qty of auction/billing lot identifier. */
+  vehicleTotalQty?: number;
   /** Arrivals: Σ bag counts for this seller's lots. */
   arrivalTotalBags?: number;
   /** Arrivals: vehicle net billable kg (net − deducted) from weighing; shared across sellers on same vehicle. */
@@ -105,6 +116,9 @@ export interface SellerSettlementDTO {
   fromLocation?: string;
   sellerSerialNo?: number | string;
   date?: string;
+  frozen?: boolean;
+  frozenPattiId?: string;
+  frozenAt?: string;
   lots: SettlementLotDTO[];
 }
 
@@ -377,6 +391,24 @@ export const settlementApi = {
     const res = await apiFetch(`${BASE}/pattis/${id}`, { method: 'PUT', body: JSON.stringify(body) });
     if (res.status === 404) return null;
     if (!res.ok) await parseJsonOrThrow(res, 'Failed to update patti');
+    const dto = await res.json();
+    if (dto.createdAt) dto.createdAt = typeof dto.createdAt === 'string' ? dto.createdAt : new Date(dto.createdAt).toISOString();
+    return dto;
+  },
+
+  async markPattiPrinted(id: number): Promise<PattiDTO> {
+    const res = await apiFetch(`${BASE}/pattis/${id}/print-lock`, { method: 'POST' });
+    if (!res.ok) await parseJsonOrThrow(res, 'Failed to freeze printed patti');
+    const dto = await res.json();
+    if (dto.createdAt) dto.createdAt = typeof dto.createdAt === 'string' ? dto.createdAt : new Date(dto.createdAt).toISOString();
+    return dto;
+  },
+
+  async reopenPatti(id: number): Promise<PattiDTO> {
+    const res = await apiFetch(`${BASE}/pattis/${id}/reopen`, {
+      method: 'POST',
+    });
+    if (!res.ok) await parseJsonOrThrow(res, 'Failed to reopen patti');
     const dto = await res.json();
     if (dto.createdAt) dto.createdAt = typeof dto.createdAt === 'string' ? dto.createdAt : new Date(dto.createdAt).toISOString();
     return dto;

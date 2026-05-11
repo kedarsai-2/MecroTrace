@@ -30,6 +30,14 @@ export type ContactListPage = {
   total: number;
 };
 
+function isPortalContact(contact: Contact): boolean {
+  return String(contact.trader_id ?? '').trim().length === 0;
+}
+
+function normalizePhoneKey(phone: string): string {
+  return phone.replace(/\D/g, '');
+}
+
 function mapDtoToContact(dto: ContactDto): Contact {
   const contactId = dto.contact_id ?? dto.id;
   const traderId = dto.trader_id ?? dto.traderId ?? '';
@@ -57,6 +65,7 @@ function mapContactToCreatePayload(data: Partial<Contact>): Record<string, unkno
     mark: data.mark?.trim() ?? '',
     address: data.address?.trim() ?? '',
     traderId: data.trader_id && data.trader_id.length > 0 ? data.trader_id : undefined,
+    canLogin: data.can_login,
   };
 }
 
@@ -67,6 +76,7 @@ function mapContactToUpdatePayload(id: string, data: Partial<Contact>): Record<s
     phone: data.phone?.trim() ?? '',
     mark: data.mark?.trim() ?? '',
     address: data.address?.trim() ?? '',
+    canLogin: data.can_login,
   };
 }
 
@@ -112,7 +122,7 @@ async function handleResponse<T>(res: Response, defaultMessage: string): Promise
 }
 
 export const contactApi = {
-  /** @param scope registry = Contacts module list; participants = arrival/auction picker (trader + all portal signups). */
+  /** @param scope registry = trader-owned + imported portal contacts; participants = picker-safe alias for the same scoped set. */
   async list(opts?: { scope?: 'registry' | 'participants' }): Promise<Contact[]> {
     const scope = opts?.scope ?? 'registry';
     const res = await apiFetch(`/contacts?scope=${encodeURIComponent(scope)}`, {
@@ -207,7 +217,7 @@ export const contactApi = {
   async search(mark: string): Promise<Contact[]> {
     const trimmed = mark.trim();
     if (!trimmed) {
-      return this.list({ scope: 'participants' });
+      return this.list({ scope: 'registry' });
     }
     const params = new URLSearchParams({ mark: trimmed });
     const res = await apiFetch(`/contacts/search?${params.toString()}`, {
@@ -215,6 +225,16 @@ export const contactApi = {
     });
     const data = await handleResponse<ContactDto[]>(res, 'Failed to search contacts');
     return data.map(mapDtoToContact);
+  },
+
+  async searchRegistry(q: string, opts?: { limit?: number }): Promise<Contact[]> {
+    const page = await this.listPage({
+      scope: 'registry',
+      page: 0,
+      size: opts?.limit ?? 50,
+      q,
+    });
+    return page.contacts;
   },
 
   async searchParticipants(q: string, opts?: { limit?: number }): Promise<Contact[]> {
@@ -227,6 +247,26 @@ export const contactApi = {
     });
     const data = await handleResponse<ContactDto[]>(res, 'Failed to search participant contacts');
     return data.map(mapDtoToContact);
+  },
+
+  async importPortalContact(contactId: string): Promise<Contact> {
+    const res = await apiFetch(`/contacts/${encodeURIComponent(contactId)}/import`, {
+      method: 'POST',
+    });
+    const data = await handleResponse<ContactDto>(res, 'Failed to import contact');
+    return mapDtoToContact(data);
+  },
+
+  async importPortalContactByPhone(phone: string): Promise<Contact | null> {
+    const phoneKey = normalizePhoneKey(phone);
+    if (!phoneKey) return null;
+    const res = await apiFetch(`/contacts/import-by-phone?phone=${encodeURIComponent(phoneKey)}`, {
+      method: 'POST',
+    });
+    if (res.status === 404) return null;
+    const data = await handleResponse<ContactDto>(res, 'Failed to import contact');
+    const contact = mapDtoToContact(data);
+    return isPortalContact(contact) ? contact : null;
   },
 
   /** Get all ledgers linked to a contact (Phase 6: Contact Consolidated Ledger View). */

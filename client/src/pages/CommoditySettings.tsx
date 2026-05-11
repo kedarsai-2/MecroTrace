@@ -29,6 +29,8 @@ const commodityImages: Record<string, string> = { 'Onion': onionImg, 'Potato': p
 const COMMODITY_SETTINGS_QUERY_KEY = ['commodity-settings', 'full-configs'] as const;
 const COMMODITY_SETTINGS_STALE_TIME_MS = 2 * 60 * 1000;
 const COMMODITY_SETTINGS_LOCAL_CACHE_PREFIX = 'mercotrace.commodity-settings.full-configs';
+const numberInputNoSpinnerClass = '[appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none';
+const createDefaultHamaliSlab = () => ({ threshold_weight: '', fixed_rate: '' });
 
 type CommoditySettingsQueryData = {
   commodities: Commodity[];
@@ -199,7 +201,6 @@ const CommoditySettings = () => {
   const [restorePendingName, setRestorePendingName] = useState<string | null>(null);
   type InlineRemove =
     | { kind: 'deduction'; cIndex: number; ruleIndex: number }
-    | { kind: 'hamali'; cIndex: number; slabIndex: number }
     | { kind: 'charge'; cIndex: number; chargeIndex: number };
   const [pendingInlineRemove, setPendingInlineRemove] = useState<InlineRemove | null>(null);
   const baselineSnapshotRef = useRef<string | null>(null);
@@ -383,22 +384,6 @@ const CommoditySettings = () => {
     ));
   };
 
-  const addHamaliSlab = (index: number) => {
-    setItems(prev => prev.map((item, i) =>
-      i === index
-        ? syncWeighingFromHamaliSlabs(item, [...item.hamaliSlabs, { threshold_weight: '', fixed_rate: '' }])
-        : item
-    ));
-  };
-
-  const removeHamaliSlab = (cIndex: number, slabIndex: number) => {
-    setItems(prev => prev.map((item, i) =>
-      i === cIndex
-        ? syncWeighingFromHamaliSlabs(item, item.hamaliSlabs.filter((_, si) => si !== slabIndex))
-        : item
-    ));
-  };
-
   const handleAddCommodity = async () => {
     if (!canCreate) {
       toast.error('You do not have permission to add commodities.');
@@ -422,7 +407,7 @@ const CommoditySettings = () => {
           commission_percent: 0, user_fee_percent: 0, hsn_code: '',
           created_at: new Date().toISOString(),
         },
-        charges: [], deductionRules: [], hamaliSlabs: [],
+        charges: [], deductionRules: [], hamaliSlabs: [createDefaultHamaliSlab()],
         hamaliEnabled: false, billPrefix: '', gstApplicable: false, taxType: 'GST',
       };
       setItems(prev => [...prev, newItem]);
@@ -851,6 +836,7 @@ const CommoditySettings = () => {
         {items.map((item, index) => {
           const cName = item.commodity.commodity_name || 'Unnamed Commodity';
           const cImage = commodityImages[cName];
+          const hamaliSlabsForEdit = item.hamaliSlabs.length > 0 ? item.hamaliSlabs : [createDefaultHamaliSlab()];
           return (
           <motion.div key={item.commodity.commodity_id} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: index * 0.08 }}>
             <div className="glass-card rounded-2xl p-0 overflow-hidden">
@@ -921,7 +907,7 @@ const CommoditySettings = () => {
                           value={item.config.rate_per_unit || ''}
                           onChange={e => updateConfig(index, { rate_per_unit: Number(e.target.value) })}
                           placeholder="e.g., 90 for Rate per 90kg"
-                          className="h-12 rounded-xl bg-white dark:bg-white/10 border-2 border-blue-200 dark:border-blue-700/50 text-foreground focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 text-base font-medium"
+                          className={cn("h-12 rounded-xl bg-white dark:bg-white/10 border-2 border-blue-200 dark:border-blue-700/50 text-foreground focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 text-base font-medium", numberInputNoSpinnerClass)}
                           min={1}
                         />
                         <p className="text-xs text-blue-600/70 dark:text-blue-400/60 mt-1.5">All financial calculations use this as denominator: Final Price = (Weight ÷ Unit) × Rate</p>
@@ -935,11 +921,11 @@ const CommoditySettings = () => {
                         <div className="grid grid-cols-2 gap-3">
                           <div>
                             <label className="text-[10px] text-amber-600/80 dark:text-amber-400/60 mb-1 block">Min Weight (kg)</label>
-                            <Input type="number" value={item.config.min_weight || ''} onChange={e => updateConfig(index, { min_weight: Number(e.target.value) })} placeholder="e.g., 10" className="h-12 rounded-xl bg-white dark:bg-white/10 border-2 border-amber-200 dark:border-amber-700/50 focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20 text-base font-medium" min={0} />
+                            <Input type="number" value={item.config.min_weight || ''} onChange={e => updateConfig(index, { min_weight: Number(e.target.value) })} placeholder="e.g., 10" className={cn("h-12 rounded-xl bg-white dark:bg-white/10 border-2 border-amber-200 dark:border-amber-700/50 focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20 text-base font-medium", numberInputNoSpinnerClass)} min={0} />
                           </div>
                           <div>
                             <label className="text-[10px] text-amber-600/80 dark:text-amber-400/60 mb-1 block">Max Weight (kg)</label>
-                            <Input type="number" value={item.config.max_weight || ''} onChange={e => updateConfig(index, { max_weight: Number(e.target.value) })} placeholder="e.g., 500" className="h-12 rounded-xl bg-white dark:bg-white/10 border-2 border-amber-200 dark:border-amber-700/50 focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20 text-base font-medium" min={0} />
+                            <Input type="number" value={item.config.max_weight || ''} onChange={e => updateConfig(index, { max_weight: Number(e.target.value) })} placeholder="e.g., 500" className={cn("h-12 rounded-xl bg-white dark:bg-white/10 border-2 border-amber-200 dark:border-amber-700/50 focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20 text-base font-medium", numberInputNoSpinnerClass)} min={0} />
                           </div>
                         </div>
                         <div className="mt-3 rounded-lg bg-amber-100/80 dark:bg-amber-900/20 px-3 py-2 flex items-start gap-2">
@@ -962,11 +948,11 @@ const CommoditySettings = () => {
                         <div className="grid grid-cols-2 gap-3">
                           <div>
                             <label className="text-[10px] text-green-600/80 dark:text-green-400/60 mb-1 block">Commission %</label>
-                            <Input type="number" value={item.config.commission_percent || ''} onChange={e => updateConfig(index, { commission_percent: Number(e.target.value) })} placeholder="e.g., 2.5" className="h-12 rounded-xl bg-white dark:bg-white/10 border-2 border-green-200 dark:border-green-700/50 focus:border-green-500 focus:ring-2 focus:ring-green-500/20 text-base font-medium" min={0} max={100} step={0.1} />
+                            <Input type="number" value={item.config.commission_percent || ''} onChange={e => updateConfig(index, { commission_percent: Number(e.target.value) })} placeholder="e.g., 2.5" className={cn("h-12 rounded-xl bg-white dark:bg-white/10 border-2 border-green-200 dark:border-green-700/50 focus:border-green-500 focus:ring-2 focus:ring-green-500/20 text-base font-medium", numberInputNoSpinnerClass)} min={0} max={100} step={0.1} />
                           </div>
                           <div>
                             <label className="text-[10px] text-green-600/80 dark:text-green-400/60 mb-1 block">User Fee %</label>
-                            <Input type="number" value={item.config.user_fee_percent || ''} onChange={e => updateConfig(index, { user_fee_percent: Number(e.target.value) })} placeholder="e.g., 1.0" className="h-12 rounded-xl bg-white dark:bg-white/10 border-2 border-green-200 dark:border-green-700/50 focus:border-green-500 focus:ring-2 focus:ring-green-500/20 text-base font-medium" min={0} max={100} step={0.1} />
+                            <Input type="number" value={item.config.user_fee_percent || ''} onChange={e => updateConfig(index, { user_fee_percent: Number(e.target.value) })} placeholder="e.g., 1.0" className={cn("h-12 rounded-xl bg-white dark:bg-white/10 border-2 border-green-200 dark:border-green-700/50 focus:border-green-500 focus:ring-2 focus:ring-green-500/20 text-base font-medium", numberInputNoSpinnerClass)} min={0} max={100} step={0.1} />
                           </div>
                         </div>
                       </div>
@@ -1236,17 +1222,17 @@ const CommoditySettings = () => {
                               <Input type="number" placeholder="Min kg" value={rule.min_weight} onChange={e => {
                                 const rules = [...item.deductionRules]; rules[ri] = { ...rules[ri], min_weight: e.target.value };
                                 updateItem(index, { deductionRules: rules });
-                              }} className="h-11 rounded-xl bg-white dark:bg-white/10 border-2 border-amber-200 dark:border-amber-700/50 text-sm flex-1 focus:border-amber-500" min={0} />
+                              }} className={cn("h-11 rounded-xl bg-white dark:bg-white/10 border-2 border-amber-200 dark:border-amber-700/50 text-sm flex-1 focus:border-amber-500", numberInputNoSpinnerClass)} min={0} />
                               <span className="text-sm font-bold text-amber-500">–</span>
                               <Input type="number" placeholder="Max kg" value={rule.max_weight} onChange={e => {
                                 const rules = [...item.deductionRules]; rules[ri] = { ...rules[ri], max_weight: e.target.value };
                                 updateItem(index, { deductionRules: rules });
-                              }} className="h-11 rounded-xl bg-white dark:bg-white/10 border-2 border-amber-200 dark:border-amber-700/50 text-sm flex-1 focus:border-amber-500" min={0} />
+                              }} className={cn("h-11 rounded-xl bg-white dark:bg-white/10 border-2 border-amber-200 dark:border-amber-700/50 text-sm flex-1 focus:border-amber-500", numberInputNoSpinnerClass)} min={0} />
                               <span className="text-sm font-bold text-amber-500">→</span>
                               <Input type="number" placeholder="Deduct kg" value={rule.deduction_value} onChange={e => {
                                 const rules = [...item.deductionRules]; rules[ri] = { ...rules[ri], deduction_value: e.target.value };
                                 updateItem(index, { deductionRules: rules });
-                              }} className="h-11 rounded-xl bg-white dark:bg-white/10 border-2 border-amber-200 dark:border-amber-700/50 text-sm flex-1 focus:border-amber-500" min={0} step={0.1} />
+                              }} className={cn("h-11 rounded-xl bg-white dark:bg-white/10 border-2 border-amber-200 dark:border-amber-700/50 text-sm flex-1 focus:border-amber-500", numberInputNoSpinnerClass)} min={0} step={0.1} />
                               <button onClick={() => setPendingInlineRemove({ kind: 'deduction', cIndex: index, ruleIndex: ri })} className="text-red-500 hover:text-red-600 shrink-0"><Trash2 className="w-4 h-4" /></button>
                             </div>
                           ))}
@@ -1278,7 +1264,15 @@ const CommoditySettings = () => {
                             </p>
                           </div>
                           <button
-                            onClick={() => updateItem(index, { hamaliEnabled: !item.hamaliEnabled })}
+                            onClick={() => {
+                              const nextEnabled = !item.hamaliEnabled;
+                              updateItem(index, {
+                                hamaliEnabled: nextEnabled,
+                                hamaliSlabs: nextEnabled && item.hamaliSlabs.length === 0
+                                  ? [createDefaultHamaliSlab()]
+                                  : item.hamaliSlabs,
+                              });
+                            }}
                             className={cn("w-14 h-8 rounded-full transition-all relative shadow-inner", item.hamaliEnabled ? 'bg-gradient-to-r from-pink-500 to-fuchsia-500 shadow-pink-500/30' : 'bg-slate-300 dark:bg-slate-600')}
                           >
                             <motion.div className="w-6 h-6 rounded-full bg-white shadow-md absolute top-1" animate={{ x: item.hamaliEnabled ? 28 : 4 }} transition={{ type: 'spring', stiffness: 500, damping: 30 }} />
@@ -1302,31 +1296,24 @@ const CommoditySettings = () => {
                               </p>
                             </div>
                             <p className="text-[10px] text-pink-600/80 dark:text-pink-400/60 mb-2 font-semibold uppercase tracking-wider">Unloading Charge Slabs</p>
-                            <div className="flex items-center justify-end mb-2">
-                              <button onClick={() => addHamaliSlab(index)} className="w-9 h-9 rounded-xl bg-gradient-to-br from-pink-500 to-fuchsia-500 flex items-center justify-center shadow-lg shadow-pink-500/30 hover:scale-105 transition-transform">
-                                <Plus className="w-4 h-4 text-white" />
-                              </button>
-                            </div>
-                            {item.hamaliSlabs.map((slab, si) => (
+                            {hamaliSlabsForEdit.map((slab, si) => (
                               <div key={si} className="flex items-center gap-2 mb-2">
                                 <Input type="number" placeholder="Threshold kg" value={slab.threshold_weight} onChange={e => {
-                                  const slabs = [...item.hamaliSlabs];
+                                  const slabs = [...hamaliSlabsForEdit];
                                   slabs[si] = { ...slabs[si], threshold_weight: e.target.value };
                                   setItems(prev => prev.map((it, ii) => (
                                     ii === index ? syncWeighingFromHamaliSlabs(it, slabs) : it
                                   )));
-                                }} className="h-11 rounded-xl bg-white dark:bg-white/10 border-2 border-pink-200 dark:border-pink-700/50 text-sm flex-1 focus:border-pink-500" min={1} />
+                                }} className={cn("h-11 rounded-xl bg-white dark:bg-white/10 border-2 border-pink-200 dark:border-pink-700/50 text-sm flex-1 focus:border-pink-500", numberInputNoSpinnerClass)} min={1} />
                                 <Input type="number" placeholder="Fixed ₹" value={slab.fixed_rate} onChange={e => {
-                                  const slabs = [...item.hamaliSlabs];
+                                  const slabs = [...hamaliSlabsForEdit];
                                   slabs[si] = { ...slabs[si], fixed_rate: e.target.value };
                                   setItems(prev => prev.map((it, ii) => (
                                     ii === index ? syncWeighingFromHamaliSlabs(it, slabs) : it
                                   )));
-                                }} className="h-11 rounded-xl bg-white dark:bg-white/10 border-2 border-pink-200 dark:border-pink-700/50 text-sm flex-1 focus:border-pink-500" min={0} />
-                                <button onClick={() => setPendingInlineRemove({ kind: 'hamali', cIndex: index, slabIndex: si })} className="text-red-500 hover:text-red-600 shrink-0"><Trash2 className="w-4 h-4" /></button>
+                                }} className={cn("h-11 rounded-xl bg-white dark:bg-white/10 border-2 border-pink-200 dark:border-pink-700/50 text-sm flex-1 focus:border-pink-500", numberInputNoSpinnerClass)} min={0} />
                               </div>
                             ))}
-                            {item.hamaliSlabs.length === 0 && <p className="text-xs text-pink-600/60 text-center py-3 italic">No unloading slabs yet. Tap + to add one.</p>}
                           </>
                         )}
                       </div>
@@ -1354,7 +1341,7 @@ const CommoditySettings = () => {
                                 )
                               }
                               placeholder="Optional, e.g., 100"
-                              className="h-12 rounded-xl bg-white dark:bg-white/10 border-2 border-indigo-200 dark:border-indigo-700/50 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 text-base font-medium"
+                              className={cn("h-12 rounded-xl bg-white dark:bg-white/10 border-2 border-indigo-200 dark:border-indigo-700/50 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 text-base font-medium", numberInputNoSpinnerClass)}
                               min={0}
                               step={0.1}
                             />
@@ -1368,7 +1355,7 @@ const CommoditySettings = () => {
                               value={item.config.weighing_charge ?? ''}
                               onChange={e => updateConfig(index, { weighing_charge: e.target.value === '' ? undefined as any : Number(e.target.value) } as any)}
                               placeholder="e.g., 50 (Fixed ₹ per weighment)"
-                              className="h-12 rounded-xl bg-white dark:bg-white/10 border-2 border-indigo-200 dark:border-indigo-700/50 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 text-base font-medium"
+                              className={cn("h-12 rounded-xl bg-white dark:bg-white/10 border-2 border-indigo-200 dark:border-indigo-700/50 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 text-base font-medium", numberInputNoSpinnerClass)}
                               min={0}
                             />
                           </div>
@@ -1428,7 +1415,7 @@ const CommoditySettings = () => {
                                   const nc = [...item.charges]; nc[ci] = { ...nc[ci], value: e.target.value };
                                   updateItem(index, { charges: nc });
                                 }}
-                                className="h-10 rounded-xl bg-white dark:bg-white/10 border-2 border-cyan-200 dark:border-cyan-700/50 text-sm flex-1 focus:border-cyan-500"
+                                className={cn("h-10 rounded-xl bg-white dark:bg-white/10 border-2 border-cyan-200 dark:border-cyan-700/50 text-sm flex-1 focus:border-cyan-500", numberInputNoSpinnerClass)}
                                 min={0}
                               />
                             </div>
@@ -1560,7 +1547,6 @@ const CommoditySettings = () => {
         onOpenChange={(v) => { if (!v) setPendingInlineRemove(null); }}
         title={
           pendingInlineRemove?.kind === 'deduction' ? 'Remove deduction rule?'
-          : pendingInlineRemove?.kind === 'hamali' ? 'Remove hamali slab?'
           : 'Remove charge?'
         }
         description="Remove this row from the commodity settings?"
@@ -1568,7 +1554,6 @@ const CommoditySettings = () => {
         onConfirm={() => {
           if (!pendingInlineRemove) return;
           if (pendingInlineRemove.kind === 'deduction') removeDeductionRule(pendingInlineRemove.cIndex, pendingInlineRemove.ruleIndex);
-          else if (pendingInlineRemove.kind === 'hamali') removeHamaliSlab(pendingInlineRemove.cIndex, pendingInlineRemove.slabIndex);
           else removeCharge(pendingInlineRemove.cIndex, pendingInlineRemove.chargeIndex);
         }}
       />

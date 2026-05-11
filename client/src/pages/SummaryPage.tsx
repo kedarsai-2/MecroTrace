@@ -15,7 +15,7 @@ import {
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import BottomNav from '@/components/BottomNav';
-import { useDesktopMode } from '@/hooks/use-desktop';
+import { useDesktopMode, useMdUp } from '@/hooks/use-desktop';
 import { cn } from '@/lib/utils';
 import ForbiddenPage from '@/components/ForbiddenPage';
 import { useAuth } from '@/context/AuthContext';
@@ -26,7 +26,7 @@ import type { SalesBillDTO } from '@/services/api/billing';
 import type { ArrivalSummary, ArrivalDetail } from '@/services/api/arrivals';
 import { getArrivalStatus } from '@/components/arrivals/ArrivalStatusBadge';
 import SummaryVehicleOperationsView from '@/components/summary/SummaryVehicleOperationsView';
-import SummaryArrivalPipelineCard from '@/components/summary/SummaryArrivalPipelineCard';
+import SummaryArrivalPipelineCard, { type SummaryArrivalCardMeta } from '@/components/summary/SummaryArrivalPipelineCard';
 import SummaryArrivalsTable from '@/components/summary/SummaryArrivalsTable';
 import {
   aggregateAuctionBagsByVehicleId,
@@ -68,6 +68,7 @@ function sortArrivalDetails(a: ArrivalDetail, b: ArrivalDetail): number {
 const SummaryPage = () => {
   const navigate = useNavigate();
   const isDesktop = useDesktopMode();
+  const isMdUp = useMdUp();
   const { trader, user } = useAuth();
   const { canAccessModule } = usePermissions();
   const canView = canAccessModule(SUMMARY_MODULE);
@@ -258,6 +259,34 @@ const SummaryPage = () => {
     () => aggregateAuctionBagsByVehicleId(lotSummaries, auctionedArrivals),
     [lotSummaries, auctionedArrivals],
   );
+
+  const summaryMetaByVehicle = useMemo(() => {
+    const byVehicleNumber = new Map<string, string>();
+    for (const arrival of auctionedArrivals) {
+      const vehicleNumber = (arrival.vehicleNumber ?? '').trim().toLowerCase();
+      if (vehicleNumber) byVehicleNumber.set(vehicleNumber, String(arrival.vehicleId));
+    }
+    const out = new Map<string, SummaryArrivalCardMeta>();
+    for (const lot of lotSummaries) {
+      const vehicleId = byVehicleNumber.get((lot.vehicle_number ?? '').trim().toLowerCase());
+      if (!vehicleId) continue;
+      const current = out.get(vehicleId) ?? { summaryEdited: false, frozen: false };
+      if (lot.seller_frozen) current.frozen = true;
+      if (lot.summary_edited) {
+        current.summaryEdited = true;
+        const incomingAt = lot.summary_edited_at ?? null;
+        const currentAt = current.summaryEditedAt ?? null;
+        const incomingMs = incomingAt ? new Date(incomingAt).getTime() : 0;
+        const currentMs = currentAt ? new Date(currentAt).getTime() : 0;
+        if (!current.summaryEditedAt || incomingMs >= currentMs) {
+          current.summaryEditedAt = incomingAt;
+          current.summaryEditedBy = lot.summary_edited_by ?? null;
+        }
+      }
+      out.set(vehicleId, current);
+    }
+    return out;
+  }, [auctionedArrivals, lotSummaries]);
 
   const totalVehicles = auctionedArrivals.length;
   const totalSellers = useMemo(
@@ -491,7 +520,7 @@ const SummaryPage = () => {
                   </div>
                 )
               ) : summaryLayout === 'list' ? (
-                <SummaryArrivalsTable arrivals={filteredArrivals} onSelectArrival={onSelectArrival} />
+                <SummaryArrivalsTable arrivals={filteredArrivals} metaByVehicleId={summaryMetaByVehicle} onSelectArrival={onSelectArrival} />
               ) : (
                 <div className="grid min-w-0 grid-cols-1 gap-4 lg:grid-cols-2 xl:grid-cols-3">
                   {filteredArrivals.map((a, i) => (
@@ -500,6 +529,7 @@ const SummaryPage = () => {
                       arrival={a}
                       billing={billingByVehicle.get(String(a.vehicleId))}
                       auction={auctionBagsByVehicle.get(String(a.vehicleId))}
+                      meta={summaryMetaByVehicle.get(String(a.vehicleId))}
                       index={i}
                       onOpenVehicle={onSelectArrival}
                       onPrint={onPipelineCardPrint}
@@ -612,7 +642,7 @@ const SummaryPage = () => {
                 </motion.div>
               )
             ) : summaryLayout === 'list' ? (
-              <SummaryArrivalsTable arrivals={filteredArrivals} onSelectArrival={onSelectArrival} />
+              <SummaryArrivalsTable arrivals={filteredArrivals} metaByVehicleId={summaryMetaByVehicle} onSelectArrival={onSelectArrival} />
             ) : (
               <div className="grid min-w-0 grid-cols-1 gap-4 sm:grid-cols-2">
                 {filteredArrivals.map((a, i) => (
@@ -621,6 +651,7 @@ const SummaryPage = () => {
                     arrival={a}
                     billing={billingByVehicle.get(String(a.vehicleId))}
                     auction={auctionBagsByVehicle.get(String(a.vehicleId))}
+                    meta={summaryMetaByVehicle.get(String(a.vehicleId))}
                     index={i}
                     onOpenVehicle={onSelectArrival}
                     onPrint={onPipelineCardPrint}
@@ -632,8 +663,8 @@ const SummaryPage = () => {
         </>
       )}
 
-      {isDesktop && showFullVehicleOps && selectedFromUrl && (
-        <div className="max-w-[100vw] overflow-x-hidden px-4 pt-5 pb-6 sm:px-6 sm:pt-5 lg:px-8 lg:pt-5">
+      {(isDesktop || isMdUp) && showFullVehicleOps && selectedFromUrl && (
+        <div className="max-w-[100vw] overflow-x-hidden px-4 pt-5 pb-6 sm:px-6 sm:pt-5 md:px-4 md:pt-4 md:pb-5 lg:px-8 lg:pt-5 lg:pb-6">
           <SummaryVehicleOperationsView
             arrival={selectedFromUrl}
             isDesktop
@@ -642,7 +673,7 @@ const SummaryPage = () => {
         </div>
       )}
 
-      {!isDesktop && showFullVehicleOps && selectedFromUrl && (
+      {!isDesktop && !isMdUp && showFullVehicleOps && selectedFromUrl && (
         <div className="px-0">
           <SummaryVehicleOperationsView arrival={selectedFromUrl} isDesktop={false} onBack={onBackFromOps} />
         </div>

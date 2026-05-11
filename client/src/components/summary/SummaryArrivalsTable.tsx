@@ -1,16 +1,27 @@
 import { motion } from 'framer-motion';
+import { Lock, Pencil } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { ArrivalSummary } from '@/services/api/arrivals';
 import ArrivalStatusBadge, { getArrivalStatus } from '@/components/arrivals/ArrivalStatusBadge';
 import ArrivalSummaryVehicleSellerQty from '@/components/arrivals/ArrivalSummaryVehicleSellerQty';
 import { ARRIVALS_TABLE_HEADER_GRADIENT } from '@/components/arrivals/arrivalsTableTokens';
+import type { SummaryArrivalCardMeta } from './SummaryArrivalPipelineCard';
 
 type Props = {
   arrivals: ArrivalSummary[];
+  metaByVehicleId?: Map<string, SummaryArrivalCardMeta>;
   onSelectArrival: (a: ArrivalSummary) => void;
 };
 
-const SummaryArrivalsTable = ({ arrivals, onSelectArrival }: Props) => (
+function formatSummaryEditTooltip(meta: SummaryArrivalCardMeta | undefined): string {
+  if (!meta?.summaryEdited) return '';
+  const when = meta.summaryEditedAt ? new Date(meta.summaryEditedAt) : null;
+  const whenText = when && !Number.isNaN(when.getTime()) ? when.toLocaleString() : 'unknown time';
+  const byText = meta.summaryEditedBy?.trim() || 'unknown user';
+  return `Edited in Summary. Last edited ${whenText} by ${byText}.`;
+}
+
+const SummaryArrivalsTable = ({ arrivals, metaByVehicleId, onSelectArrival }: Props) => (
   <div className="glass-card max-w-full touch-[pan-x_pan-y] lg:touch-auto overflow-x-auto rounded-2xl [-webkit-overflow-scrolling:touch]">
     <table className="w-full min-w-[56rem] border-separate border-spacing-0 text-sm">
       <thead className={cn(ARRIVALS_TABLE_HEADER_GRADIENT, 'shadow-md')}>
@@ -53,6 +64,8 @@ const SummaryArrivalsTable = ({ arrivals, onSelectArrival }: Props) => (
       <tbody>
         {arrivals.map((a, i) => {
           const status = getArrivalStatus(a);
+          const meta = metaByVehicleId?.get(String(a.vehicleId));
+          const editTooltip = formatSummaryEditTooltip(meta);
           return (
             <motion.tr
               key={`${a.vehicleId}-${i}`}
@@ -71,11 +84,27 @@ const SummaryArrivalsTable = ({ arrivals, onSelectArrival }: Props) => (
               className="cursor-pointer border-b border-border/20 transition-colors hover:bg-muted/20"
             >
               <td className="px-4 py-3 text-foreground">
-                <ArrivalSummaryVehicleSellerQty
-                  vehicleNumber={a.vehicleNumber}
-                  primarySellerName={a.primarySellerName}
-                  totalBags={a.totalBags}
-                />
+                <div className="flex items-center gap-2">
+                  <ArrivalSummaryVehicleSellerQty
+                    vehicleNumber={a.vehicleNumber}
+                    primarySellerName={a.primarySellerName}
+                    totalBags={a.totalBags}
+                  />
+                  {meta?.summaryEdited ? (
+                    <Pencil
+                      className="h-4 w-4 shrink-0 text-amber-600 dark:text-amber-300"
+                      aria-label={editTooltip}
+                      title={editTooltip}
+                    />
+                  ) : null}
+                  {meta?.frozen ? (
+                    <Lock
+                      className="h-4 w-4 shrink-0 text-slate-600 dark:text-slate-300"
+                      aria-label="Frozen: Settlement Patti is printed for one or more sellers in this vehicle."
+                      title="Frozen: Settlement Patti is printed for one or more sellers in this vehicle."
+                    />
+                  ) : null}
+                </div>
               </td>
               <td
                 className="max-w-[10rem] truncate px-4 py-3 text-xs text-muted-foreground"

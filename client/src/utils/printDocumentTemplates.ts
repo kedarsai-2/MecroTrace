@@ -2,7 +2,7 @@
 // Same format as client_origin; used with directPrint() + printLogApi.
 
 import { formatBillingInr, gstComponentRupees, percentOfAmount, roundMoney2 } from '@/utils/billingMoney';
-import { formatAuctionLotIdentifier } from '@/utils/auctionLotIdentifier';
+import { formatAuctionLotIdentifier, lotBagCountForIdentifier } from '@/utils/auctionLotIdentifier';
 
 const PRINT_STYLES = `
   body { font-family: system-ui, sans-serif; margin: 0; padding: 12px; font-size: 12px; color: #111; }
@@ -198,6 +198,17 @@ function inrAmountToWords(amount: number): string {
   return `${core} Rupees Only`;
 }
 
+/** Total bag quantity across all commodity groups on the bill (print footer). */
+function totalBillQuantityForPrint(bill: BillPrintData): number {
+  let q = 0;
+  for (const g of bill.commodityGroups || []) {
+    for (const it of g.items || []) {
+      q = roundMoney2(q + roundMoney2(Number(it.quantity) || 0));
+    }
+  }
+  return q;
+}
+
 function commodityNetTotal(group: BillPrintData['commodityGroups'][number]): number {
   const subtotalWithCharges = roundMoney2(roundMoney2(group.subtotal) + roundMoney2(group.totalCharges ?? 0));
   const additionsSum = roundMoney2((group.coolieAmount || 0) + (group.weighmanChargeAmount || 0));
@@ -209,29 +220,29 @@ function commodityNetTotal(group: BillPrintData['commodityGroups'][number]): num
 }
 
 /**
- * Lot identifier — mirrors BillingPage `formatLotIdentifierForBillEntry`.
+ * Lot identifier — final segment is lot bag count only ({@link lotBagCountForIdentifier}).
  */
 function formatLotIdentifierForPrint(
   item: BillPrintData['commodityGroups'][number]['items'][number],
 ): string {
   const lineQty = Number(item.quantity ?? 0) || 0;
-  const rawLt = item.lotTotalQty;
-  const lotQty =
-    rawLt != null && Number.isFinite(Number(rawLt)) && Number(rawLt) > 0 ? Number(rawLt) : lineQty;
-  const lotName = String(item.lotName || String(lotQty || ''));
+  const lotBagCount = lotBagCountForIdentifier(item.lotTotalQty);
+  const lotName =
+    String(item.lotName || '').trim() || (lotBagCount > 0 ? String(lotBagCount) : '');
+  const qtyFallback = lotBagCount > 0 ? lotBagCount : lineQty;
   const rawVt = item.vehicleTotalQty;
   const vTotal =
-    rawVt != null && Number.isFinite(Number(rawVt)) && Number(rawVt) > 0 ? Number(rawVt) : lotQty;
+    rawVt != null && Number.isFinite(Number(rawVt)) && Number(rawVt) > 0 ? Number(rawVt) : qtyFallback;
   const rawSv = item.sellerVehicleQty;
   const sTotal =
-    rawSv != null && Number.isFinite(Number(rawSv)) && Number(rawSv) > 0 ? Number(rawSv) : lotQty;
+    rawSv != null && Number.isFinite(Number(rawSv)) && Number(rawSv) > 0 ? Number(rawSv) : qtyFallback;
   return formatAuctionLotIdentifier({
     vehicleMark: item.vehicleMark,
     vehicleTotalQty: vTotal,
     sellerMark: item.sellerMark,
     sellerTotalQty: sTotal,
     lotName,
-    lotQty,
+    lotQty: lotBagCount,
   });
 }
 
@@ -514,7 +525,9 @@ function gstBillPageHeader(
     </div>` : '';
 
   const hsn = escapeHtml((group.hsnCode || '—').trim());
-  const buyerName = escapeHtml((bill.billingName || bill.buyerName || '—').trim());
+  const msBuyer = escapeHtml((bill.buyerName || '—').trim());
+  const mmark = escapeHtml((bill.buyerMark || '—').trim());
+  const billNamePrint = escapeHtml((bill.billingName || '—').trim());
   const buyerAddr = escapeHtml((bill.buyerAddress || '—').trim());
   const contact   = escapeHtml([bill.buyerPhone, bill.buyerEmail].filter(Boolean).join(' / ') || '—');
   const buyerGst  = escapeHtml((bill.buyerGstin || '—').trim());
@@ -529,7 +542,9 @@ function gstBillPageHeader(
     <div class="hdr-buyer">
       <div class="buyer-l">
         <div>To,</div>
-        <div><span class="lbl">M/s&nbsp;</span><strong>${buyerName}</strong></div>
+        <div><span class="lbl">M/s&nbsp;</span><strong>${msBuyer}</strong></div>
+        <div><span class="lbl">Mmark&nbsp;</span>${mmark}</div>
+        <div><span class="lbl">Bill name&nbsp;</span>${billNamePrint}</div>
         <div><span class="lbl">Address&nbsp;</span>${buyerAddr}</div>
         <div><span class="lbl">Contact&nbsp;</span>${contact}</div>
         <div><span class="lbl">GSTIN&nbsp;</span>${buyerGst}</div>
@@ -706,7 +721,7 @@ function gstBillFooter(
     <div class="words-strip">Total Amount in Words: ${escapeHtml(wordsStr)}</div>
     <div class="bot-strip">
       <div>${escapeHtml(copyLabel)}</div>
-      <div class="mid">BUYER'S MARK: ${escapeHtml(bill.buyerMark || '—')}</div>
+      <div class="mid">${escapeHtml((bill.buyerMark || '—').trim())} - ${escapeHtml(String(Math.round(totalBillQuantityForPrint(bill))))}</div>
       <div class="right">For ${firmSign}</div>
     </div>
     <div class="page-line">
@@ -897,8 +912,10 @@ function generateNonGstCommodityPage(
 
   const divisor   = Number(group.divisor) > 0 ? Number(group.divisor) : 50;
   const billNum   = escapeHtml(bill.billNumber || 'DRAFT');
-  const buyerName = escapeHtml((bill.billingName || bill.buyerName || '—').trim());
-  const contact   = escapeHtml([bill.buyerPhone, bill.buyerEmail].filter(Boolean).join(', ') || '');
+  const msBuyerNg = escapeHtml((bill.buyerName || '—').trim());
+  const mmarkNg = escapeHtml((bill.buyerMark || '—').trim());
+  const billNameNg = escapeHtml((bill.billingName || '—').trim());
+  const contact   = escapeHtml([bill.buyerPhone, bill.buyerEmail].filter(Boolean).join(' / ') || '');
   const addr      = escapeHtml((bill.buyerAddress || '').trim());
   const vehicle   = escapeHtml((bill.outboundVehicle || '').trim());
 
@@ -974,7 +991,10 @@ function generateNonGstCommodityPage(
   <div class="${pageNum < totalPages ? 'pg pg-break' : 'pg'}">
     <div class="info-blk">
       <div class="info-l">
-        <div>${buyerName}${contact ? ', ' + contact : ''}</div>
+        <div><span class="lbl">M/s&nbsp;</span><strong>${msBuyerNg}</strong></div>
+        <div><span class="lbl">Mmark&nbsp;</span>${mmarkNg}</div>
+        <div><span class="lbl">Bill name&nbsp;</span>${billNameNg}</div>
+        ${contact ? `<div><span class="lbl">Contact&nbsp;</span>${contact}</div>` : ''}
         ${addr    ? `<div>${addr}</div>`                       : ''}
         ${vehicle ? `<div>Vehicle No : ${vehicle}</div>` : ''}
       </div>
@@ -1014,6 +1034,11 @@ function generateNonGstCommodityPage(
       </tbody>
     </table>
     <div class="copy-name">${escapeHtml(copyLabel)}</div>
+    ${
+      pageNum === totalPages
+        ? `<div class="page-line" style="font-weight:700;text-align:center">${escapeHtml((bill.buyerMark || '—').trim())} - ${escapeHtml(String(Math.round(totalBillQuantityForPrint(bill))))}</div>`
+        : ''
+    }
     <div class="page-line">Page ${pageNum}/${totalPages}</div>
   </div>`;
 }

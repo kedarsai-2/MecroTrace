@@ -1,6 +1,6 @@
 import type { ArrivalSellerFullDetail } from '@/services/api/arrivals';
 import type { AuctionEntryDTO, LotSummaryDTO } from '@/services/api/auction';
-import { formatAuctionLotIdentifier } from '@/utils/auctionLotIdentifier';
+import { formatAuctionLotIdentifier, lotBagCountForIdentifier } from '@/utils/auctionLotIdentifier';
 
 export function sellerKeyFromArrivalSeller(s: ArrivalSellerFullDetail): string {
   const name = (s.sellerName ?? '').trim().toLowerCase();
@@ -39,7 +39,7 @@ export function formatLotLabelFromSummary(lot: LotSummaryDTO): string {
     sellerMark: lot.seller_mark,
     sellerTotalQty: sTotal,
     lotName,
-    lotQty: lot.bag_count,
+    lotQty: lotBagCountForIdentifier(lot.bag_count),
   });
 }
 

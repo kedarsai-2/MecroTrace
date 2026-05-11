@@ -113,7 +113,7 @@ export function VehicleOpsSellerWorkspace({
   }
 
   return (
-    <div className="mt-2 flex min-w-0 flex-col gap-3">
+    <div className="mt-2 flex min-w-0 flex-col gap-3 md:gap-2 lg:gap-3">
       <div className="relative w-full min-w-0">
         <input
           type="search"

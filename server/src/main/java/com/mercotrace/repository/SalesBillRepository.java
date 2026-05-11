@@ -36,6 +36,12 @@ public interface SalesBillRepository extends JpaRepository<SalesBill, Long> {
         BigDecimal getCoolieTotal();
     }
 
+    interface SalesBillLineTotalsRow {
+        Long getBillId();
+        Long getBidsCount();
+        Long getBagQuantity();
+    }
+
     // NOTE:
     // Hibernate does not allow fetching multiple bag collections in a single query
     // (see MultipleBagFetchException). We eagerly fetch only the top-level
@@ -47,11 +53,22 @@ public interface SalesBillRepository extends JpaRepository<SalesBill, Long> {
 
     Page<SalesBill> findAllByTraderId(Long traderId, Pageable pageable);
 
+    /**
+     * Lightweight tuples for billed bid/lot reservations (Buyer Operations exclusions).
+     * One row per line item across all bills for {@code traderId}.
+     */
+    @Query(
+        "SELECT s.id, s.billNumber, s.lockedAt, s.reopenedAt, li.bidNumber, li.lotId, li.lotName " +
+            "FROM SalesBillLineItem li JOIN li.commodityGroup cg JOIN cg.salesBill s " +
+            "WHERE s.traderId = :traderId"
+    )
+    List<Object[]> findReservedBidRowTuples(@Param("traderId") Long traderId);
+
     @Query("SELECT s FROM SalesBill s WHERE s.traderId = :traderId " +
-           "AND (:billNumber IS NULL OR :billNumber = '' OR LOWER(s.billNumber) LIKE LOWER(CONCAT('%', :billNumber, '%'))) " +
-           "AND (:buyerName IS NULL OR :buyerName = '' OR LOWER(s.buyerName) LIKE LOWER(CONCAT('%', :buyerName, '%')) OR LOWER(s.buyerMark) LIKE LOWER(CONCAT('%', :buyerName, '%')) OR LOWER(s.billingName) LIKE LOWER(CONCAT('%', :buyerName, '%'))) " +
-           "AND (:dateFrom IS NULL OR s.billDate >= :dateFrom) " +
-           "AND (:dateTo IS NULL OR s.billDate <= :dateTo)")
+           "AND (:billNumber = '' OR LOWER(COALESCE(s.billNumber, '')) LIKE LOWER(CONCAT('%', :billNumber, '%'))) " +
+           "AND (:buyerName = '' OR LOWER(COALESCE(s.buyerName, '')) LIKE LOWER(CONCAT('%', :buyerName, '%')) OR LOWER(COALESCE(s.buyerMark, '')) LIKE LOWER(CONCAT('%', :buyerName, '%')) OR LOWER(COALESCE(s.billingName, '')) LIKE LOWER(CONCAT('%', :buyerName, '%'))) " +
+           "AND s.billDate >= :dateFrom " +
+           "AND s.billDate <= :dateTo")
     Page<SalesBill> findByTraderIdAndFilters(
         @Param("traderId") Long traderId,
         @Param("billNumber") String billNumber,
@@ -60,6 +77,34 @@ public interface SalesBillRepository extends JpaRepository<SalesBill, Long> {
         @Param("dateTo") java.time.Instant dateTo,
         Pageable pageable
     );
+
+    @Query(
+        "SELECT s FROM SalesBill s " +
+            "WHERE s.traderId = :traderId " +
+            "AND (:status = '' " +
+                "OR (:status = 'IN_PROGRESS' AND (s.billNumber IS NULL OR s.billNumber = '')) " +
+                "OR (:status = 'NUMBERED' AND s.billNumber IS NOT NULL AND s.billNumber <> '')) " +
+            "AND (:q = '' " +
+                "OR LOWER(COALESCE(s.billNumber, '')) LIKE LOWER(CONCAT('%', :q, '%')) " +
+                "OR LOWER(COALESCE(s.buyerName, '')) LIKE LOWER(CONCAT('%', :q, '%')) " +
+                "OR LOWER(COALESCE(s.buyerMark, '')) LIKE LOWER(CONCAT('%', :q, '%')) " +
+                "OR LOWER(COALESCE(s.billingName, '')) LIKE LOWER(CONCAT('%', :q, '%')) " +
+                "OR LOWER(COALESCE(s.outboundVehicle, '')) LIKE LOWER(CONCAT('%', :q, '%')))"
+    )
+    Page<SalesBill> findSummaryBillsByTraderId(
+        @Param("traderId") Long traderId,
+        @Param("q") String q,
+        @Param("status") String status,
+        Pageable pageable
+    );
+
+    @Query(
+        "SELECT s.id AS billId, COUNT(li.id) AS bidsCount, COALESCE(SUM(li.quantity), 0) AS bagQuantity " +
+            "FROM SalesBillLineItem li JOIN li.commodityGroup g JOIN g.salesBill s " +
+            "WHERE s.id IN :billIds " +
+            "GROUP BY s.id"
+    )
+    List<SalesBillLineTotalsRow> findLineTotalsByBillIds(@Param("billIds") Collection<Long> billIds);
 
     @Query(
         "SELECT COUNT(s) AS totalBills, " +

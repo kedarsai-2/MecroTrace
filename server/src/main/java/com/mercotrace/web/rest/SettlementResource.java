@@ -279,8 +279,40 @@ public class SettlementResource {
         if (id == null) {
             throw new BadRequestAlertException("Invalid id", ENTITY_NAME, "idnull");
         }
-        return settlementService.updatePatti(id, request)
-            .map(ResponseEntity::ok)
-            .orElse(ResponseEntity.notFound().build());
+        try {
+            return settlementService.updatePatti(id, request)
+                .map(ResponseEntity::ok)
+                .orElse(ResponseEntity.notFound().build());
+        } catch (IllegalArgumentException e) {
+            throw new BadRequestAlertException(e.getMessage(), ENTITY_NAME, "validation");
+        }
+    }
+
+    /**
+     * {@code POST /api/settlements/pattis/:id/print-lock} : mark patti as printed and freeze edits.
+     */
+    @PostMapping("/pattis/{id}/print-lock")
+    @PreAuthorize("hasAuthority(\"" + AuthoritiesConstants.SETTLEMENTS_EDIT + "\")")
+    public ResponseEntity<PattiDTO> markPattiPrinted(@PathVariable Long id) {
+        LOG.debug("REST request to print-lock Patti : {}", id);
+        try {
+            return ResponseEntity.ok(settlementService.markPattiPrinted(id));
+        } catch (IllegalArgumentException e) {
+            throw new BadRequestAlertException(e.getMessage(), ENTITY_NAME, "validation");
+        }
+    }
+
+    /**
+     * {@code POST /api/settlements/pattis/:id/reopen} : reopen a printed/frozen patti for editing.
+     */
+    @PostMapping("/pattis/{id}/reopen")
+    @PreAuthorize("hasAuthority(\"" + AuthoritiesConstants.SETTLEMENTS_EDIT + "\")")
+    public ResponseEntity<PattiDTO> reopenPatti(@PathVariable Long id) {
+        LOG.debug("REST request to reopen Patti : {}", id);
+        try {
+            return ResponseEntity.ok(settlementService.reopenPatti(id));
+        } catch (IllegalArgumentException e) {
+            throw new BadRequestAlertException(e.getMessage(), ENTITY_NAME, "validation");
+        }
     }
 }

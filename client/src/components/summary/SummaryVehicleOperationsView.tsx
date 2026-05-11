@@ -31,7 +31,7 @@ const AUCTION_RD_USER_MSG = 'Estimated rate difference could not be loaded.';
 
 const RD_EST_FORMULA_TOOLTIP = 'Estimated Rate Difference: ∑(Preset x Qty)';
 
-const RD_ACTUAL_FORMULA_TOOLTIP = 'Actual Rate Difference: ∑(Preset x Weight)/ Rate Unit';
+const RD_ACTUAL_FORMULA_TOOLTIP = 'Actual Rate Difference: ∑(Preset x Settlement Weight)/ Rate Unit';
 
 function formatInr(n: number): string {
   return new Intl.NumberFormat('en-IN', {
@@ -79,31 +79,33 @@ function sumEstimatedRdForSellerVehicles(
   return sum;
 }
 
-/** Σ line weights (kg) on sales bills per auction lot id. */
-function sumBilledWeightByLotId(bills: SalesBillDTO[], lotIdSet: Set<string>): Map<string, number> {
-  const m = new Map<string, number>();
+/** Settlement weight source: sales-bill line weights keyed exactly like Settlement maps them. */
+function settlementWeightIndexes(
+  bills: SalesBillDTO[],
+  lotIdSet: Set<string>
+): { byAuctionEntryId: Map<number, number>; byLotBid: Map<string, number> } {
+  const byAuctionEntryId = new Map<number, number>();
+  const byLotBid = new Map<string, number>();
   for (const b of bills) {
     for (const g of b.commodityGroups ?? []) {
       for (const line of g.items ?? []) {
         const lid = line.lotId != null ? String(line.lotId) : '';
         if (!lid || !lotIdSet.has(lid)) continue;
         const w = Number(line.weight) || 0;
-        m.set(lid, (m.get(lid) ?? 0) + w);
+        if (w <= 0) continue;
+        const entryId = line.auctionEntryId != null ? Number(line.auctionEntryId) : NaN;
+        if (Number.isFinite(entryId) && entryId > 0) {
+          byAuctionEntryId.set(entryId, (byAuctionEntryId.get(entryId) ?? 0) + w);
+        }
+        const bidNumber = Number(line.bidNumber);
+        if (Number.isFinite(bidNumber) && bidNumber > 0) {
+          const key = `${lid}:${bidNumber}`;
+          byLotBid.set(key, (byLotBid.get(key) ?? 0) + w);
+        }
       }
     }
   }
-  return m;
-}
-
-function lotBagCountById(detail: ArrivalFullDetail | null): Map<string, number> {
-  const m = new Map<string, number>();
-  if (!detail) return m;
-  for (const s of detail.sellers ?? []) {
-    for (const l of s.lots ?? []) {
-      if (l.id != null) m.set(String(l.id), l.bagCount ?? 0);
-    }
-  }
-  return m;
+  return { byAuctionEntryId, byLotBid };
 }
 
 function buildCommodityNameToRateUnit(
@@ -127,57 +129,38 @@ function buildCommodityNameToRateUnit(
 }
 
 /**
- * Per lot: (Σ preset×qty) × W / (Q × R) = Est_lot × W / (Q×R), with W from billing when present,
- * else pro-rata share of arrival final billable weight. R = commodity rate unit (kg per bag, e.g. 50).
+ * Match Settlement weight source: use persisted sales-bill line weights per auction entry/lot-bid.
+ * Do not fall back to arrival final billable weight or commodity average weights.
  */
 function sumActualRateDifferenceForVehicle(
   results: AuctionResultDTO[],
   svIds: Set<number>,
   lotIdSet: Set<string>,
   bills: SalesBillDTO[],
-  getRateUnit: (commodityName: string) => number,
-  arrival: ArrivalSummary,
-  detail: ArrivalFullDetail | null
+  getRateUnit: (commodityName: string) => number
 ): number {
   if (svIds.size === 0 || lotIdSet.size === 0) return 0;
 
-  const byLot = new Map<string, { est: number; q: number; commodityName: string }>();
-  for (const r of results) {
-    if (!svIds.has(r.sellerVehicleId) || !lotIdSet.has(String(r.lotId))) continue;
-    const k = String(r.lotId);
-    const cur = byLot.get(k) ?? { est: 0, q: 0, commodityName: r.commodityName ?? '' };
-    for (const e of r.entries ?? []) {
-      const p = e.presetApplied;
-      if (p == null) continue;
-      const q = e.quantity ?? 0;
-      cur.est += p * q;
-      cur.q += q;
-    }
-    byLot.set(k, cur);
-  }
-
-  const billedW = sumBilledWeightByLotId(bills, lotIdSet);
-  const bagByLot = lotBagCountById(detail);
-  let totalBags = 0;
-  for (const n of bagByLot.values()) totalBags += n;
-  if (totalBags <= 0 && typeof arrival.totalBags === 'number' && arrival.totalBags > 0) {
-    totalBags = arrival.totalBags;
-  }
-  const fbw = Number(arrival.finalBillableWeight) || 0;
+  const { byAuctionEntryId, byLotBid } = settlementWeightIndexes(bills, lotIdSet);
+  if (byAuctionEntryId.size === 0 && byLotBid.size === 0) return 0;
 
   let sum = 0;
-  for (const [lotId, row] of byLot) {
-    const { est, q, commodityName } = row;
-    if (q <= 0) continue;
-    const R = getRateUnit(commodityName);
+  for (const r of results) {
+    if (!svIds.has(r.sellerVehicleId) || !lotIdSet.has(String(r.lotId))) continue;
+    const lotId = String(r.lotId);
+    const R = getRateUnit(r.commodityName ?? '');
     if (R <= 0) continue;
-    let W = billedW.get(lotId) ?? 0;
-    if (W <= 0 && fbw > 0 && totalBags > 0) {
-      const bgs = bagByLot.get(lotId) ?? 0;
-      if (bgs > 0) W = (bgs / totalBags) * fbw;
+    for (const e of r.entries ?? []) {
+      const p = e.presetApplied;
+      if (p == null || p === 0) continue;
+      const entryId = e.auctionEntryId != null ? Number(e.auctionEntryId) : NaN;
+      const W =
+        Number.isFinite(entryId) && entryId > 0
+          ? (byAuctionEntryId.get(entryId) ?? byLotBid.get(`${lotId}:${e.bidNumber}`) ?? 0)
+          : (byLotBid.get(`${lotId}:${e.bidNumber}`) ?? 0);
+      if (W <= 0) continue;
+      sum += (p * W) / R;
     }
-    if (W <= 0) continue;
-    sum += (est * W) / (q * R);
   }
   return sum;
 }
@@ -304,9 +287,7 @@ const SummaryVehicleOperationsView = ({ arrival, isDesktop, onBack }: Props) => 
           svIdsForVehicle,
           lotKeys,
           allBills,
-          getRate,
-          arrival,
-          detail
+          getRate
         );
         setRdActual(actual);
       } catch {
@@ -359,8 +340,8 @@ const SummaryVehicleOperationsView = ({ arrival, isDesktop, onBack }: Props) => 
   );
 
   const threeCards = (
-    <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-      <div className="glass-card rounded-2xl border border-border/40 p-4 shadow-sm">
+    <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-2 md:gap-2 lg:grid-cols-3 lg:gap-3">
+      <div className="glass-card rounded-2xl border border-border/40 p-4 shadow-sm md:p-3 lg:p-4">
         <div className={cardTitleRowClass}>
           <Truck className="h-3.5 w-3.5 shrink-0" />
           Vehicle
@@ -374,7 +355,7 @@ const SummaryVehicleOperationsView = ({ arrival, isDesktop, onBack }: Props) => 
         </p>
       </div>
 
-      <div className="glass-card rounded-2xl border border-border/40 p-4 shadow-sm">
+      <div className="glass-card rounded-2xl border border-border/40 p-4 shadow-sm md:p-3 lg:p-4">
         <div className={cardTitleRowClass}>
           <Package className="h-3.5 w-3.5 shrink-0" />
           Bag summary
@@ -389,7 +370,7 @@ const SummaryVehicleOperationsView = ({ arrival, isDesktop, onBack }: Props) => 
       </div>
 
       {canShowRd ? (
-        <div className="glass-card rounded-2xl border border-border/40 p-4 shadow-sm">
+        <div className="glass-card rounded-2xl border border-border/40 p-4 shadow-sm md:p-3 lg:p-4">
           <div className={cardTitleRowClass}>
             <Wallet className="h-3.5 w-3.5 shrink-0" />
             <span>Rate difference (preset)</span>
@@ -403,7 +384,7 @@ const SummaryVehicleOperationsView = ({ arrival, isDesktop, onBack }: Props) => 
               Actual RD may be incomplete; try again after more billing is recorded.
             </p>
           ) : null}
-          <div className="mt-1 space-y-2.5">
+          <div className="mt-1 space-y-2.5 md:space-y-2 lg:space-y-2.5">
             <div className="flex w-full min-w-0 items-center justify-between gap-3 text-sm">
               <div className="flex min-w-0 items-center gap-1.5">
                 <span className="text-muted-foreground">Estimated RD</span>
@@ -463,7 +444,7 @@ const SummaryVehicleOperationsView = ({ arrival, isDesktop, onBack }: Props) => 
     <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} className="min-w-0">
       {!isDesktop ? hero : null}
       {isDesktop ? (
-        <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-start sm:gap-4">
+        <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-start sm:gap-4 md:mb-4 md:gap-2 lg:mb-6 lg:gap-4">
           <Button
             type="button"
             variant="default"

@@ -16,6 +16,8 @@ import com.mercotrace.repository.AuctionSelfSaleUnitRepository;
 import com.mercotrace.repository.CommodityRepository;
 import com.mercotrace.repository.ContactRepository;
 import com.mercotrace.repository.LotRepository;
+import com.mercotrace.repository.PattiRepository;
+import com.mercotrace.repository.SalesBillLineItemRepository;
 import com.mercotrace.repository.SellerInVehicleRepository;
 import com.mercotrace.repository.VehicleRepository;
 import com.mercotrace.service.dto.*;
@@ -132,6 +134,8 @@ public class AuctionService {
     private final CommodityRepository commodityRepository;
     private final TraderContextService traderContextService;
     private final AuctionSelfSaleUnitRepository auctionSelfSaleUnitRepository;
+    private final PattiRepository pattiRepository;
+    private final SalesBillLineItemRepository salesBillLineItemRepository;
 
     public AuctionService(
         AuctionRepository auctionRepository,
@@ -144,7 +148,9 @@ public class AuctionService {
         ContactService contactService,
         CommodityRepository commodityRepository,
         TraderContextService traderContextService,
-        AuctionSelfSaleUnitRepository auctionSelfSaleUnitRepository
+        AuctionSelfSaleUnitRepository auctionSelfSaleUnitRepository,
+        PattiRepository pattiRepository,
+        SalesBillLineItemRepository salesBillLineItemRepository
     ) {
         this.auctionRepository = auctionRepository;
         this.auctionEntryRepository = auctionEntryRepository;
@@ -157,6 +163,8 @@ public class AuctionService {
         this.commodityRepository = commodityRepository;
         this.traderContextService = traderContextService;
         this.auctionSelfSaleUnitRepository = auctionSelfSaleUnitRepository;
+        this.pattiRepository = pattiRepository;
+        this.salesBillLineItemRepository = salesBillLineItemRepository;
     }
 
     /** Contact-linked sellers: use contact name/mark. Free-text sellers (no contact): use SellerInVehicle fields. */
@@ -226,7 +234,8 @@ public class AuctionService {
                 lotToAuctions.getOrDefault(lot.getId(), List.of()),
                 auctionToEntries,
                 vehicleIdToTotal,
-                sellerVehicleIdToTotal
+                sellerVehicleIdToTotal,
+                traderId
             );
             if (statusFilter == null || statusFilter.isBlank()) {
                 content.add(dto);
@@ -246,7 +255,8 @@ public class AuctionService {
         List<Auction> lotAuctions,
         Map<Long, List<AuctionEntry>> auctionToEntries,
         Map<Long, Integer> vehicleIdToTotal,
-        Map<Long, Integer> sellerVehicleIdToTotal
+        Map<Long, Integer> sellerVehicleIdToTotal,
+        Long traderId
     ) {
         LotSummaryDTO dto = new LotSummaryDTO();
         dto.setLotId(lot.getId());
@@ -279,6 +289,7 @@ public class AuctionService {
         if (lot.getSellerVehicleId() != null) {
             dto.setSellerTotalQty(sellerVehicleIdToTotal.get(lot.getSellerVehicleId()));
         }
+        dto.setSellerFrozen(isSellerFrozenByPrintedPatti(traderId, lot.getSellerVehicleId()));
         dto.setCommodityName(commodity != null ? commodity.getCommodityName() : null);
 
         Optional<Auction> latestAuction = lotAuctions.stream()
@@ -286,6 +297,18 @@ public class AuctionService {
         List<AuctionEntry> latestAuctionEntries = latestAuction
             .map(a -> auctionToEntries.getOrDefault(a.getId(), List.of()))
             .orElse(List.of());
+        latestAuctionEntries
+            .stream()
+            .filter(this::isSummaryEditedEntry)
+            .max(Comparator.comparing(AuctionEntry::getLastModifiedDate, Comparator.nullsLast(Comparator.naturalOrder())))
+            .ifPresent(entry -> {
+                dto.setSummaryEdited(Boolean.TRUE);
+                dto.setSummaryEditedAt(entry.getLastModifiedDate());
+                dto.setSummaryEditedBy(entry.getLastModifiedBy());
+            });
+        if (dto.getSummaryEdited() == null) {
+            dto.setSummaryEdited(Boolean.FALSE);
+        }
 
         int soldBags = latestAuctionEntries.stream().mapToInt(e -> e.getQuantity() != null ? e.getQuantity() : 0).sum();
         dto.setSoldBags(soldBags);
@@ -304,6 +327,13 @@ public class AuctionService {
         dto.setStatus(status);
         dto.setParticipatingBuyers(buildParticipatingBuyers(latestAuctionEntries));
         return dto;
+    }
+
+    private boolean isSummaryEditedEntry(AuctionEntry entry) {
+        if (entry == null || entry.getSummarySellerRate() == null || entry.getBidRate() == null) {
+            return false;
+        }
+        return entry.getSummarySellerRate().compareTo(entry.getBidRate()) != 0;
     }
 
     /**
@@ -374,6 +404,41 @@ public class AuctionService {
             .filter(m -> m != null && !m.isBlank())
             .filter(m -> !registeredMarksLower.contains(m.trim().toLowerCase(Locale.ROOT)))
             .sorted(String.CASE_INSENSITIVE_ORDER)
+            .toList();
+    }
+
+    /**
+     * Distinct temporary buyer marks across all trader auction history for extract / merge pickers.
+     * Registered contact marks stay excluded because the contacts row already owns those targets.
+     */
+    @Transactional(readOnly = true)
+    public List<String> searchTemporaryBuyerMarks(String query, int limit) {
+        Long traderId = resolveTraderId();
+        int cappedLimit = Math.max(1, Math.min(limit, 100));
+        String needle = query == null ? "" : query.trim().toLowerCase(Locale.ROOT);
+
+        List<String> raw = auctionEntryRepository.searchDistinctScribbleBuyerMarksForTrader(
+            traderId,
+            needle,
+            PageRequest.of(0, cappedLimit)
+        );
+        if (raw.isEmpty()) {
+            return List.of();
+        }
+
+        Set<String> registeredMarksLower = contactRepository
+            .findAllByTraderIdAndActiveTrue(traderId)
+            .stream()
+            .map(Contact::getMark)
+            .filter(m -> m != null && !m.isBlank())
+            .map(m -> m.trim().toLowerCase(Locale.ROOT))
+            .collect(Collectors.toSet());
+
+        return raw
+            .stream()
+            .filter(m -> m != null && !m.isBlank())
+            .map(String::trim)
+            .filter(m -> !registeredMarksLower.contains(m.toLowerCase(Locale.ROOT)))
             .toList();
     }
 
@@ -528,6 +593,7 @@ public class AuctionService {
         if (!isLotOwnedByTrader(lot, traderId)) {
             throw new EntityNotFoundException("Lot not found: " + unit.getLotId());
         }
+        assertLotOpenForPostBillingAndSettlementChanges(traderId, lot);
 
         Auction auction = getOrCreateSelfSaleAuction(unit, traderId);
         List<AuctionEntry> existingEntries = auctionEntryRepository.findAllByAuctionId(auction.getId());
@@ -554,12 +620,14 @@ public class AuctionService {
         if (!isLotOwnedByTrader(lot, traderId)) {
             throw new EntityNotFoundException("Lot not found: " + unit.getLotId());
         }
+        assertLotOpenForPostBillingAndSettlementChanges(traderId, lot);
 
         Auction auction = getRequiredActiveSelfSaleAuction(unit);
         AuctionEntry entry = auctionEntryRepository.findById(bidId).orElseThrow(() -> new EntityNotFoundException("Bid not found: " + bidId));
         if (!Objects.equals(entry.getAuctionId(), auction.getId())) {
             throw new EntityNotFoundException("Bid not found: " + bidId);
         }
+        assertAuctionEntryOpenForPostBillingChanges(traderId, entry.getId());
 
         if (request.getExpectedLastModifiedMs() != null && entry.getLastModifiedDate() != null) {
             if (entry.getLastModifiedDate().toEpochMilli() != request.getExpectedLastModifiedMs()) {
@@ -568,6 +636,7 @@ public class AuctionService {
         }
 
         if (request.getSummarySellerRate() != null && request.getRate() == null) {
+            assertLotOpenForPostBillingAndSettlementChanges(traderId, lot);
             if (request.getSummarySellerRate().compareTo(BigDecimal.ONE) < 0) {
                 throw new IllegalArgumentException("Summary seller rate must be at least 1");
             }
@@ -637,11 +706,13 @@ public class AuctionService {
         Long traderId = resolveTraderId();
         AuctionSelfSaleUnit unit = getRequiredSelfSaleUnit(selfSaleUnitId, traderId);
         Lot lot = lotRepository.findById(unit.getLotId()).orElseThrow(() -> new EntityNotFoundException("Lot not found: " + unit.getLotId()));
+        assertLotOpenForPostBillingAndSettlementChanges(traderId, lot);
         Auction auction = getRequiredActiveSelfSaleAuction(unit);
         AuctionEntry entry = auctionEntryRepository.findById(bidId).orElseThrow(() -> new EntityNotFoundException("Bid not found: " + bidId));
         if (!Objects.equals(entry.getAuctionId(), auction.getId())) {
             throw new EntityNotFoundException("Bid not found: " + bidId);
         }
+        assertAuctionEntryOpenForPostBillingChanges(traderId, entry.getId());
 
         auctionEntryRepository.delete(entry);
         List<AuctionEntry> refreshed = auctionEntryRepository.findAllByAuctionId(auction.getId());
@@ -693,6 +764,7 @@ public class AuctionService {
         if (!isLotOwnedByTrader(lot, traderId)) {
             throw new EntityNotFoundException("Lot not found: " + lotId);
         }
+        assertLotOpenForPostBillingAndSettlementChanges(traderId, lot);
         Auction auction = findLatestNormalAuctionForLot(lotId).orElseGet(() -> {
             Auction a = new Auction();
             a.setLotId(lotId);
@@ -741,6 +813,8 @@ public class AuctionService {
         if (!Objects.equals(auction.getLotId(), lotId)) {
             throw new EntityNotFoundException("Bid not found: " + bidId);
         }
+        assertLotOpenForPostBillingAndSettlementChanges(traderId, lot);
+        assertAuctionEntryOpenForPostBillingChanges(traderId, entry.getId());
 
         if (request.getExpectedLastModifiedMs() != null && entry.getLastModifiedDate() != null) {
             if (entry.getLastModifiedDate().toEpochMilli() != request.getExpectedLastModifiedMs()) {
@@ -750,6 +824,7 @@ public class AuctionService {
 
         /* Summary vehicle-ops: persist negotiated seller figure only — leaves auction bid_rate / buyer_rate unchanged. */
         if (request.getSummarySellerRate() != null && request.getRate() == null) {
+            assertLotOpenForPostBillingAndSettlementChanges(traderId, lot);
             if (request.getSummarySellerRate().compareTo(BigDecimal.ONE) < 0) {
                 throw new IllegalArgumentException("Summary seller rate must be at least 1");
             }
@@ -830,6 +905,8 @@ public class AuctionService {
         Auction auction = auctionRepository
             .findById(entry.getAuctionId())
             .orElseThrow(() -> new EntityNotFoundException("Auction not found for bid: " + bidId));
+        assertLotOpenForPostBillingAndSettlementChanges(traderId, lot);
+        assertAuctionEntryOpenForPostBillingChanges(traderId, entry.getId());
 
         auctionEntryRepository.delete(entry);
         List<AuctionEntry> refreshed = auctionEntryRepository.findAllByAuctionId(auction.getId());
@@ -880,6 +957,69 @@ public class AuctionService {
         Pageable sorted = withDefaultCompletedAuctionSort(pageable);
         Page<Auction> page = auctionRepository.findCompletedNormalByTraderId(traderId, sorted);
         return buildResultsPage(page, sorted);
+    }
+
+    /**
+     * Lightweight Billing Create/Search data. This intentionally avoids the full AuctionResultDTO
+     * graph and its self-sale result reconstruction, but keeps the same billable entries:
+     * completed normal auction bids plus completed re-auction bids, excluding self-sale placeholders.
+     */
+    @Transactional(readOnly = true)
+    public List<BillingBuyerDTO> listBillingBuyers() {
+        Long traderId = resolveTraderId();
+        List<Object[]> rows = auctionEntryRepository.findBillingBuyerEntryRowsForTrader(traderId);
+        Map<String, BillingBuyerDTO> buyers = new LinkedHashMap<>();
+
+        for (Object[] row : rows) {
+            if (row == null || row.length < 22) {
+                continue;
+            }
+
+            Long buyerId = numberToLong(row[0]);
+            String buyerMark = stringOrNull(row[1]);
+            String buyerName = stringOrNull(row[2]);
+            String buyerKey =
+                buyerId != null
+                    ? "r:" + buyerId
+                    : "t:" + normalizeBuyerKeyPart(buyerMark) + "|" + normalizeBuyerKeyPart(buyerName);
+
+            BillingBuyerDTO buyer = buyers.get(buyerKey);
+            if (buyer == null) {
+                buyer = new BillingBuyerDTO();
+                buyer.setBuyerMark(buyerMark);
+                buyer.setBuyerName(buyerName);
+                buyer.setBuyerContactId(buyerId != null ? String.valueOf(buyerId) : null);
+                buyer.setTokenAdvanceTotal(BigDecimal.ZERO);
+                buyers.put(buyerKey, buyer);
+            }
+
+            BillingBuyerDTO.BillingBuyerEntryDTO entry = new BillingBuyerDTO.BillingBuyerEntryDTO();
+            entry.setAuctionEntryId(numberToLong(row[3]));
+            entry.setBidNumber(numberToInt(row[4]));
+            Long lotId = numberToLong(row[5]);
+            entry.setLotId(lotId != null ? String.valueOf(lotId) : null);
+            entry.setLotName(stringOrNull(row[6]));
+            entry.setSelfSaleUnitId(numberToLong(row[7]));
+            entry.setLotTotalQty(numberToInt(row[8]));
+            entry.setSellerName(stringOrNull(row[9]));
+            entry.setCommodityName(stringOrNull(row[10]));
+            entry.setRate(bigDecimalOrZero(row[11]));
+            entry.setQuantity(numberToInt(row[12]));
+            entry.setWeight(BigDecimal.ZERO);
+            entry.setVehicleMark(stringOrNull(row[13]));
+            entry.setSellerMark(stringOrNull(row[14]));
+            entry.setVehicleTotalQty(numberToInt(row[15]));
+            entry.setSellerVehicleQty(numberToInt(row[16]));
+            entry.setPresetApplied(bigDecimalOrZero(row[17]));
+            BigDecimal tokenAdvance = bigDecimalOrZero(row[18]);
+            entry.setTokenAdvance(tokenAdvance);
+            entry.setIsSelfSale(Boolean.TRUE.equals(row[19]));
+
+            buyer.getEntries().add(entry);
+            buyer.setTokenAdvanceTotal(buyer.getTokenAdvanceTotal().add(tokenAdvance));
+        }
+
+        return new ArrayList<>(buyers.values());
     }
 
     /**
@@ -1115,6 +1255,7 @@ public class AuctionService {
         SessionLotContext context
     ) {
         AuctionSessionDTO dto = new AuctionSessionDTO();
+        applyFrozenBillEntryState(auction.getTraderId(), entryDtos);
         dto.setAuctionId(auction.getId());
 
         LotSummaryDTO lotSummary = new LotSummaryDTO();
@@ -1124,6 +1265,7 @@ public class AuctionService {
         lotSummary.setOriginalBagCount(originalBagCountOverride != null ? originalBagCountOverride : lot.getBagCount());
         lotSummary.setSellerVehicleId(lot.getSellerVehicleId());
         lotSummary.setWasModified(false);
+        lotSummary.setSellerFrozen(isSellerFrozenByPrintedPatti(auction.getTraderId(), lot.getSellerVehicleId()));
 
         // Populate seller, vehicle, commodity so client can show them in the Sales Pad toolbar (same as list lots).
         if (context != null && context.sellerInVehicle != null) {
@@ -1474,6 +1616,16 @@ public class AuctionService {
             int newQty = merged.getQuantity() + request.getQuantity();
             merged.setQuantity(newQty);
             merged.setAmount(merged.getBidRate().multiply(BigDecimal.valueOf(newQty)));
+            if (request.getPresetApplied() != null) {
+                merged.setPresetMargin(request.getPresetApplied());
+            }
+            if (request.getPresetType() != null) {
+                merged.setPresetType(request.getPresetType());
+            }
+            if (request.getTokenAdvance() != null) {
+                BigDecimal existingToken = merged.getTokenAdvance() != null ? merged.getTokenAdvance() : BigDecimal.ZERO;
+                merged.setTokenAdvance(existingToken.add(request.getTokenAdvance()));
+            }
             merged.setLastModifiedDate(Instant.now());
             auctionEntryRepository.save(merged);
         } else {
@@ -1629,7 +1781,50 @@ public class AuctionService {
         dto.setPresetApplied(entry.getPresetMargin());
         dto.setPresetType(entry.getPresetType());
         dto.setTokenAdvance(entry.getTokenAdvance());
+        Long traderId = resolveTraderId();
+        dto.setFrozen(entry.getId() != null && salesBillLineItemRepository.existsFrozenBillLineByAuctionEntryId(traderId, entry.getId()));
         return dto;
+    }
+
+    private static String stringOrNull(Object value) {
+        if (value == null) return null;
+        String s = String.valueOf(value).trim();
+        return s.isEmpty() ? null : s;
+    }
+
+    private static String normalizeBuyerKeyPart(String value) {
+        return value == null ? "" : value.trim().toLowerCase(Locale.ROOT);
+    }
+
+    private static Long numberToLong(Object value) {
+        if (value == null) return null;
+        if (value instanceof Number n) return n.longValue();
+        try {
+            return Long.valueOf(String.valueOf(value));
+        } catch (NumberFormatException ex) {
+            return null;
+        }
+    }
+
+    private static Integer numberToInt(Object value) {
+        if (value == null) return null;
+        if (value instanceof Number n) return n.intValue();
+        try {
+            return Integer.valueOf(String.valueOf(value));
+        } catch (NumberFormatException ex) {
+            return null;
+        }
+    }
+
+    private static BigDecimal bigDecimalOrZero(Object value) {
+        if (value == null) return BigDecimal.ZERO;
+        if (value instanceof BigDecimal bd) return bd;
+        if (value instanceof Number) return new BigDecimal(String.valueOf(value));
+        try {
+            return new BigDecimal(String.valueOf(value));
+        } catch (NumberFormatException ex) {
+            return BigDecimal.ZERO;
+        }
     }
 
     private boolean isLotOwnedByTrader(Lot lot, Long traderId) {
@@ -1650,6 +1845,52 @@ public class AuctionService {
         }
         Vehicle vehicle = vehicleRepository.findById(siv.getVehicleId()).orElse(null);
         return vehicle != null ? vehicle.getTraderId() : null;
+    }
+
+    private void assertLotOpenForPostBillingAndSettlementChanges(Long traderId, Lot lot) {
+        if (lot == null || traderId == null) {
+            return;
+        }
+        String sellerId = lot.getSellerVehicleId() != null ? String.valueOf(lot.getSellerVehicleId()) : null;
+        if (sellerId != null && isSellerFrozenByPrintedPatti(traderId, lot.getSellerVehicleId())) {
+            throw new IllegalArgumentException("This seller's Summary is frozen because Sales Patti is printed. Reopen the Patti before changing auction or summary rates.");
+        }
+    }
+
+    private boolean isSellerFrozenByPrintedPatti(Long traderId, Long sellerVehicleId) {
+        if (traderId == null || sellerVehicleId == null) {
+            return false;
+        }
+        return pattiRepository.existsByTraderIdAndSellerIdAndLockedAtIsNotNullAndReopenedAtIsNullAndInProgressFalse(
+            traderId,
+            String.valueOf(sellerVehicleId)
+        );
+    }
+
+    private void assertAuctionEntryOpenForPostBillingChanges(Long traderId, Long auctionEntryId) {
+        if (traderId == null || auctionEntryId == null) {
+            return;
+        }
+        if (salesBillLineItemRepository.existsFrozenBillLineByAuctionEntryId(traderId, auctionEntryId)) {
+            throw new IllegalArgumentException("This bid is frozen because a Sales Bill is printed. Reopen the bill before changing auction bids.");
+        }
+    }
+
+    private void applyFrozenBillEntryState(Long traderId, List<AuctionEntryDTO> entryDtos) {
+        if (traderId == null || entryDtos == null || entryDtos.isEmpty()) {
+            return;
+        }
+        List<Long> entryIds = entryDtos
+            .stream()
+            .map(AuctionEntryDTO::getId)
+            .filter(Objects::nonNull)
+            .distinct()
+            .toList();
+        if (entryIds.isEmpty()) {
+            return;
+        }
+        Set<Long> frozenEntryIds = new HashSet<>(salesBillLineItemRepository.findFrozenBillAuctionEntryIds(traderId, entryIds));
+        entryDtos.forEach(entry -> entry.setFrozen(frozenEntryIds.contains(entry.getId())));
     }
 
     private Long resolveTraderId() {

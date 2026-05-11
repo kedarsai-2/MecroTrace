@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react';
 
 const DESKTOP_BREAKPOINT = 1024;
+/** Tailwind `md` — tablet+; used for Vehicle Operations split layout (with `useDesktopMode` still at `lg`). */
+const MD_BREAKPOINT = 768;
 
 export function useDesktopMode() {
   const [isDesktop, setIsDesktop] = useState(window.innerWidth >= DESKTOP_BREAKPOINT);
@@ -13,4 +15,20 @@ export function useDesktopMode() {
   }, []);
 
   return isDesktop;
+}
+
+export function useMdUp() {
+  const [matches, setMatches] = useState(
+    typeof window !== 'undefined' ? window.innerWidth >= MD_BREAKPOINT : false,
+  );
+
+  useEffect(() => {
+    const mql = window.matchMedia(`(min-width: ${MD_BREAKPOINT}px)`);
+    const onChange = () => setMatches(mql.matches);
+    onChange();
+    mql.addEventListener('change', onChange);
+    return () => mql.removeEventListener('change', onChange);
+  }, []);
+
+  return matches;
 }

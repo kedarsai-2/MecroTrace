@@ -494,6 +494,7 @@ const LogisticsPage = () => {
               buyerId,
               isScribble: Boolean(entry.isScribble ?? entry.is_scribble),
               isSelfSale: Boolean(entry.isSelfSale ?? entry.is_self_sale),
+              frozen: Boolean(entry.frozen),
               auctionCompletedAtMs,
             });
           });
@@ -699,6 +700,8 @@ const LogisticsPage = () => {
     isFresh?: boolean;
   } | null>(null);
   const [extractTempMarks, setExtractTempMarks] = useState<string[]>([]);
+  const [extractTempSearchLoading, setExtractTempSearchLoading] = useState(false);
+  const [extractTempSearchQuery, setExtractTempSearchQuery] = useState('');
   const [extractParticipantHits, setExtractParticipantHits] = useState<Contact[]>([]);
   const [extractParticipantSearchLoading, setExtractParticipantSearchLoading] = useState(false);
   const [extractParticipantSearchQuery, setExtractParticipantSearchQuery] = useState('');
@@ -721,10 +724,14 @@ const LogisticsPage = () => {
     dialog: extractDialog,
     query: extractQuery,
     targetChoice: extractTargetChoice,
+    tempSearchLoading: extractTempSearchLoading,
+    tempSearchQuery: extractTempSearchQuery,
   });
   extractSyncRef.current.dialog = extractDialog;
   extractSyncRef.current.query = extractQuery;
   extractSyncRef.current.targetChoice = extractTargetChoice;
+  extractSyncRef.current.tempSearchLoading = extractTempSearchLoading;
+  extractSyncRef.current.tempSearchQuery = extractTempSearchQuery;
 
   const [pendingRemoveBid, setPendingRemoveBid] = useState<BidInfo | null>(null);
   const [removeBidSaving, setRemoveBidSaving] = useState(false);
@@ -769,20 +776,37 @@ const LogisticsPage = () => {
   useEffect(() => {
     if (!extractDialog) {
       setExtractTempMarks([]);
-      setExtractParticipantHits([]);
-      setExtractParticipantSearchLoading(false);
-      setExtractParticipantSearchQuery('');
+      setExtractTempSearchLoading(false);
+      setExtractTempSearchQuery('');
       return;
     }
     let cancelled = false;
-    void auctionApi.listTemporaryBuyerMarksToday().then((m) => {
-      if (!cancelled) setExtractTempMarks(Array.isArray(m) ? m : []);
+    const q = extractQuery.trim();
+    setExtractTempSearchLoading(true);
+    void auctionApi.searchTemporaryBuyerMarks(q, { limit: 50 }).then((m) => {
+      if (!cancelled) {
+        setExtractTempMarks(Array.isArray(m) ? m : []);
+        setExtractTempSearchQuery(q);
+      }
     }).catch(() => {
-      if (!cancelled) setExtractTempMarks([]);
+      if (!cancelled) {
+        setExtractTempMarks([]);
+        setExtractTempSearchQuery(q);
+      }
+    }).finally(() => {
+      if (!cancelled) setExtractTempSearchLoading(false);
     });
     return () => {
       cancelled = true;
     };
+  }, [extractDialog, extractQuery]);
+
+  useEffect(() => {
+    if (!extractDialog) {
+      setExtractParticipantHits([]);
+      setExtractParticipantSearchLoading(false);
+      setExtractParticipantSearchQuery('');
+    }
   }, [extractDialog]);
 
   useEffect(() => {
@@ -791,7 +815,7 @@ const LogisticsPage = () => {
     const q = extractQuery.trim();
     setExtractParticipantSearchLoading(true);
     const t = window.setTimeout(() => {
-      void contactApi.searchParticipants(q, { limit: 50 }).then((c) => {
+      void contactApi.searchRegistry(q, { limit: 50 }).then((c) => {
         if (extractSearchGenRef.current !== myGen) return;
         setExtractParticipantHits(c);
         setExtractParticipantSearchQuery(q);
@@ -983,7 +1007,7 @@ const LogisticsPage = () => {
 
   const migrateVisibleEntries = useMemo(() => {
     if (!migrateLiveSourceGroup) return [];
-    return migrateLiveSourceGroup.bids.filter(b => Math.floor(Number(b.quantity) || 0) > 0);
+    return migrateLiveSourceGroup.bids.filter(b => !b.frozen && Math.floor(Number(b.quantity) || 0) > 0);
   }, [migrateLiveSourceGroup]);
 
   const migrateVisibleRowKeys = useMemo(
@@ -1023,6 +1047,9 @@ const LogisticsPage = () => {
     const newRowIsScribble = target.buyerId == null;
     let usedLotIncrease = false;
     const entryId = bid.auctionEntryId;
+    if (bid.frozen) {
+      throw new Error('This bid is frozen because its Sales Bill is printed. Reopen the bill before changing it.');
+    }
     if (entryId == null || !Number.isFinite(Number(entryId))) {
       throw new Error('Missing auction entry id');
     }
@@ -1130,6 +1157,10 @@ const LogisticsPage = () => {
         toast.error('Select at least one lot');
         return;
       }
+      if (selectedBids.some(b => b.frozen)) {
+        toast.error('One or more selected bids are frozen because Sales Bill is printed. Reopen the bill before changing them.');
+        return;
+      }
       setExtractDialog({
         sourceBuyerMark: g.buyerMark,
         sourceBuyerName: g.buyerName,
@@ -1144,7 +1175,7 @@ const LogisticsPage = () => {
   );
 
   const commitExtractTypedAsFreshTarget = useCallback(() => {
-    const { dialog: d, query, targetChoice } = extractSyncRef.current;
+    const { dialog: d, query, targetChoice, tempSearchLoading, tempSearchQuery } = extractSyncRef.current;
     if (!d) return;
     if (targetChoice) {
       setExtractShowPickList(false);
@@ -1152,6 +1183,7 @@ const LogisticsPage = () => {
     }
     const trimmed = query.trim();
     if (!trimmed) return;
+    if (tempSearchLoading || tempSearchQuery !== trimmed) return;
     const m = trimmed.toUpperCase().slice(0, MAX_MARK_LEN);
     if (!m) return;
     if (m.toLowerCase() === d.sourceBuyerMark.trim().toLowerCase()) {
@@ -1220,6 +1252,8 @@ const LogisticsPage = () => {
     if (!trimmed) return null;
     if (extractParticipantSearchLoading) return null;
     if (extractParticipantSearchQuery !== trimmed) return null;
+    if (extractTempSearchLoading) return null;
+    if (extractTempSearchQuery !== trimmed) return null;
 
     const buyerMark = trimmed.toUpperCase().slice(0, MAX_MARK_LEN);
     if (!buyerMark) return null;
@@ -1245,6 +1279,8 @@ const LogisticsPage = () => {
     extractFilteredTemps.length,
     extractParticipantSearchLoading,
     extractParticipantSearchQuery,
+    extractTempSearchLoading,
+    extractTempSearchQuery,
     extractQuery,
   ]);
 
@@ -1300,9 +1336,19 @@ const LogisticsPage = () => {
         return;
       }
     } else {
-      const m = extractQuery.trim().toUpperCase().slice(0, MAX_MARK_LEN);
+      const rawQuery = extractQuery.trim();
+      const m = rawQuery.toUpperCase().slice(0, MAX_MARK_LEN);
       if (!m) {
         toast.error('Select a buyer from the list or enter a new mark');
+        return;
+      }
+      const querySettled =
+        !extractTempSearchLoading
+        && !extractParticipantSearchLoading
+        && extractTempSearchQuery === extractQuery.trim()
+        && extractParticipantSearchQuery === extractQuery.trim();
+      if (!querySettled) {
+        toast.info('Searching buyers. Please select a match or try again.');
         return;
       }
       if (m.toLowerCase() === d.sourceBuyerMark.trim().toLowerCase()) {
@@ -1336,19 +1382,34 @@ const LogisticsPage = () => {
             buyerId: parseContactIdForAuction(contactHit.contact_id),
           };
         } else {
-          const markUsedOnAnyBid = bids.some(b => (b.buyerMark || '').trim().toLowerCase() === norm);
-          const markInTemps = extractTempMarks.some(t => t.trim().toLowerCase() === norm);
-          const markInContacts = extractParticipantHits.some((c) => {
-            const { buyerMark: bm } = contactMarkOrName(c);
-            return bm.trim().toLowerCase() === norm;
-          });
-          if (markUsedOnAnyBid || markInTemps || markInContacts) {
-            toast.error(
-              'This mark already exists. Pick the matching buyer, temp mark, or contact in the list to merge, or enter an unused mark.',
-            );
-            return;
+          const importedByPhone = await contactApi.importPortalContactByPhone(rawQuery);
+          if (importedByPhone) {
+            const { buyerMark: bm, buyerName: bn } = contactMarkOrName(importedByPhone);
+            target = {
+              buyerMark: bm,
+              buyerName: bn,
+              buyerId: parseContactIdForAuction(importedByPhone.contact_id),
+            };
+            if (sameLogisticsBuyer(target, source)) {
+              toast.error('Cannot extract to the same buyer');
+              return;
+            }
+            toast.success('This mobile belongs to a global contact. Imported to your contact list.');
+          } else {
+            const markUsedOnAnyBid = bids.some(b => (b.buyerMark || '').trim().toLowerCase() === norm);
+            const markInTemps = extractTempMarks.some(t => t.trim().toLowerCase() === norm);
+            const markInContacts = extractParticipantHits.some((c) => {
+              const { buyerMark: bm } = contactMarkOrName(c);
+              return bm.trim().toLowerCase() === norm;
+            });
+            if (markUsedOnAnyBid || markInTemps || markInContacts) {
+              toast.error(
+                'This mark already exists. Pick the matching buyer, temp mark, or contact in the list to merge, or enter an unused mark.',
+              );
+              return;
+            }
+            target = { buyerMark: m, buyerName: m, buyerId: null };
           }
-          target = { buyerMark: m, buyerName: m, buyerId: null };
         }
       }
     }
@@ -1416,6 +1477,11 @@ const LogisticsPage = () => {
     const bid = pendingRemoveBid;
     if (!bid?.auctionEntryId) {
       toast.error('Cannot remove: missing entry id');
+      return;
+    }
+    if (bid.frozen) {
+      toast.error('This bid is frozen because its Sales Bill is printed. Reopen the bill before changing it.');
+      setPendingRemoveBid(null);
       return;
     }
     setRemoveBidSaving(true);
@@ -2108,8 +2174,8 @@ const LogisticsPage = () => {
                                               <td className="py-1.5 pr-1 text-center align-middle">
                                                 <button
                                                   type="button"
-                                                  title="Remove bid from buyer"
-                                                  disabled={b.auctionEntryId == null}
+                                                  title={b.frozen ? 'Sales Bill printed: reopen bill before removing this bid' : 'Remove bid from buyer'}
+                                                  disabled={b.auctionEntryId == null || b.frozen}
                                                   onClick={() => setPendingRemoveBid(b)}
                                                   className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-destructive hover:bg-destructive/10 disabled:pointer-events-none disabled:opacity-40"
                                                   aria-label={`Remove lot ${formatLotIdentifierForBid(b)}`}
@@ -2189,8 +2255,8 @@ const LogisticsPage = () => {
                                   </div>
                                   <button
                                     type="button"
-                                    title="Remove bid from buyer"
-                                    disabled={b.auctionEntryId == null}
+                                    title={b.frozen ? 'Sales Bill printed: reopen bill before removing this bid' : 'Remove bid from buyer'}
+                                    disabled={b.auctionEntryId == null || b.frozen}
                                     onClick={() => setPendingRemoveBid(b)}
                                     className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-destructive hover:bg-destructive/10 disabled:pointer-events-none disabled:opacity-40"
                                     aria-label={`Remove lot ${formatLotIdentifierForBid(b)}`}
@@ -2925,9 +2991,11 @@ const LogisticsPage = () => {
                       })
                     )}
                     <div className="border-b border-border/40 px-2 py-1 text-[10px] font-bold uppercase tracking-wide text-muted-foreground">
-                      Temp marks (today)
+                      Temp marks
                     </div>
-                    {extractFilteredTemps.length === 0 ? (
+                    {extractTempSearchLoading && extractQuery.trim() !== extractTempSearchQuery ? (
+                      <p className="px-3 py-2 text-[11px] text-muted-foreground">Searching temp marks…</p>
+                    ) : extractFilteredTemps.length === 0 ? (
                       <p className="px-3 py-2 text-[11px] text-muted-foreground">No temp mark matches.</p>
                     ) : (
                       extractFilteredTemps.map((m) => (
@@ -3044,7 +3112,18 @@ const LogisticsPage = () => {
                   )}
                   style={buyerChittiBulkBtnStyle}
                   disabled={
-                    extractSaving || !extractDialog || (!extractTargetChoice && !extractQuery.trim())
+                    extractSaving
+                    || !extractDialog
+                    || (
+                      !extractTargetChoice
+                      && (
+                        !extractQuery.trim()
+                        || extractTempSearchLoading
+                        || extractParticipantSearchLoading
+                        || extractTempSearchQuery !== extractQuery.trim()
+                        || extractParticipantSearchQuery !== extractQuery.trim()
+                      )
+                    )
                   }
                   onClick={() => void runExtractSave()}
                 >

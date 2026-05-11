@@ -1,4 +1,5 @@
 import type { CSSProperties } from 'react';
+import { useState } from 'react';
 import { Outlet, useLocation, useNavigate, Navigate } from 'react-router-dom';
 import { Moon, Sun, Bell, User, AlertCircle } from 'lucide-react';
 import DesktopSidebar from '@/components/DesktopSidebar';
@@ -10,6 +11,9 @@ import { useFontSize } from '@/context/FontSizeContext';
 
 /** Paths allowed when trader is not yet approved (pending registration). */
 const ALLOWED_PATHS_WHEN_PENDING = ['/home', '/profile'];
+
+const SIDEBAR_EXPANDED_PX = 260;
+const SIDEBAR_COLLAPSED_PX = 72;
 
 const pageTitles: Record<string, string> = {
   '/home': 'Dashboard',
@@ -61,6 +65,8 @@ const TraderLayout = () => {
   const { isDark, toggleTheme } = useTheme();
   const { user, trader } = useAuth();
   const { scale } = useFontSize();
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const sidebarOffsetPx = sidebarCollapsed ? SIDEBAR_COLLAPSED_PX : SIDEBAR_EXPANDED_PX;
 
   // Scale only page body (not sidebar / sticky header). `transform: scale` shrinks the
   // layout box so scroll height is wrong and content gets cropped; `zoom` updates layout
@@ -96,10 +102,16 @@ const TraderLayout = () => {
 
   return (
     <div className="flex min-h-screen w-full bg-background">
-      <DesktopSidebar />
-      <div className="flex-1 min-h-screen lg:ml-[260px] transition-all duration-250 min-w-0">
+      <DesktopSidebar collapsed={sidebarCollapsed} onCollapsedChange={setSidebarCollapsed} />
+      <div
+        className="flex-1 min-h-screen min-w-0 transition-[margin-left] ease-in-out [transition-duration:250ms]"
+        style={{ marginLeft: sidebarOffsetPx }}
+      >
         {/* Subtle background blobs */}
-        <div className="fixed pointer-events-none inset-0 lg:left-[260px]">
+        <div
+          className="fixed pointer-events-none top-0 right-0 bottom-0 transition-[left] ease-in-out [transition-duration:250ms]"
+          style={{ left: sidebarOffsetPx }}
+        >
           <div className="absolute top-0 right-0 w-96 h-96 bg-gradient-to-bl from-primary/8 via-accent/5 to-transparent rounded-full blur-3xl" />
           <div className="absolute bottom-0 left-0 w-80 h-80 bg-gradient-to-tr from-accent/6 via-primary/4 to-transparent rounded-full blur-3xl" />
         </div>

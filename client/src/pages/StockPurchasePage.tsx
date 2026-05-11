@@ -87,9 +87,8 @@ const StockPurchasePage = () => {
   useEffect(() => {
     if (!showForm) return;
     setVendorsLoading(true);
-    /** Participants scope = trader-owned contacts + global (network) contacts for mandi pool — correct for vendors / suppliers. */
     contactApi
-      .list({ scope: 'participants' })
+      .list({ scope: 'registry' })
       .then((c) => {
         const seen = new Set<string>();
         const unique: Contact[] = [];

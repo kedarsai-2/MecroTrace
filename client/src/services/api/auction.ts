@@ -30,6 +30,12 @@ export interface LotSummaryDTO {
   vehicle_total_qty?: number;
   /** Total bags for this seller (all lots of that seller). For lot identifier. */
   seller_total_qty?: number;
+  /** True when printed Settlement Patti froze this seller's Summary/Sales Pad rows. */
+  seller_frozen?: boolean;
+  /** True when Summary/Vehicle Ops changed seller rate for this lot. */
+  summary_edited?: boolean;
+  summary_edited_at?: string | null;
+  summary_edited_by?: string | null;
   /** Distinct buyers with bids (latest auction); for "By Buyer" lot navigation. */
   participating_buyers?: LotParticipatingBuyerDTO[];
 }
@@ -59,6 +65,8 @@ export interface AuctionEntryDTO {
   created_at?: string;
   /** Epoch ms — optimistic concurrency when PATCHing this bid */
   last_modified_ms?: number;
+  /** True when this exact bid is part of a printed, non-reopened Sales Bill. */
+  frozen?: boolean;
 }
 
 export interface AuctionSessionDTO {
@@ -148,6 +156,35 @@ export interface AuctionResultDTO {
   entries: AuctionResultEntryDTO[];
 }
 
+export interface BillingBuyerEntryDTO {
+  bidNumber: number;
+  lotId: string;
+  lotName: string;
+  auctionEntryId?: number | null;
+  selfSaleUnitId?: number | null;
+  lotTotalQty?: number | null;
+  sellerName: string;
+  commodityName: string;
+  rate: number;
+  quantity: number;
+  weight?: number;
+  vehicleTotalQty?: number | null;
+  sellerVehicleQty?: number | null;
+  vehicleMark?: string | null;
+  sellerMark?: string | null;
+  presetApplied?: number;
+  isSelfSale?: boolean;
+  tokenAdvance?: number;
+}
+
+export interface BillingBuyerDTO {
+  buyerMark: string;
+  buyerName: string;
+  buyerContactId?: string | null;
+  entries: BillingBuyerEntryDTO[];
+  tokenAdvanceTotal: number;
+}
+
 export interface AuctionSelfSaleContextDTO {
   self_sale_unit_id: number;
   rate: number;
@@ -215,10 +252,20 @@ async function parseJsonOrThrow(res: Response, defaultMessage: string): Promise<
     const contentType = res.headers.get('content-type') || '';
     if (contentType.includes('application/json') || contentType.includes('application/problem+json')) {
       const body = await res.json();
-      if (body?.message) message = body.message;
-      else if (body?.detail) message = body.detail;
-      else if (body?.title) message = body.title;
-      else if (Array.isArray(body?.errors) && body.errors[0]?.message) message = body.errors[0].message;
+      const apiMessage = typeof body?.message === 'string' ? body.message : '';
+      const apiDetail = typeof body?.detail === 'string' ? body.detail : '';
+      const apiTitle = typeof body?.title === 'string' ? body.title : '';
+      const firstError = Array.isArray(body?.errors) && typeof body.errors[0]?.message === 'string'
+        ? body.errors[0].message
+        : '';
+      if (apiMessage.startsWith('error.')) {
+        message = apiDetail || apiTitle || firstError || defaultMessage;
+      } else {
+        message = apiMessage || apiDetail || apiTitle || firstError || defaultMessage;
+      }
+      if (message === 'error.validation') {
+        message = 'This auction change is blocked by validation. If Settlement Patti or Sales Bill is printed, reopen it before changing bids.';
+      }
     } else {
       const text = await res.text();
       if (text && text.length < 300) message = text;
@@ -234,6 +281,23 @@ export const auctionApi = {
   async listTemporaryBuyerMarksToday(): Promise<string[]> {
     const res = await apiFetch(`${BASE}/temporary-buyer-marks/today`, { method: 'GET' });
     if (!res.ok) await parseJsonOrThrow(res, 'Failed to load temporary buyer marks');
+    return res.json();
+  },
+
+  /** Bounded search over all historical temporary buyer marks for extract / merge pickers. */
+  async searchTemporaryBuyerMarks(q: string, opts?: { limit?: number }): Promise<string[]> {
+    const params = new URLSearchParams();
+    const trimmed = q.trim();
+    if (trimmed) params.set('q', trimmed);
+    params.set('limit', String(opts?.limit ?? 50));
+    const res = await apiFetch(`${BASE}/temporary-buyer-marks/search?${params.toString()}`, { method: 'GET' });
+    if (!res.ok) await parseJsonOrThrow(res, 'Failed to search temporary buyer marks');
+    return res.json();
+  },
+
+  async listBillingBuyers(init?: RequestInit): Promise<BillingBuyerDTO[]> {
+    const res = await apiFetch(`${BASE}/billing-buyers`, { method: 'GET', ...init });
+    if (!res.ok) await parseJsonOrThrow(res, 'Failed to load billing buyers');
     return res.json();
   },
 

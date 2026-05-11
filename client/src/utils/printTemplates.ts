@@ -3,7 +3,7 @@ import { toast } from "sonner";
 
 import { bluetoothPrintersApi } from "@/services/api/bluetoothPrinters";
 import { mercoPrinter } from "@/plugins/mercoPrinter";
-import { formatAuctionLotIdentifier } from "@/utils/auctionLotIdentifier";
+import { formatAuctionLotIdentifier, lotBagCountForIdentifier } from "@/utils/auctionLotIdentifier";
 
 // ── Print Templates for Print Hub ──────────────────────────
 // REQ-LOG-002: All print formats per SRS (same format as client_origin)
@@ -25,10 +25,7 @@ export interface BidInfo {
   vehicleTotalQty?: number;
   /** Total bags for this seller on the same vehicle (seller qty) */
   sellerVehicleQty?: number;
-  /**
-   * Lot-level bag count for canonical identifier last segment (Sales Pad / Billing / Print Hub).
-   * Must not be the buyer line `quantity` unless that line owns the full lot.
-   */
+  /** Lot-level bag count (`bag_count`) for identifier final segment — never derive from buyer line qty. */
   lotTotalQty?: number;
   /**
    * When set (e.g. from completed auction API), overrides summed bid quantities for identifier totals.
@@ -58,6 +55,8 @@ export interface BidInfo {
   buyerId?: number | null;
   isScribble?: boolean;
   isSelfSale?: boolean;
+  /** Exact bid is locked because its Sales Bill is printed. */
+  frozen?: boolean;
   /** Parent auction `completedAt` as epoch ms (logistics: sort buyer groups newest first). */
   auctionCompletedAtMs?: number;
 }
@@ -85,27 +84,26 @@ function lotDisplay(bid: BidInfo): string {
 
 /**
  * Lot identifier: {vehicleMark}-{vehicleTotal}/{sellerMark}-{sellerTotal}/{lotName}/{lotBagCount}
- * (e.g. AB-200/SA-122/SA1/22). Mirrors BillingPage `formatLotIdentifierForBillEntry` / Sales Pad.
+ * (e.g. AB-200/SA-122/SA1/22). Final segment = lot-level bags only ({@link lotBagCountForIdentifier}).
  */
 export function formatLotIdentifierForBid(bid: BidInfo): string {
   const lineQty = Math.max(0, Math.floor(Number(bid.quantity) || 0));
-  const rawLt = bid.lotTotalQty;
-  const lotQty =
-    rawLt != null && Number.isFinite(Number(rawLt)) && Number(rawLt) > 0 ? Number(rawLt) : lineQty;
+  const lotBagCount = lotBagCountForIdentifier(bid.lotTotalQty);
   const lotName = (bid.lotName || '').trim() || String(bid.lotNumber);
+  const qtyFallback = lotBagCount > 0 ? lotBagCount : lineQty;
   const rawVt = bid.vehicleTotalQty ?? bid.auctionVehicleTotalQty;
   const vTotal =
-    rawVt != null && Number.isFinite(Number(rawVt)) && Number(rawVt) > 0 ? Number(rawVt) : lotQty;
+    rawVt != null && Number.isFinite(Number(rawVt)) && Number(rawVt) > 0 ? Number(rawVt) : qtyFallback;
   const rawSv = bid.sellerVehicleQty ?? bid.auctionSellerTotalQty;
   const sTotal =
-    rawSv != null && Number.isFinite(Number(rawSv)) && Number(rawSv) > 0 ? Number(rawSv) : lotQty;
+    rawSv != null && Number.isFinite(Number(rawSv)) && Number(rawSv) > 0 ? Number(rawSv) : qtyFallback;
   return formatAuctionLotIdentifier({
     vehicleMark: bid.vehicleMark,
     vehicleTotalQty: vTotal,
     sellerMark: bid.sellerMark,
     sellerTotalQty: sTotal,
     lotName,
-    lotQty,
+    lotQty: lotBagCount,
   });
 }
 
