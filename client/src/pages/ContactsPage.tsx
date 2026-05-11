@@ -18,8 +18,10 @@ import { RotateCcw } from 'lucide-react';
 import { usePermissions } from '@/lib/permissions';
 import ForbiddenPage from '@/components/ForbiddenPage';
 import { useAuth } from '@/context/AuthContext';
+import { arrivalsTabCountPill, arrivalsToggleTabBtn, mobileArrivalsStyleTab } from '@/components/arrivals/arrivalsTabStyles';
 
 type ModalMode = 'add' | 'view' | 'edit' | null;
+type ContactTab = 'trader' | 'global';
 
 const CONTACTS_QUERY_KEY = ['contacts', 'registry'] as const;
 const CONTACTS_STALE_TIME_MS = 2 * 60 * 1000;
@@ -71,6 +73,7 @@ const ContactsPage = () => {
   const canEdit = can('Contacts', 'Edit');
   const canDelete = can('Contacts', 'Delete');
   const [search, setSearch] = useState('');
+  const [activeTab, setActiveTab] = useState<ContactTab>('trader');
   const [modalMode, setModalMode] = useState<ModalMode>(null);
   const [selectedContact, setSelectedContact] = useState<Contact | null>(null);
   const [formData, setFormData] = useState({ name: '', phone: '', mark: '', address: '', enablePortal: false });
@@ -96,6 +99,23 @@ const ContactsPage = () => {
   });
 
   const contacts = contactsQuery.data ?? [];
+  const groupedContacts = useMemo(() => {
+    const traderContacts: Contact[] = [];
+    const globalContacts: Contact[] = [];
+
+    for (const contact of contacts) {
+      const hasTraderOwner = String(contact.trader_id ?? '').trim().length > 0;
+      if (contact.portal_signup_linked || !hasTraderOwner) {
+        globalContacts.push(contact);
+      } else {
+        traderContacts.push(contact);
+      }
+    }
+
+    return { trader: traderContacts, global: globalContacts };
+  }, [contacts]);
+  const activeContacts = groupedContacts[activeTab];
+  const activeTabLabel = activeTab === 'trader' ? 'Trader contacts' : 'Global contacts';
   const isLoadingInitial = contactsQuery.isLoading && contacts.length === 0;
   const isRefreshing = contactsQuery.isFetching && !isLoadingInitial;
   const error = contactsQuery.error;
@@ -149,13 +169,13 @@ const ContactsPage = () => {
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
-    if (!q) return contacts;
-    return contacts.filter(c => (
+    if (!q) return activeContacts;
+    return activeContacts.filter(c => (
       c.name?.toLowerCase().includes(q) ||
       c.phone?.includes(q) ||
       c.mark?.toLowerCase().includes(q)
     ));
-  }, [contacts, search]);
+  }, [activeContacts, search]);
 
   const desktopVirtualizer = useWindowVirtualizer({
     count: isDesktop ? filtered.length : 0,
@@ -256,6 +276,7 @@ const ContactsPage = () => {
       updateContactsCache(prev => [...prev, created]);
       invalidateContacts();
       closeModal();
+      setActiveTab('trader');
       toast.success(`✅ ${created.name} registered`);
     } catch (err) {
       if (err instanceof ContactApiError && err.errorKey === 'phoneexistsinactive') {
@@ -284,6 +305,7 @@ const ContactsPage = () => {
       await contactApi.restore(existing.contact_id);
       setRestorePendingPhone(null);
       invalidateContacts();
+      setActiveTab('trader');
       toast.success(`Contact with phone ${restorePendingPhone} restored. You can use it again.`);
     } catch (err) {
       console.error('Restore contact error:', err);
@@ -341,6 +363,16 @@ const ContactsPage = () => {
   }
 
   const showEmptyState = !isLoadingInitial && !error && filtered.length === 0;
+  const emptyTitle = search.trim()
+    ? `No ${activeTabLabel.toLowerCase()} found`
+    : activeTab === 'trader'
+      ? 'No trader contacts yet'
+      : 'No global contacts mapped yet';
+  const emptyHint = search.trim()
+    ? 'Try a different search or add a new contact'
+    : activeTab === 'trader'
+      ? 'Add a contact to build your trader registry'
+      : 'Global contacts appear here after they are used with this trader';
   const statusText = error
     ? 'Unable to load contacts'
     : isLoadingInitial
@@ -365,21 +397,37 @@ const ContactsPage = () => {
             ))}
           </div>
           <div className="relative z-10">
-            <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
                 <button onClick={() => navigate('/home')} className="w-10 h-10 rounded-full bg-white/20 backdrop-blur flex items-center justify-center">
                   <ArrowLeft className="w-5 h-5 text-white" />
                 </button>
                 <div>
                   <h1 className="text-xl font-bold text-white">Contacts</h1>
-              <p className="text-white/70 text-xs">{contacts.length} contacts · Unified Registry{statusText ? ` · ${statusText}` : ''}</p>
+                  <p className="text-white/70 text-xs">{activeContacts.length} {activeTabLabel.toLowerCase()} · {contacts.length} total{statusText ? ` · ${statusText}` : ''}</p>
                 </div>
               </div>
               <button onClick={openAdd} className="w-10 h-10 rounded-full bg-white/20 backdrop-blur flex items-center justify-center hover:bg-white/30 transition-colors">
                 <Plus className="w-5 h-5 text-white" />
               </button>
             </div>
-            <div className="relative">
+            <div className="mt-4 grid grid-cols-2 gap-2 rounded-xl bg-white/15 p-1 backdrop-blur" role="tablist" aria-label="Contacts main tabs">
+              <button
+                type="button"
+                onClick={() => setActiveTab('trader')}
+                className={mobileArrivalsStyleTab(activeTab === 'trader')}
+              >
+                Trader
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab('global')}
+                className={mobileArrivalsStyleTab(activeTab === 'global')}
+              >
+                Global
+              </button>
+            </div>
+            <div className="relative mt-3">
               <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-white/50" />
               <input ref={searchRef} placeholder="Search by name, phone, or mark…" value={search} onChange={e => setSearch(e.target.value)}
                 className="w-full h-10 pl-10 pr-4 rounded-xl bg-white/20 backdrop-blur text-white placeholder:text-white/50 text-sm border border-white/10 focus:outline-none focus:border-white/30" />
@@ -397,7 +445,7 @@ const ContactsPage = () => {
             </div>
             <div>
               <h3 className="text-base font-bold text-foreground">Contact Registry</h3>
-              <p className="text-xs text-muted-foreground">{contacts.length} contacts · Unified across all transactions{statusText ? ` · ${statusText}` : ''}</p>
+              <p className="text-xs text-muted-foreground">{activeContacts.length} {activeTabLabel.toLowerCase()} · {contacts.length} total{statusText ? ` · ${statusText}` : ''}</p>
             </div>
           </div>
           <div className="flex items-center gap-3">
@@ -413,12 +461,40 @@ const ContactsPage = () => {
         </div>
       )}
 
+      {/* Desktop Contact Tabs */}
+      {isDesktop && (
+        <div className="mb-6 flex min-w-0 flex-wrap items-center gap-2 overflow-x-auto px-8 [-webkit-overflow-scrolling:touch]" role="tablist" aria-label="Contacts main tabs">
+          <button
+            type="button"
+            onClick={() => setActiveTab('trader')}
+            className={arrivalsToggleTabBtn(activeTab === 'trader')}
+          >
+            <Users className="w-4 h-4" />
+            Trader Contacts
+            <span className={arrivalsTabCountPill(activeTab === 'trader')}>
+              {groupedContacts.trader.length}
+            </span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('global')}
+            className={arrivalsToggleTabBtn(activeTab === 'global')}
+          >
+            <BookOpen className="w-4 h-4" />
+            Global Contacts
+            <span className={arrivalsTabCountPill(activeTab === 'global')}>
+              {groupedContacts.global.length}
+            </span>
+          </button>
+        </div>
+      )}
+
       {/* Info Banner */}
       <div className={cn("mb-3", isDesktop ? "px-8" : "px-4")}>
         <div className="rounded-xl bg-emerald-50 dark:bg-emerald-950/20 border border-emerald-200/50 dark:border-emerald-800/30 px-3 py-2 flex items-start gap-2">
           <BookOpen className="w-4 h-4 text-emerald-600 dark:text-emerald-400 mt-0.5 shrink-0" />
           <p className="text-xs text-emerald-700 dark:text-emerald-400">
-            All entries are unified <strong>Contacts</strong>. Role (Seller/Buyer/Broker) is determined automatically by transaction participation.
+            <strong>Trader Contacts</strong> are added by this trader. <strong>Global Contacts</strong> are portal contacts mapped to this trader after transaction use.
           </p>
         </div>
       </div>
@@ -563,8 +639,8 @@ const ContactsPage = () => {
                       <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-emerald-500/10 to-teal-500/10 flex items-center justify-center mx-auto mb-3 border border-emerald-500/15">
                         <UserIcon className="w-7 h-7 text-muted-foreground/40" />
                       </div>
-                      <p className="text-muted-foreground font-medium">No contacts found</p>
-                      <p className="text-xs text-muted-foreground/60 mt-1">Try a different search or add a new contact</p>
+                      <p className="text-muted-foreground font-medium">{emptyTitle}</p>
+                      <p className="text-xs text-muted-foreground/60 mt-1">{emptyHint}</p>
                     </td>
                   </tr>
                 )}
@@ -663,8 +739,8 @@ const ContactsPage = () => {
           {showEmptyState && (
             <div className="glass-card rounded-2xl p-8 text-center">
               <UserIcon className="w-10 h-10 text-muted-foreground/30 mx-auto mb-3" />
-              <p className="text-muted-foreground font-medium">No contacts found</p>
-              <p className="text-sm text-muted-foreground/70 mt-1">Tap + to register a new contact</p>
+              <p className="text-muted-foreground font-medium">{emptyTitle}</p>
+              <p className="text-sm text-muted-foreground/70 mt-1">{emptyHint}</p>
             </div>
           )}
         </div>
