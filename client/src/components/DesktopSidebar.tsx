@@ -1,16 +1,14 @@
 import { useNavigate, useLocation } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-  Home, Settings, Users,   Truck, Gavel, Printer, Scale, PenLine,
+  Home, Settings, Users, Truck, Gavel, Printer, Scale, PenLine,
   FileText, Receipt, BookOpen, CreditCard, BarChart3, User,
-  ChevronLeft, ChevronRight, Moon, Sun, LogOut, ShieldCheck,
-  ShoppingBag, Box, Send, ClipboardList
+  ChevronLeft, ChevronRight,
+  ShoppingBag, Box, Send, ClipboardList,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { MercotraceIcon } from '@/components/MercotraceLogo';
-import { useTheme } from '@/context/ThemeContext';
 import { useAuth } from '@/context/AuthContext';
-import { useState } from 'react';
 import { usePermissions, getModuleKeyForRoute } from '@/lib/permissions';
 
 /** Paths allowed in sidebar when trader is not yet approved. */
@@ -65,20 +63,18 @@ const navSections = [
   },
 ];
 
-const DesktopSidebar = () => {
-  const [collapsed, setCollapsed] = useState(false);
+export type DesktopSidebarProps = {
+  collapsed: boolean;
+  onCollapsedChange: (collapsed: boolean) => void;
+};
+
+const DesktopSidebar = ({ collapsed, onCollapsedChange }: DesktopSidebarProps) => {
   const navigate = useNavigate();
   const location = useLocation();
-  const { isDark, toggleTheme } = useTheme();
-  const { user, trader, logout } = useAuth();
+  const { trader } = useAuth();
   const { canAccessModule } = usePermissions();
 
   const isApproved = trader?.approval_status === 'APPROVED';
-
-  const handleLogout = async () => {
-    await Promise.resolve(logout());
-    navigate('/login');
-  };
 
   return (
     <motion.aside
@@ -183,10 +179,14 @@ const DesktopSidebar = () => {
         })}
       </nav>
 
-      {/* Collapse toggle */}
+      {/* Collapse toggle — kept inside sidebar bounds so overflow-hidden does not clip it */}
       <button
-        onClick={() => setCollapsed(!collapsed)}
-        className="absolute top-6 -right-5 w-10 h-10 rounded-full bg-gradient-to-br from-primary to-accent shadow-xl shadow-primary/30 flex items-center justify-center text-white hover:scale-110 transition-all duration-300 z-50 border-2 border-white/30"
+        type="button"
+        onClick={() => onCollapsedChange(!collapsed)}
+        aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+        aria-expanded={!collapsed}
+        aria-pressed={collapsed}
+        className="absolute top-6 right-2 w-10 h-10 rounded-full bg-gradient-to-br from-primary to-accent shadow-xl shadow-primary/30 flex items-center justify-center text-white hover:scale-110 transition-all ease-in-out [transition-duration:250ms] z-50 border-2 border-white/30"
       >
         {collapsed ? <ChevronRight className="w-5 h-5" /> : <ChevronLeft className="w-5 h-5" />}
       </button>
