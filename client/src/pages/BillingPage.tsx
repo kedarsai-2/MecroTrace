@@ -71,6 +71,7 @@ import {
   totalGstRupeesForGroup,
 } from '@/utils/billingMoney';
 import { BillingMoneyInput } from '@/components/billing/BillingMoneyInput';
+import GlobalContactImportDialog from '@/components/contacts/GlobalContactImportDialog';
 
 /**
  * Billing buttons follow Settlement premium gradient language for visual consistency.
@@ -1532,6 +1533,12 @@ const BillingPage = () => {
   const [contactErrors, setContactErrors] = useState<Record<string, string>>({});
   const [contactsRegistry, setContactsRegistry] = useState<Contact[]>([]);
   const [restorePendingPhone, setRestorePendingPhone] = useState<string | null>(null);
+  const [pendingGlobalImport, setPendingGlobalImport] = useState<{
+    contact: Contact;
+    phone: string;
+    context: 'contactSheet' | 'replacement';
+  } | null>(null);
+  const [globalImportLoading, setGlobalImportLoading] = useState(false);
   const [replaceTarget, setReplaceTarget] = useState<'BUYER' | 'BROKER' | 'TEMP_BUYER'>('BUYER');
   const [replaceMarkInput, setReplaceMarkInput] = useState('');
   const [replaceSearchResults, setReplaceSearchResults] = useState<Contact[]>([]);
@@ -2071,15 +2078,15 @@ const BillingPage = () => {
     }
     if (!validateBillingContactForm()) return;
     try {
-      const imported = await contactApi.importPortalContactByPhone(contactForm.phone.trim());
-      if (imported) {
-        closeContactSheet();
-        toast.success('This mobile belongs to a global contact. Imported to your contact list.');
+      const phone = contactForm.phone.trim();
+      const candidate = await contactApi.getPortalContactImportCandidateByPhone(phone);
+      if (candidate) {
+        setPendingGlobalImport({ contact: candidate, phone, context: 'contactSheet' });
         return;
       }
       await contactApi.create({
         name: contactForm.name.trim(),
-        phone: contactForm.phone.trim(),
+        phone,
         mark: contactForm.mark.trim().toUpperCase(),
         address: contactForm.address.trim(),
         trader_id: '',
@@ -2096,6 +2103,13 @@ const BillingPage = () => {
       if (err instanceof ContactApiError && err.errorKey === 'markexists') {
         setContactErrors(prev => ({ ...prev, mark: err.message }));
         return;
+      }
+      if (err instanceof ContactApiError && err.errorKey === 'portalcontactexists') {
+        const candidate = await contactApi.getPortalContactImportCandidateByPhone(contactForm.phone.trim());
+        if (candidate) {
+          setPendingGlobalImport({ contact: candidate, phone: contactForm.phone.trim(), context: 'contactSheet' });
+          return;
+        }
       }
       toast.error(err instanceof Error ? err.message : 'Failed to register contact');
     }
@@ -2243,6 +2257,40 @@ const BillingPage = () => {
     });
   };
 
+  const finalizeReplacementContact = (resolved: Contact, hadExistingSelection: boolean) => {
+    applyReplacementContact(resolved);
+    clearReplacementInline();
+    const role = replaceTarget === 'BROKER' ? 'Broker' : 'Buyer';
+    toast.success(hadExistingSelection ? `${role} updated for this bill.` : `${role} added to this bill.`);
+
+    if (replaceTarget === 'BUYER' && bill) {
+      const nextName = resolved.name?.trim() || '';
+      const nextMark = (resolved.mark?.trim() || nextName.slice(0, 4)).toUpperCase();
+      const patched: BillData = {
+        ...bill,
+        buyerName: nextName,
+        buyerMark: nextMark,
+        buyerContactId: resolved.contact_id ?? null,
+        buyerPhone: resolved.phone ?? '',
+        buyerAddress: resolved.address ?? '',
+        billingName: nextName || bill.billingName,
+        buyerIsTemporary: false,
+      };
+      void (async () => {
+        try {
+          if (patched.commodityGroups.some(g => (g.items?.length ?? 0) > 0)) {
+            await syncAuctionEntriesToBillBuyer(patched);
+          }
+          await refetchAuctions();
+        } catch {
+          toast.warning(
+            'Buyer updated on the bill, but some auction bids could not be reassigned. Save the bill to retry, or fix in Sales Pad.',
+          );
+        }
+      })();
+    }
+  };
+
   const submitReplacement = async () => {
     if (replaceTarget === 'TEMP_BUYER') {
       if (!bill) return;
@@ -2315,18 +2363,19 @@ const BillingPage = () => {
       }
       if (!validateReplacementForm()) return;
       try {
-        resolved = await contactApi.importPortalContactByPhone(replaceForm.phone.trim());
-        if (resolved) {
-          toast.success('This mobile belongs to a global contact. Imported to your contact list.');
-        } else {
-          resolved = await contactApi.create({
-            name: replaceForm.name.trim() || replaceForm.mark.trim().toUpperCase(),
-            phone: replaceForm.phone.trim(),
-            mark: replaceForm.mark.trim().toUpperCase(),
-            trader_id: '',
-            can_login: true,
-          });
+        const phone = replaceForm.phone.trim();
+        const candidate = await contactApi.getPortalContactImportCandidateByPhone(phone);
+        if (candidate) {
+          setPendingGlobalImport({ contact: candidate, phone, context: 'replacement' });
+          return;
         }
+        resolved = await contactApi.create({
+          name: replaceForm.name.trim() || replaceForm.mark.trim().toUpperCase(),
+          phone,
+          mark: replaceForm.mark.trim().toUpperCase(),
+          trader_id: '',
+          can_login: true,
+        });
       } catch (err) {
         if (err instanceof ContactApiError && err.errorKey === 'markexists') {
           setReplaceErrors(prev => ({ ...prev, mark: err.message }));
@@ -2346,41 +2395,43 @@ const BillingPage = () => {
           }));
           return;
         }
+        if (err instanceof ContactApiError && err.errorKey === 'portalcontactexists') {
+          const candidate = await contactApi.getPortalContactImportCandidateByPhone(replaceForm.phone.trim());
+          if (candidate) {
+            setPendingGlobalImport({ contact: candidate, phone: replaceForm.phone.trim(), context: 'replacement' });
+            return;
+          }
+        }
         toast.error(err instanceof Error ? err.message : 'Failed to create contact');
         return;
       }
     }
     if (!resolved) return;
-    applyReplacementContact(resolved);
-    clearReplacementInline();
-    const role = replaceTarget === 'BROKER' ? 'Broker' : 'Buyer';
-    toast.success(hadExistingSelection ? `${role} updated for this bill.` : `${role} added to this bill.`);
+    finalizeReplacementContact(resolved, hadExistingSelection);
+  };
 
-    if (replaceTarget === 'BUYER' && bill) {
-      const nextName = resolved.name?.trim() || '';
-      const nextMark = (resolved.mark?.trim() || nextName.slice(0, 4)).toUpperCase();
-      const patched: BillData = {
-        ...bill,
-        buyerName: nextName,
-        buyerMark: nextMark,
-        buyerContactId: resolved.contact_id ?? null,
-        buyerPhone: resolved.phone ?? '',
-        buyerAddress: resolved.address ?? '',
-        billingName: nextName || bill.billingName,
-        buyerIsTemporary: false,
-      };
-      void (async () => {
-        try {
-          if (patched.commodityGroups.some(g => (g.items?.length ?? 0) > 0)) {
-            await syncAuctionEntriesToBillBuyer(patched);
-          }
-          await refetchAuctions();
-        } catch {
-          toast.warning(
-            'Buyer updated on the bill, but some auction bids could not be reassigned. Save the bill to retry, or fix in Sales Pad.',
-          );
-        }
-      })();
+  const handleConfirmGlobalImport = async () => {
+    if (!pendingGlobalImport) return;
+    setGlobalImportLoading(true);
+    try {
+      const imported = await contactApi.importPortalContactByPhone(pendingGlobalImport.phone);
+      if (!imported) {
+        toast.error('Global contact no longer found');
+        setPendingGlobalImport(null);
+        return;
+      }
+      if (pendingGlobalImport.context === 'contactSheet') {
+        setContactsRegistry(prev => prev.some(c => c.contact_id === imported.contact_id) ? prev : [...prev, imported]);
+        closeContactSheet();
+        toast.success('Global contact imported to your contact list.');
+      } else {
+        finalizeReplacementContact(imported, false);
+      }
+      setPendingGlobalImport(null);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to import contact');
+    } finally {
+      setGlobalImportLoading(false);
     }
   };
 
@@ -4440,6 +4491,13 @@ const BillingPage = () => {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      <GlobalContactImportDialog
+        open={!!pendingGlobalImport}
+        contact={pendingGlobalImport?.contact ?? null}
+        loading={globalImportLoading}
+        onCancel={() => setPendingGlobalImport(null)}
+        onConfirm={handleConfirmGlobalImport}
+      />
       <Dialog
         open={searchBidDialogOpen}
         onOpenChange={open => {

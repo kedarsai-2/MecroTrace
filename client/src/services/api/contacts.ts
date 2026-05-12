@@ -164,6 +164,28 @@ export const contactApi = {
     return data.map(mapDtoToContact);
   },
 
+  async adminListPage(opts: {
+    page: number;
+    size: number;
+    q?: string;
+  }): Promise<ContactListPage> {
+    const params = new URLSearchParams({
+      page: String(opts.page),
+      size: String(opts.size),
+    });
+    if (opts.q?.trim()) {
+      params.set('q', opts.q.trim());
+    }
+    const res = await apiFetch(`/admin/contacts?${params.toString()}`, {
+      method: 'GET',
+    });
+    const data = await handleResponse<ContactDto[]>(res, 'Failed to load contacts');
+    return {
+      contacts: data.map(mapDtoToContact),
+      total: Number(res.headers.get('X-Total-Count') ?? data.length),
+    };
+  },
+
   async create(data: Partial<Contact>): Promise<Contact> {
     const res = await apiFetch('/contacts', {
       method: 'POST',
@@ -255,6 +277,18 @@ export const contactApi = {
     });
     const data = await handleResponse<ContactDto>(res, 'Failed to import contact');
     return mapDtoToContact(data);
+  },
+
+  async getPortalContactImportCandidateByPhone(phone: string): Promise<Contact | null> {
+    const phoneKey = normalizePhoneKey(phone);
+    if (!phoneKey) return null;
+    const res = await apiFetch(`/contacts/import-candidate-by-phone?phone=${encodeURIComponent(phoneKey)}`, {
+      method: 'GET',
+    });
+    if (res.status === 404) return null;
+    const data = await handleResponse<ContactDto>(res, 'Failed to find global contact');
+    const contact = mapDtoToContact(data);
+    return isPortalContact(contact) ? contact : null;
   },
 
   async importPortalContactByPhone(phone: string): Promise<Contact | null> {

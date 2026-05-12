@@ -37,7 +37,7 @@ const navItems: AdminNavItem[] = [
   { icon: Users, label: 'Traders', path: '/admin/traders', moduleKey: 'Traders' },
   { icon: Store, label: 'Categories', path: '/admin/categories', moduleKey: 'Categories' },
   { icon: Package, label: 'Commodities', path: '/admin/commodities', moduleKey: 'Commodities' },
-  { icon: BookUser, label: 'Contacts', path: '/admin/contacts', moduleKey: 'Contacts' },
+  { icon: BookUser, label: 'Global Contact', path: '/admin/contacts', moduleKey: 'Contacts' },
   { icon: BarChart3, label: 'Reports', path: '/admin/reports', moduleKey: 'Reports' },
   { icon: Settings, label: 'Settings', path: '/admin/settings', moduleKey: 'Settings' },
 ];

@@ -18,6 +18,7 @@ import { RotateCcw } from 'lucide-react';
 import { usePermissions } from '@/lib/permissions';
 import ForbiddenPage from '@/components/ForbiddenPage';
 import { useAuth } from '@/context/AuthContext';
+import GlobalContactImportDialog from '@/components/contacts/GlobalContactImportDialog';
 
 type ModalMode = 'add' | 'view' | 'edit' | null;
 
@@ -78,6 +79,8 @@ const ContactsPage = () => {
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
   const [restorePendingPhone, setRestorePendingPhone] = useState<string | null>(null);
+  const [pendingGlobalImport, setPendingGlobalImport] = useState<{ contact: Contact; phone: string } | null>(null);
+  const [globalImportLoading, setGlobalImportLoading] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
   const queryClient = useQueryClient();
   const contactsCacheKey = useMemo(() => {
@@ -248,17 +251,15 @@ const ContactsPage = () => {
     }
     if (!validateForm()) return;
     try {
-      const imported = await contactApi.importPortalContactByPhone(formData.phone.trim());
-      if (imported) {
-        updateContactsCache(prev => prev.some(c => c.contact_id === imported.contact_id) ? prev : [...prev, imported]);
-        invalidateContacts();
-        closeModal();
-        toast.success('This mobile belongs to a global contact. Imported to your contact list.');
+      const phone = formData.phone.trim();
+      const candidate = await contactApi.getPortalContactImportCandidateByPhone(phone);
+      if (candidate) {
+        setPendingGlobalImport({ contact: candidate, phone });
         return;
       }
       const created = await contactApi.create({
         name: formData.name.trim(),
-        phone: formData.phone.trim(),
+        phone,
         mark: formData.mark.trim().toUpperCase(),
         address: formData.address.trim(),
         trader_id: '',
@@ -278,8 +279,38 @@ const ContactsPage = () => {
         setErrors(prev => ({ ...prev, mark: err.message }));
         return;
       }
+      if (err instanceof ContactApiError && err.errorKey === 'portalcontactexists') {
+        const candidate = await contactApi.getPortalContactImportCandidateByPhone(formData.phone.trim());
+        if (candidate) {
+          setPendingGlobalImport({ contact: candidate, phone: formData.phone.trim() });
+          return;
+        }
+      }
       console.error('Add contact error:', err);
       toast.error(err instanceof Error ? err.message : 'Failed to register contact');
+    }
+  };
+
+  const handleConfirmGlobalImport = async () => {
+    if (!pendingGlobalImport) return;
+    setGlobalImportLoading(true);
+    try {
+      const imported = await contactApi.importPortalContactByPhone(pendingGlobalImport.phone);
+      if (!imported) {
+        toast.error('Global contact no longer found');
+        setPendingGlobalImport(null);
+        return;
+      }
+      updateContactsCache(prev => prev.some(c => c.contact_id === imported.contact_id) ? prev : [...prev, imported]);
+      invalidateContacts();
+      setPendingGlobalImport(null);
+      closeModal();
+      toast.success('Global contact imported to your contact list.');
+    } catch (err) {
+      console.error('Import contact error:', err);
+      toast.error(err instanceof Error ? err.message : 'Failed to import contact');
+    } finally {
+      setGlobalImportLoading(false);
     }
   };
 
@@ -736,6 +767,14 @@ const ContactsPage = () => {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <GlobalContactImportDialog
+        open={!!pendingGlobalImport}
+        contact={pendingGlobalImport?.contact ?? null}
+        loading={globalImportLoading}
+        onCancel={() => setPendingGlobalImport(null)}
+        onConfirm={handleConfirmGlobalImport}
+      />
 
       {/* View / Add / Edit Dialog */}
       <AnimatePresence>

@@ -65,6 +65,7 @@ import {
 } from '@/utils/printTemplates';
 import type { BidInfo } from '@/utils/printTemplates';
 import type { Contact } from '@/types/models';
+import GlobalContactImportDialog from '@/components/contacts/GlobalContactImportDialog';
 
 export type { BidInfo };
 
@@ -717,6 +718,12 @@ const LogisticsPage = () => {
     };
     target: { buyerMark: string; buyerName: string; buyerId: number | null };
   }>(null);
+  const [pendingGlobalImport, setPendingGlobalImport] = useState<{
+    contact: Contact;
+    phone: string;
+    snapshot: ExtractDialogSnapshot;
+  } | null>(null);
+  const [globalImportLoading, setGlobalImportLoading] = useState(false);
   const extractPickRef = useRef<HTMLDivElement | null>(null);
   const extractSearchGenRef = useRef(0);
   /** Sync for blur/timeout handlers (avoid stale extractDialog after Cancel). */
@@ -1382,19 +1389,10 @@ const LogisticsPage = () => {
             buyerId: parseContactIdForAuction(contactHit.contact_id),
           };
         } else {
-          const importedByPhone = await contactApi.importPortalContactByPhone(rawQuery);
-          if (importedByPhone) {
-            const { buyerMark: bm, buyerName: bn } = contactMarkOrName(importedByPhone);
-            target = {
-              buyerMark: bm,
-              buyerName: bn,
-              buyerId: parseContactIdForAuction(importedByPhone.contact_id),
-            };
-            if (sameLogisticsBuyer(target, source)) {
-              toast.error('Cannot extract to the same buyer');
-              return;
-            }
-            toast.success('This mobile belongs to a global contact. Imported to your contact list.');
+          const importCandidate = await contactApi.getPortalContactImportCandidateByPhone(rawQuery);
+          if (importCandidate) {
+            setPendingGlobalImport({ contact: importCandidate, phone: rawQuery, snapshot: d });
+            return;
           } else {
             const markUsedOnAnyBid = bids.some(b => (b.buyerMark || '').trim().toLowerCase() === norm);
             const markInTemps = extractTempMarks.some(t => t.trim().toLowerCase() === norm);
@@ -1618,9 +1616,52 @@ const LogisticsPage = () => {
     else toast.error('Printer not connected.');
   };
 
+  const handleConfirmGlobalImport = async () => {
+    if (!pendingGlobalImport) return;
+    const pending = pendingGlobalImport;
+    setGlobalImportLoading(true);
+    try {
+      const imported = await contactApi.importPortalContactByPhone(pending.phone);
+      if (!imported) {
+        toast.error('Global contact no longer found');
+        setPendingGlobalImport(null);
+        return;
+      }
+      const source = {
+        buyerMark: pending.snapshot.sourceBuyerMark,
+        buyerName: pending.snapshot.sourceBuyerName,
+      };
+      const { buyerMark, buyerName } = contactMarkOrName(imported);
+      const target = {
+        buyerMark,
+        buyerName,
+        buyerId: parseContactIdForAuction(imported.contact_id),
+      };
+      if (sameLogisticsBuyer(target, source)) {
+        setPendingGlobalImport(null);
+        toast.error('Cannot extract to the same buyer');
+        return;
+      }
+      setPendingGlobalImport(null);
+      toast.success('Global contact imported to your contact list.');
+      await executeExtractMigration(pending.snapshot, target);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to import contact');
+    } finally {
+      setGlobalImportLoading(false);
+    }
+  };
+
   // ═══ BID LIST SCREEN ═══
   return (
     <div className="min-h-[100dvh] bg-gradient-to-b from-background via-background to-blue-50/30 dark:to-blue-950/10 pb-28 lg:pb-6">
+      <GlobalContactImportDialog
+        open={!!pendingGlobalImport}
+        contact={pendingGlobalImport?.contact ?? null}
+        loading={globalImportLoading}
+        onCancel={() => setPendingGlobalImport(null)}
+        onConfirm={handleConfirmGlobalImport}
+      />
       {/* Mobile Header — client_origin layout */}
       {!isDesktop && (
         <div className="bg-gradient-to-br from-emerald-400 via-teal-500 to-cyan-500 pt-[max(1.5rem,env(safe-area-inset-top))] pb-6 px-4 rounded-b-[2rem] relative overflow-hidden">
