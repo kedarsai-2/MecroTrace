@@ -6,6 +6,7 @@ import com.mercotrace.repository.TraderRepository;
 import com.mercotrace.service.criteria.TraderCriteria;
 import com.mercotrace.service.dto.TraderDTO;
 import com.mercotrace.service.mapper.TraderMapper;
+import java.util.Locale;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Page;
@@ -50,6 +51,19 @@ public class TraderQueryService extends QueryService<Trader> {
     }
 
     /**
+     * Return a {@link Page} of {@link TraderDTO} matching criteria plus a broad admin search term.
+     */
+    @Transactional(readOnly = true)
+    public Page<TraderDTO> findByCriteria(TraderCriteria criteria, Pageable page, String search) {
+        LOG.debug("find by criteria : {}, page: {}, search: {}", criteria, page, search);
+        Specification<Trader> specification = createSpecification(criteria);
+        if (search != null && !search.isBlank()) {
+            specification = specification.and(adminSearchSpecification(search));
+        }
+        return traderRepository.findAll(specification, page).map(traderMapper::toDto);
+    }
+
+    /**
      * Return the number of matching entities in the database.
      * @param criteria The object which holds all the filters, which the entities should match.
      * @return the number of matching entities.
@@ -85,5 +99,21 @@ public class TraderQueryService extends QueryService<Trader> {
             );
         }
         return specification;
+    }
+
+    private static Specification<Trader> adminSearchSpecification(String rawSearch) {
+        String search = rawSearch.trim().toLowerCase(Locale.ROOT);
+        return (root, query, builder) -> {
+            String like = "%" + search + "%";
+            return builder.or(
+                builder.like(builder.lower(root.<String>get("businessName")), like),
+                builder.like(builder.lower(root.<String>get("ownerName")), like),
+                builder.like(builder.lower(root.<String>get("city")), like),
+                builder.like(builder.lower(root.<String>get("state")), like),
+                builder.like(builder.lower(root.<String>get("mobile")), like),
+                builder.like(builder.lower(root.<String>get("email")), like),
+                builder.like(builder.lower(root.<String>get("category")), like)
+            );
+        };
     }
 }

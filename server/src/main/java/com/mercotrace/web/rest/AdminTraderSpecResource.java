@@ -52,6 +52,7 @@ public class AdminTraderSpecResource {
     public ResponseEntity<List<TraderDTO>> listTraders(
         TraderCriteria criteria,
         @RequestParam(name = "includeInactive", defaultValue = "false") boolean includeInactive,
+        @RequestParam(name = "q", required = false, defaultValue = "") String q,
         Pageable pageable
     ) {
         if (!includeInactive && criteria.getActive() == null) {
@@ -59,18 +60,21 @@ public class AdminTraderSpecResource {
             activeFilter.setEquals(true);
             criteria.setActive(activeFilter);
         }
-        Page<TraderDTO> page = traderQueryService.findByCriteria(criteria, pageable);
+        Page<TraderDTO> page = traderQueryService.findByCriteria(criteria, pageable, q);
         return ResponseEntity.ok().headers(PaginationUtil.generatePaginationHttpHeaders(ServletUriComponentsBuilder.fromCurrentRequest(), page)).body(page.getContent());
     }
 
     /** GET /admin/traders/inactive — List inactive traders only. */
     @GetMapping("/inactive")
-    public ResponseEntity<List<TraderDTO>> listInactiveTraders(Pageable pageable) {
+    public ResponseEntity<List<TraderDTO>> listInactiveTraders(
+        @RequestParam(name = "q", required = false, defaultValue = "") String q,
+        Pageable pageable
+    ) {
         TraderCriteria criteria = new TraderCriteria();
         BooleanFilter inactiveFilter = new BooleanFilter();
         inactiveFilter.setEquals(false);
         criteria.setActive(inactiveFilter);
-        Page<TraderDTO> page = traderQueryService.findByCriteria(criteria, pageable);
+        Page<TraderDTO> page = traderQueryService.findByCriteria(criteria, pageable, q);
         return ResponseEntity.ok().headers(PaginationUtil.generatePaginationHttpHeaders(ServletUriComponentsBuilder.fromCurrentRequest(), page)).body(page.getContent());
     }
 

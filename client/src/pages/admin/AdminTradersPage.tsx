@@ -4,6 +4,7 @@ import {
   Search, CheckCircle2, XCircle, Clock, Eye,
   Building2, Phone, Mail, MapPin, Crown, Users2,
   Power, PowerOff, Trash2, AlertTriangle, Sliders,
+  ChevronLeft, ChevronRight,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Input } from '@/components/ui/input';
@@ -23,6 +24,7 @@ const statusConfig: Record<ApprovalStatus, { color: string; icon: typeof CheckCi
 };
 
 const LOC_PREVIEW_LEN = 10;
+const PAGE_SIZE = 50;
 
 function formatTableDate(iso: string | null | undefined): string {
   if (!iso) return '—';
@@ -93,7 +95,19 @@ const AdminTradersPage = () => {
   const [inactiveTraders, setInactiveTraders] = useState<Trader[]>([]);
   const [tab, setTab] = useState<Tab>('active');
   const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [filterStatus, setFilterStatus] = useState<ApprovalStatus | 'ALL'>('ALL');
+  const [page, setPage] = useState(0);
+  const [listTotal, setListTotal] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [reloadToken, setReloadToken] = useState(0);
+  const [counts, setCounts] = useState<Record<'ALL' | ApprovalStatus | 'INACTIVE', number>>({
+    ALL: 0,
+    PENDING: 0,
+    APPROVED: 0,
+    REJECTED: 0,
+    INACTIVE: 0,
+  });
   const [selectedTrader, setSelectedTrader] = useState<Trader | null>(null);
   const [permanentDeleteConfirm, setPermanentDeleteConfirm] = useState<Trader | null>(null);
   const [deactivateConfirm, setDeactivateConfirm] = useState<Trader | null>(null);
@@ -105,13 +119,6 @@ const AdminTradersPage = () => {
   const canView = canAccessModule('Traders');
   const canApprove = can('Traders', 'Approve');
 
-  if (!canView) {
-    return <AdminForbiddenPage moduleName="Traders" />;
-  }
-
-  const loadActive = () => traderApi.listForAdmin({ page: 0, size: 500 }).then(setTraders).catch(() => setTraders([]));
-  const loadInactive = () => traderApi.listInactive({ page: 0, size: 500 }).then(setInactiveTraders).catch(() => setInactiveTraders([]));
-
   const toggleLocationExpanded = useCallback((id: string) => {
     setExpandedLocationIds(prev => {
       const next = new Set(prev);
@@ -121,23 +128,125 @@ const AdminTradersPage = () => {
     });
   }, []);
 
-  useEffect(() => {
-    loadActive();
-  }, []);
+  const reloadTraders = useCallback(() => setReloadToken(current => current + 1), []);
 
   useEffect(() => {
-    if (tab === 'inactive') loadInactive();
-  }, [tab]);
+    const timer = window.setTimeout(() => {
+      setDebouncedSearch(search.trim());
+      setPage(0);
+    }, 300);
 
-  const filtered = traders.filter(t => {
-    const matchSearch = t.business_name.toLowerCase().includes(search.toLowerCase()) || t.owner_name.toLowerCase().includes(search.toLowerCase()) || (t.city || '').toLowerCase().includes(search.toLowerCase());
-    const matchStatus = filterStatus === 'ALL' || t.approval_status === filterStatus;
-    return matchSearch && matchStatus;
-  });
+    return () => window.clearTimeout(timer);
+  }, [search]);
 
-  const filteredInactive = inactiveTraders.filter(t =>
-    t.business_name.toLowerCase().includes(search.toLowerCase()) || t.owner_name.toLowerCase().includes(search.toLowerCase()) || (t.city || '').toLowerCase().includes(search.toLowerCase())
-  );
+  useEffect(() => {
+    setPage(0);
+  }, [filterStatus, tab]);
+
+  useEffect(() => {
+    if (!canView) {
+      return;
+    }
+
+    let active = true;
+
+    const loadTraders = async () => {
+      setLoading(true);
+      try {
+        const data = tab === 'inactive'
+          ? await traderApi.listInactivePage({
+              page,
+              size: PAGE_SIZE,
+              q: debouncedSearch,
+            })
+          : await traderApi.listForAdminPage({
+              page,
+              size: PAGE_SIZE,
+              q: debouncedSearch,
+              approvalStatus: filterStatus,
+            });
+        if (!active) return;
+        if (tab === 'inactive') {
+          setInactiveTraders(Array.isArray(data.traders) ? data.traders : []);
+        } else {
+          setTraders(Array.isArray(data.traders) ? data.traders : []);
+        }
+        setListTotal(Number.isFinite(data.total) ? data.total : 0);
+      } catch {
+        if (!active) return;
+        if (tab === 'inactive') {
+          setInactiveTraders([]);
+        } else {
+          setTraders([]);
+        }
+        setListTotal(0);
+      } finally {
+        if (active) {
+          setLoading(false);
+        }
+      }
+    };
+
+    void loadTraders();
+
+    return () => {
+      active = false;
+    };
+  }, [canView, debouncedSearch, filterStatus, page, reloadToken, tab]);
+
+  useEffect(() => {
+    if (!canView) {
+      return;
+    }
+
+    let active = true;
+
+    const loadCounts = async () => {
+      try {
+        const [all, pending, approved, rejected, inactive] = await Promise.all([
+          traderApi.listForAdminPage({ page: 0, size: 1, approvalStatus: 'ALL' }),
+          traderApi.listForAdminPage({ page: 0, size: 1, approvalStatus: 'PENDING' }),
+          traderApi.listForAdminPage({ page: 0, size: 1, approvalStatus: 'APPROVED' }),
+          traderApi.listForAdminPage({ page: 0, size: 1, approvalStatus: 'REJECTED' }),
+          traderApi.listInactivePage({ page: 0, size: 1 }),
+        ]);
+        if (!active) return;
+        setCounts({
+          ALL: Number.isFinite(all.total) ? all.total : 0,
+          PENDING: Number.isFinite(pending.total) ? pending.total : 0,
+          APPROVED: Number.isFinite(approved.total) ? approved.total : 0,
+          REJECTED: Number.isFinite(rejected.total) ? rejected.total : 0,
+          INACTIVE: Number.isFinite(inactive.total) ? inactive.total : 0,
+        });
+      } catch {
+        if (!active) return;
+        setCounts({
+          ALL: 0,
+          PENDING: 0,
+          APPROVED: 0,
+          REJECTED: 0,
+          INACTIVE: 0,
+        });
+      }
+    };
+
+    void loadCounts();
+
+    return () => {
+      active = false;
+    };
+  }, [canView, reloadToken]);
+
+  if (!canView) {
+    return <AdminForbiddenPage moduleName="Traders" />;
+  }
+
+  const visibleTraders = tab === 'inactive' ? inactiveTraders : traders;
+  const totalPages = Math.max(1, Math.ceil(listTotal / PAGE_SIZE));
+  const firstVisible = listTotal === 0 ? 0 : page * PAGE_SIZE + 1;
+  const lastVisible = listTotal === 0 ? 0 : Math.min(listTotal, page * PAGE_SIZE + visibleTraders.length);
+  const canGoPrevious = page > 0;
+  const canGoNext = page + 1 < totalPages;
 
   const handleApprove = async (id: string) => {
     if (!canApprove) return;
@@ -145,6 +254,7 @@ const AdminTradersPage = () => {
       const updated = await traderApi.approve(id);
       setTraders(prev => prev.map(t => t.trader_id === id ? updated : t));
       setSelectedTrader(null);
+      reloadTraders();
     } catch { /* keep UI state */ }
   };
 
@@ -154,6 +264,7 @@ const AdminTradersPage = () => {
       const updated = await traderApi.reject(id);
       setTraders(prev => prev.map(t => t.trader_id === id ? updated : t));
       setSelectedTrader(null);
+      reloadTraders();
     } catch { /* keep UI state */ }
   };
 
@@ -163,8 +274,7 @@ const AdminTradersPage = () => {
       await traderApi.activate(id);
       setActivateConfirm(null);
       setSelectedTrader(null);
-      loadActive();
-      loadInactive();
+      reloadTraders();
     } catch { /* keep UI state */ }
   };
 
@@ -174,8 +284,7 @@ const AdminTradersPage = () => {
       await traderApi.deactivate(id);
       setDeactivateConfirm(null);
       setSelectedTrader(null);
-      loadActive();
-      loadInactive();
+      reloadTraders();
     } catch { /* keep UI state */ }
   };
 
@@ -185,7 +294,7 @@ const AdminTradersPage = () => {
       await traderApi.permanentDelete(id);
       setPermanentDeleteConfirm(null);
       setSelectedTrader(null);
-      loadInactive();
+      reloadTraders();
     } catch { /* keep UI state */ }
   };
 
@@ -205,14 +314,6 @@ const AdminTradersPage = () => {
     }
   };
 
-  const counts = {
-    ALL: traders.length,
-    PENDING: traders.filter(t => t.approval_status === 'PENDING').length,
-    APPROVED: traders.filter(t => t.approval_status === 'APPROVED').length,
-    REJECTED: traders.filter(t => t.approval_status === 'REJECTED').length,
-    INACTIVE: inactiveTraders.length,
-  };
-
   return (
     <div className="space-y-5 relative">
       <div className="fixed pointer-events-none z-0" style={{ left: 0, right: 0, top: 0, bottom: 0 }}>
@@ -227,7 +328,9 @@ const AdminTradersPage = () => {
           </div>
           <div>
             <h1 className="text-xl font-bold text-foreground">Trader Management</h1>
-            <p className="text-sm text-muted-foreground">{traders.length} active, {inactiveTraders.length} inactive</p>
+            <p className="text-sm text-muted-foreground">
+              {counts.ALL.toLocaleString()} active, {counts.INACTIVE.toLocaleString()} inactive
+            </p>
           </div>
         </div>
       </motion.div>
@@ -298,7 +401,12 @@ const AdminTradersPage = () => {
               </tr>
             </thead>
             <tbody>
-              {tab === 'active' && filtered.map((t, i) => {
+              {loading && visibleTraders.length === 0 && (
+                <tr>
+                  <td colSpan={8} className="py-12 text-center text-muted-foreground">Loading traders...</td>
+                </tr>
+              )}
+              {tab === 'active' && traders.map((t, i) => {
                 const loc = traderLocationLine(t);
                 return (
                   <motion.tr key={t.trader_id} initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.25 + i * 0.04 }}
@@ -366,7 +474,7 @@ const AdminTradersPage = () => {
                   </motion.tr>
                 );
               })}
-              {tab === 'inactive' && filteredInactive.map((t, i) => {
+              {tab === 'inactive' && inactiveTraders.map((t, i) => {
                 const loc = traderLocationLine(t);
                 return (
                   <motion.tr key={t.trader_id} initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.25 + i * 0.04 }}
@@ -432,8 +540,40 @@ const AdminTradersPage = () => {
             </tbody>
           </table>
         </div>
-        {tab === 'active' && filtered.length === 0 && <div className="p-12 text-center text-muted-foreground">No active traders found</div>}
-        {tab === 'inactive' && filteredInactive.length === 0 && <div className="p-12 text-center text-muted-foreground">No inactive traders found</div>}
+        {!loading && tab === 'active' && traders.length === 0 && <div className="p-12 text-center text-muted-foreground">No active traders found</div>}
+        {!loading && tab === 'inactive' && inactiveTraders.length === 0 && <div className="p-12 text-center text-muted-foreground">No inactive traders found</div>}
+        <div className="relative z-10 flex flex-col gap-3 border-t border-border/30 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+          <p className="text-xs text-muted-foreground">
+            Showing {firstVisible.toLocaleString()}-{lastVisible.toLocaleString()} of {listTotal.toLocaleString()}
+          </p>
+          <div className="flex items-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setPage(current => Math.max(0, current - 1))}
+              disabled={!canGoPrevious || loading}
+              className="h-9 gap-1"
+            >
+              <ChevronLeft className="h-4 w-4" />
+              Previous
+            </Button>
+            <span className="min-w-[92px] text-center text-xs font-medium text-muted-foreground">
+              Page {Math.min(page + 1, totalPages)} / {totalPages}
+            </span>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setPage(current => current + 1)}
+              disabled={!canGoNext || loading}
+              className="h-9 gap-1"
+            >
+              Next
+              <ChevronRight className="h-4 w-4" />
+            </Button>
+          </div>
+        </div>
       </motion.div>
 
       <AnimatePresence>

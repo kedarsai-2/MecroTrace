@@ -1,12 +1,14 @@
 package com.mercotrace.web.rest;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.mercotrace.domain.Contact;
 import com.mercotrace.repository.ContactRepository;
 import com.mercotrace.service.ChartOfAccountService;
 import com.mercotrace.service.ContactIdentityService;
@@ -15,7 +17,9 @@ import com.mercotrace.service.ContactService;
 import com.mercotrace.service.TraderContextService;
 import com.mercotrace.service.VoucherLineService;
 import com.mercotrace.service.dto.ContactDTO;
+import com.mercotrace.web.rest.errors.BadRequestAlertException;
 import java.util.List;
+import java.util.Optional;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -132,11 +136,87 @@ class ContactResourceTest {
         assertThat(response.getHeaders().getFirst("X-Total-Count")).isNull();
     }
 
+    @Test
+    void createContact_withExistingGlobalPhoneReturnsImportCandidateError() {
+        String phone = "9876543210";
+        ContactDTO request = newContactRequest("New Name", phone);
+        Contact globalContact = contactEntity(55L, null, phone);
+
+        when(contactIdentityService.normalizePhoneOrThrow(phone)).thenReturn(phone);
+        when(contactRepository.findOneByPhoneAndActiveTrue(phone)).thenReturn(Optional.of(globalContact));
+
+        assertThatThrownBy(() -> resource.createContact(request))
+            .isInstanceOf(BadRequestAlertException.class)
+            .extracting("errorKey")
+            .isEqualTo("portalcontactexists");
+
+        verify(contactService, never()).ensureTraderUsesPortalContact(any(), any());
+        verify(contactService, never()).save(any());
+        verify(contactIdentityService, never()).assertMobileAvailableForContact(any(), any());
+    }
+
+    @Test
+    void createContact_withExistingTraderPhone_stillReturnsPhoneExists() {
+        String phone = "9876543210";
+        ContactDTO request = newContactRequest("Duplicate", phone);
+        Contact traderContact = contactEntity(66L, TRADER_ID, phone);
+
+        when(contactIdentityService.normalizePhoneOrThrow(phone)).thenReturn(phone);
+        when(contactRepository.findOneByPhoneAndActiveTrue(phone)).thenReturn(Optional.of(traderContact));
+
+        assertThatThrownBy(() -> resource.createContact(request))
+            .isInstanceOf(BadRequestAlertException.class)
+            .extracting("errorKey")
+            .isEqualTo("phoneexists");
+
+        verify(contactService, never()).ensureTraderUsesPortalContact(any(), any());
+        verify(contactService, never()).save(any());
+    }
+
+    @Test
+    void getPortalContactImportCandidateByPhone_returnsGlobalContactWithoutImporting() {
+        String phone = "9876543210";
+        Contact globalContact = contactEntity(77L, null, phone);
+        ContactDTO globalDto = contact(77L, "Global Contact");
+        globalDto.setTraderId(null);
+
+        when(contactIdentityService.normalizePhoneOrThrow(phone)).thenReturn(phone);
+        when(contactRepository.findOneByPhoneAndActiveTrue(phone)).thenReturn(Optional.of(globalContact));
+        when(contactService.findOne(77L)).thenReturn(Optional.of(globalDto));
+
+        ResponseEntity<ContactDTO> response = resource.getPortalContactImportCandidateByPhone(phone);
+
+        assertThat(response.getStatusCode().is2xxSuccessful()).isTrue();
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().getId()).isEqualTo(77L);
+        assertThat(response.getBody().getPortalSignupLinked()).isTrue();
+
+        verify(contactService, never()).ensureTraderUsesPortalContact(any(), any());
+    }
+
     private static ContactDTO contact(Long id, String name) {
         ContactDTO dto = new ContactDTO();
         dto.setId(id);
         dto.setName(name);
         dto.setPhone("9876543210");
         return dto;
+    }
+
+    private static ContactDTO newContactRequest(String name, String phone) {
+        ContactDTO dto = new ContactDTO();
+        dto.setName(name);
+        dto.setPhone(phone);
+        dto.setMark("MK");
+        return dto;
+    }
+
+    private static Contact contactEntity(Long id, Long traderId, String phone) {
+        Contact contact = new Contact();
+        contact.setId(id);
+        contact.setTraderId(traderId);
+        contact.setPhone(phone);
+        contact.setName("Existing");
+        contact.setActive(Boolean.TRUE);
+        return contact;
     }
 }

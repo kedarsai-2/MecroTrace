@@ -64,6 +64,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import GlobalContactImportDialog from '@/components/contacts/GlobalContactImportDialog';
 
 const SETTLEMENT_SAVED_PATTI_LAYOUT_STORAGE_KEY = 'merco.settlement.savedPatti.layout';
 
@@ -2562,6 +2563,13 @@ const SettlementPage = () => {
 
   const [sellerFormById, setSellerFormById] = useState<Record<string, SellerRegFormState>>({});
   const [registeredBaselineById, setRegisteredBaselineById] = useState<Record<string, SellerRegFormState>>({});
+  const [pendingGlobalImport, setPendingGlobalImport] = useState<{
+    contact: Contact;
+    phone: string;
+    sellerId: string;
+    form: SellerRegFormState;
+  } | null>(null);
+  const [globalImportLoading, setGlobalImportLoading] = useState(false);
   const [sellerExpensesById, setSellerExpensesById] = useState<Record<string, SellerExpenseFormState>>({});
   /** After a blocked save, seller cards to ring-scroll (Unregistered / other blocking validation). Avg bounds are UI-only warnings. */
   const [pattiSaveHighlightSellerIds, setPattiSaveHighlightSellerIds] = useState<string[]>([]);
@@ -5554,10 +5562,14 @@ const SettlementPage = () => {
       lotOvForSeller: Record<string, LotSalesOverride>
     ) => {
       if (settlementFormMode !== 'saved' || isSettlementFormReadOnly) return;
-      if (!tr.isExtraBid && tr.entryIndex !== 0) return;
-      if (!tr.isExtraBid && (tr.lot.entries?.length ?? 0) > 1) {
-        toast.message('Split is only for a single buyer row per lot. This lot has multiple bids with separate weights.');
-        return;
+      if (tr.isExtraBid === false) {
+        if (tr.entryIndex !== 0) return;
+        if ((tr.lot.entries?.length ?? 0) > 1) {
+          toast.message(
+            'Split is only for a single buyer row per lot. This lot has multiple bids with separate weights.'
+          );
+          return;
+        }
       }
       const sid = seller.sellerId;
       if (activeSplitGroupIdBySellerIdRef.current[sid]) {
@@ -6802,6 +6814,74 @@ const SettlementPage = () => {
     );
   };
 
+  const applySellerContactRegistration = async (
+    sellerId: string,
+    form: SellerRegFormState,
+    contactId: string,
+  ) => {
+    const reg = await settlementApi.linkSellerContact(sellerId, contactId);
+    const nextForm: SellerRegFormState = {
+      ...form,
+      registrationChosen: true,
+      registered: true,
+      contactId: reg.contactId,
+      name: reg.sellerName,
+      mark: reg.sellerMark,
+      mobile: reg.sellerPhone,
+      contactSearchQuery: '',
+      addAndChangeSeller: false,
+      allowRegisteredEdit: false,
+      unregisteredPrintConfirmed: false,
+    };
+    setSellerFormById(prev => ({ ...prev, [sellerId]: nextForm }));
+    setRegisteredBaselineById(prev => ({ ...prev, [sellerId]: nextForm }));
+    setSellers(prev =>
+      prev.map(x =>
+        x.sellerId === sellerId
+          ? {
+              ...x,
+              sellerName: reg.sellerName,
+              sellerMark: reg.sellerMark,
+              contactId: reg.contactId,
+              sellerPhone: reg.sellerPhone,
+            }
+          : x
+      )
+    );
+    return reg;
+  };
+
+  const handleConfirmGlobalImport = async () => {
+    if (!pendingGlobalImport) return;
+    if (!can('Settlement', 'Edit')) {
+      toast.error('You do not have permission to add seller details.');
+      return;
+    }
+    const pending = pendingGlobalImport;
+    setGlobalImportLoading(true);
+    setSellerRegSaving(prev => ({ ...prev, [pending.sellerId]: true }));
+    try {
+      const imported = await contactApi.importPortalContactByPhone(pending.phone);
+      if (!imported) {
+        toast.error('Global contact no longer found');
+        setPendingGlobalImport(null);
+        return;
+      }
+      await applySellerContactRegistration(pending.sellerId, pending.form, imported.contact_id);
+      setPendingGlobalImport(null);
+      toast.success(
+        pending.form.addAndChangeSeller
+          ? 'Global contact imported and seller changed for this sales bill'
+          : 'Global contact imported and seller added'
+      );
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to import contact');
+    } finally {
+      setSellerRegSaving(prev => ({ ...prev, [pending.sellerId]: false }));
+      setGlobalImportLoading(false);
+    }
+  };
+
   // ═══ PRINT PREVIEW ═══
   if (showPrint && pattiData) {
     return (
@@ -7036,6 +7116,13 @@ const SettlementPage = () => {
         )}
       >
         <UnsavedChangesDialog />
+        <GlobalContactImportDialog
+          open={!!pendingGlobalImport}
+          contact={pendingGlobalImport?.contact ?? null}
+          loading={globalImportLoading}
+          onCancel={() => setPendingGlobalImport(null)}
+          onConfirm={handleConfirmGlobalImport}
+        />
         {/* Header */}
         {!isDesktop ? (
         <div className="bg-gradient-to-br from-teal-500 via-emerald-500 to-cyan-600 pt-[max(1.5rem,env(safe-area-inset-top))] pb-6 px-4 rounded-b-3xl mb-4 relative overflow-hidden">
@@ -7428,23 +7515,31 @@ const SettlementPage = () => {
                 const qtyOutOfBalance = allowedQtyBags > 0 && qtyTot !== allowedQtyBags;
                 const invalidLotFieldBySid: Record<string, { qty?: true; weight?: true; rate?: true }> = {};
                 for (const tr of tableRows) {
-                  const r = tr.isExtraBid
-                    ? mergeLotDisplayRow(tr.lot, tr.sid, undefined, getLotDivisor(tr.lot))
-                    : mergeLotEntryDisplayRow(
-                        seller,
-                        tr.lot,
-                        tr.entryIndex,
-                        lotOv,
-                        tr.sid,
-                        getLotDivisor(tr.lot)
-                      );
+                  let r: ReturnType<typeof mergeLotDisplayRow>;
+                  if (tr.isExtraBid === false) {
+                    r = mergeLotEntryDisplayRow(
+                      seller,
+                      tr.lot,
+                      tr.entryIndex,
+                      lotOv,
+                      tr.sid,
+                      getLotDivisor(tr.lot)
+                    );
+                  } else {
+                    r = mergeLotDisplayRow(tr.lot, tr.sid, undefined, getLotDivisor(tr.lot));
+                  }
                   const inv: { qty?: true; weight?: true; rate?: true } = {};
                   if (!Number.isFinite(r.qty) || r.qty <= 0) inv.qty = true;
                   if (!Number.isFinite(r.weight) || r.weight <= 0) inv.weight = true;
                   if (!Number.isFinite(r.ratePerBag) || r.ratePerBag <= 0) inv.rate = true;
                   if (Object.keys(inv).length > 0) {
                     const nEnt = (tr.lot.entries ?? []).length;
-                    const entryKey = tr.isExtraBid ? tr.sid : lotSalesOverrideStorageKey(tr.sid, tr.entryIndex, nEnt);
+                    let entryKey: string;
+                    if (tr.isExtraBid === false) {
+                      entryKey = lotSalesOverrideStorageKey(tr.sid, tr.entryIndex, nEnt);
+                    } else {
+                      entryKey = tr.sid;
+                    }
                     invalidLotFieldBySid[entryKey] = inv;
                   }
                 }
@@ -7924,46 +8019,23 @@ const SettlementPage = () => {
                                     return;
                                   }
 
-                                  let contactForSeller = await contactApi.importPortalContactByPhone(normalizedMobile);
-                                  if (contactForSeller) {
-                                    toast.success('This mobile belongs to a global contact. Imported to your contact list.');
-                                  } else {
-                                    contactForSeller = await contactApi.create({
-                                      name: normalizedName,
+                                  const candidate = await contactApi.getPortalContactImportCandidateByPhone(normalizedMobile);
+                                  if (candidate) {
+                                    setPendingGlobalImport({
+                                      contact: candidate,
                                       phone: normalizedMobile,
-                                      mark: normalizedMark,
-                                      can_login: true,
+                                      sellerId: seller.sellerId,
+                                      form,
                                     });
+                                    return;
                                   }
-                                  const reg = await settlementApi.linkSellerContact(seller.sellerId, contactForSeller.contact_id);
-                                  const nextForm: SellerRegFormState = {
-                                    ...form,
-                                    registrationChosen: true,
-                                    registered: true,
-                                    contactId: reg.contactId,
-                                    name: reg.sellerName,
-                                    mark: reg.sellerMark,
-                                    mobile: reg.sellerPhone,
-                                    contactSearchQuery: '',
-                                    addAndChangeSeller: false,
-                                    allowRegisteredEdit: false,
-                                    unregisteredPrintConfirmed: false,
-                                  };
-                                  setSellerFormById(prev => ({ ...prev, [seller.sellerId]: nextForm }));
-                                  setRegisteredBaselineById(prev => ({ ...prev, [seller.sellerId]: nextForm }));
-                                  setSellers(prev =>
-                                    prev.map(x =>
-                                      x.sellerId === seller.sellerId
-                                        ? {
-                                            ...x,
-                                            sellerName: reg.sellerName,
-                                            sellerMark: reg.sellerMark,
-                                            contactId: reg.contactId,
-                                            sellerPhone: reg.sellerPhone,
-                                          }
-                                        : x
-                                    )
-                                  );
+                                  const contactForSeller = await contactApi.create({
+                                    name: normalizedName,
+                                    phone: normalizedMobile,
+                                    mark: normalizedMark,
+                                    can_login: true,
+                                  });
+                                  await applySellerContactRegistration(seller.sellerId, form, contactForSeller.contact_id);
                                   toast.success(
                                     form.addAndChangeSeller
                                       ? 'Seller added and changed for this sales bill'
@@ -7977,6 +8049,18 @@ const SettlementPage = () => {
                                   if (e instanceof ContactApiError && e.errorKey === 'phoneexistsinactive') {
                                     toast.error('Phone exists on inactive contact. Restore it from Contacts module first.');
                                     return;
+                                  }
+                                  if (e instanceof ContactApiError && e.errorKey === 'portalcontactexists') {
+                                    const candidate = await contactApi.getPortalContactImportCandidateByPhone(form.mobile.trim());
+                                    if (candidate) {
+                                      setPendingGlobalImport({
+                                        contact: candidate,
+                                        phone: form.mobile.trim(),
+                                        sellerId: seller.sellerId,
+                                        form,
+                                      });
+                                      return;
+                                    }
                                   }
                                   toast.error(e instanceof Error ? e.message : 'Failed to add seller');
                                 } finally {
@@ -8088,7 +8172,12 @@ const SettlementPage = () => {
                             ) : (
                               tableRows.map((tr, displayIdx) => {
                                 const { lot, sid, isExtraBid } = tr;
-                                const entryIndex = tr.isExtraBid ? 0 : tr.entryIndex;
+                                let entryIndex: number;
+                                if (tr.isExtraBid === false) {
+                                  entryIndex = tr.entryIndex;
+                                } else {
+                                  entryIndex = 0;
+                                }
                                 const lotEntryCount = (lot.entries ?? []).length;
                                 const rowKey = getSalesRowKeyForTableRow(isExtraBid, sid);
                                 const splitSnap = splitSnapForSeller;

@@ -11,6 +11,11 @@ type CommodityDto = {
   createdAt?: string;
 };
 
+export type CommodityListPage = {
+  commodities: Commodity[];
+  total: number;
+};
+
 /** API response/request for full commodity config (all stored in DB with audit) */
 export type FullCommodityConfigDto = {
   commodityId: number;
@@ -154,11 +159,31 @@ export const commodityApi = {
   },
 
   async adminList(): Promise<Commodity[]> {
-    const res = await apiFetch('/admin/commodities', {
+    const page = await this.adminListPage({ page: 0, size: 1000 });
+    return page.commodities;
+  },
+
+  async adminListPage(opts: {
+    page: number;
+    size: number;
+    q?: string;
+  }): Promise<CommodityListPage> {
+    const params = new URLSearchParams({
+      page: String(opts.page),
+      size: String(opts.size),
+    });
+    if (opts.q?.trim()) {
+      params.set('q', opts.q.trim());
+    }
+    const res = await apiFetch(`/admin/commodities?${params.toString()}`, {
       method: 'GET',
     });
     const data = await handleResponse<CommodityDto[]>(res, 'Failed to load commodities');
-    return data.map(mapDtoToCommodity);
+    const commodities = data.map(mapDtoToCommodity);
+    return {
+      commodities,
+      total: Number(res.headers.get('X-Total-Count') ?? commodities.length),
+    };
   },
 
   async create(data: Partial<Commodity>): Promise<Commodity> {

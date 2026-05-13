@@ -11,7 +11,7 @@ import org.springframework.stereotype.Repository;
  */
 @SuppressWarnings("unused")
 @Repository
-public interface CommodityRepository extends JpaRepository<Commodity, Long> {
+public interface CommodityRepository extends JpaRepository<Commodity, Long>, JpaSpecificationExecutor<Commodity> {
 
     List<Commodity> findAllByTraderIdAndActiveTrue(Long traderId);
 

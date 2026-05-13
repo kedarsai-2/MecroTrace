@@ -18,14 +18,30 @@ import { RotateCcw } from 'lucide-react';
 import { usePermissions } from '@/lib/permissions';
 import ForbiddenPage from '@/components/ForbiddenPage';
 import { useAuth } from '@/context/AuthContext';
-import { arrivalsTabCountPill, arrivalsToggleTabBtn, mobileArrivalsStyleTab } from '@/components/arrivals/arrivalsTabStyles';
+import GlobalContactImportDialog from '@/components/contacts/GlobalContactImportDialog';
 
 type ModalMode = 'add' | 'view' | 'edit' | null;
-type ContactTab = 'trader' | 'global';
 
 const CONTACTS_QUERY_KEY = ['contacts', 'registry'] as const;
 const CONTACTS_STALE_TIME_MS = 2 * 60 * 1000;
 const CONTACTS_LOCAL_CACHE_PREFIX = 'mercotrace.contacts.registry';
+const EMPTY_CONTACTS: Contact[] = [];
+
+/** Indian 10-digit mobile: leading digit 6–9 (matches contact form validation). */
+const CONTACT_MOBILE_10_REGEX = /^[6-9]\d{9}$/;
+
+/**
+ * If the search box contains exactly one valid 10-digit mobile (no extra digit characters)
+ * and no registry contact already uses that number, return it for the add-contact form.
+ * Snapshot-only at open time — does not sync ongoing search typing to the form.
+ */
+function phonePrefillForNewContactFromSearch(search: string, allContacts: Contact[]): string {
+  const digits = search.replace(/\D/g, '');
+  if (digits.length !== 10 || !CONTACT_MOBILE_10_REGEX.test(digits)) return '';
+  const taken = allContacts.some(c => (c.phone ?? '').replace(/\D/g, '') === digits);
+  if (taken) return '';
+  return digits;
+}
 
 type CachedContactsSnapshot = {
   savedAt: number;
@@ -73,13 +89,14 @@ const ContactsPage = () => {
   const canEdit = can('Contacts', 'Edit');
   const canDelete = can('Contacts', 'Delete');
   const [search, setSearch] = useState('');
-  const [activeTab, setActiveTab] = useState<ContactTab>('trader');
   const [modalMode, setModalMode] = useState<ModalMode>(null);
   const [selectedContact, setSelectedContact] = useState<Contact | null>(null);
   const [formData, setFormData] = useState({ name: '', phone: '', mark: '', address: '', enablePortal: true });
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
   const [restorePendingPhone, setRestorePendingPhone] = useState<string | null>(null);
+  const [pendingGlobalImport, setPendingGlobalImport] = useState<{ contact: Contact; phone: string } | null>(null);
+  const [globalImportLoading, setGlobalImportLoading] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
   const queryClient = useQueryClient();
   const contactsCacheKey = useMemo(() => {
@@ -98,24 +115,8 @@ const ContactsPage = () => {
     initialDataUpdatedAt: () => readCachedContacts(contactsCacheKey)?.savedAt,
   });
 
-  const contacts = contactsQuery.data ?? [];
-  const groupedContacts = useMemo(() => {
-    const traderContacts: Contact[] = [];
-    const globalContacts: Contact[] = [];
-
-    for (const contact of contacts) {
-      const hasTraderOwner = String(contact.trader_id ?? '').trim().length > 0;
-      if (contact.portal_signup_linked || !hasTraderOwner) {
-        globalContacts.push(contact);
-      } else {
-        traderContacts.push(contact);
-      }
-    }
-
-    return { trader: traderContacts, global: globalContacts };
-  }, [contacts]);
-  const activeContacts = groupedContacts[activeTab];
-  const activeTabLabel = activeTab === 'trader' ? 'Trader contacts' : 'Global contacts';
+  const contacts = contactsQuery.data ?? EMPTY_CONTACTS;
+  const contactsCountText = `${contacts.length} ${contacts.length === 1 ? 'contact' : 'contacts'}`;
   const isLoadingInitial = contactsQuery.isLoading && contacts.length === 0;
   const isRefreshing = contactsQuery.isFetching && !isLoadingInitial;
   const error = contactsQuery.error;
@@ -169,13 +170,13 @@ const ContactsPage = () => {
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
-    if (!q) return activeContacts;
-    return activeContacts.filter(c => (
+    if (!q) return contacts;
+    return contacts.filter(c => (
       c.name?.toLowerCase().includes(q) ||
       c.phone?.includes(q) ||
       c.mark?.toLowerCase().includes(q)
     ));
-  }, [activeContacts, search]);
+  }, [contacts, search]);
 
   const desktopVirtualizer = useWindowVirtualizer({
     count: isDesktop ? filtered.length : 0,
@@ -200,7 +201,8 @@ const ContactsPage = () => {
       toast.error('You do not have permission to create contacts.');
       return;
     }
-    setFormData({ name: '', phone: '', mark: '', address: '', enablePortal: true });
+    const phoneFromSearch = phonePrefillForNewContactFromSearch(search, contacts);
+    setFormData({ name: '', phone: phoneFromSearch, mark: '', address: '', enablePortal: true });
     setErrors({});
     setModalMode('add');
   };
@@ -242,7 +244,7 @@ const ContactsPage = () => {
     if (!formData.name.trim()) errs.name = 'Name is required';
     if (!formData.phone.trim()) {
       errs.phone = 'Phone number is required';
-    } else if (!/^[6-9]\d{9}$/.test(formData.phone.trim())) {
+    } else if (!CONTACT_MOBILE_10_REGEX.test(formData.phone.trim())) {
       errs.phone = 'Enter a valid 10-digit mobile number';
     } else if (contacts.some(c => c.phone === formData.phone.trim() && (!isEdit || c.contact_id !== selectedContact?.contact_id))) {
       errs.phone = 'This phone number is already registered';
@@ -266,18 +268,15 @@ const ContactsPage = () => {
     }
     if (!validateForm()) return;
     try {
-      const imported = await contactApi.importPortalContactByPhone(formData.phone.trim());
-      if (imported) {
-        updateContactsCache(prev => prev.some(c => c.contact_id === imported.contact_id) ? prev : [...prev, imported]);
-        invalidateContacts();
-        closeModal();
-        setActiveTab('global');
-        toast.success('This mobile belongs to a global contact. Imported to your contact list.');
+      const phone = formData.phone.trim();
+      const candidate = await contactApi.getPortalContactImportCandidateByPhone(phone);
+      if (candidate) {
+        setPendingGlobalImport({ contact: candidate, phone });
         return;
       }
       const created = await contactApi.create({
         name: formData.name.trim(),
-        phone: formData.phone.trim(),
+        phone,
         mark: formData.mark.trim().toUpperCase(),
         address: formData.address.trim(),
         trader_id: '',
@@ -286,7 +285,6 @@ const ContactsPage = () => {
       updateContactsCache(prev => [...prev, created]);
       invalidateContacts();
       closeModal();
-      setActiveTab('trader');
       toast.success(`✅ ${created.name} registered`);
     } catch (err) {
       if (err instanceof ContactApiError && err.errorKey === 'phoneexistsinactive') {
@@ -298,8 +296,38 @@ const ContactsPage = () => {
         setErrors(prev => ({ ...prev, mark: err.message }));
         return;
       }
+      if (err instanceof ContactApiError && err.errorKey === 'portalcontactexists') {
+        const candidate = await contactApi.getPortalContactImportCandidateByPhone(formData.phone.trim());
+        if (candidate) {
+          setPendingGlobalImport({ contact: candidate, phone: formData.phone.trim() });
+          return;
+        }
+      }
       console.error('Add contact error:', err);
       toast.error(err instanceof Error ? err.message : 'Failed to register contact');
+    }
+  };
+
+  const handleConfirmGlobalImport = async () => {
+    if (!pendingGlobalImport) return;
+    setGlobalImportLoading(true);
+    try {
+      const imported = await contactApi.importPortalContactByPhone(pendingGlobalImport.phone);
+      if (!imported) {
+        toast.error('Global contact no longer found');
+        setPendingGlobalImport(null);
+        return;
+      }
+      updateContactsCache(prev => prev.some(c => c.contact_id === imported.contact_id) ? prev : [...prev, imported]);
+      invalidateContacts();
+      setPendingGlobalImport(null);
+      closeModal();
+      toast.success('Global contact imported to your contact list.');
+    } catch (err) {
+      console.error('Import contact error:', err);
+      toast.error(err instanceof Error ? err.message : 'Failed to import contact');
+    } finally {
+      setGlobalImportLoading(false);
     }
   };
 
@@ -315,7 +343,6 @@ const ContactsPage = () => {
       await contactApi.restore(existing.contact_id);
       setRestorePendingPhone(null);
       invalidateContacts();
-      setActiveTab('trader');
       toast.success(`Contact with phone ${restorePendingPhone} restored. You can use it again.`);
     } catch (err) {
       console.error('Restore contact error:', err);
@@ -375,15 +402,11 @@ const ContactsPage = () => {
 
   const showEmptyState = !isLoadingInitial && !error && filtered.length === 0;
   const emptyTitle = search.trim()
-    ? `No ${activeTabLabel.toLowerCase()} found`
-    : activeTab === 'trader'
-      ? 'No trader contacts yet'
-      : 'No global contacts mapped yet';
+    ? 'No contacts found'
+    : 'No contacts yet';
   const emptyHint = search.trim()
     ? 'Try a different search or add a new contact'
-    : activeTab === 'trader'
-      ? 'Add a contact to build your trader registry'
-      : 'Global contacts appear here after they are used with this trader';
+    : 'Add a contact to build your registry';
   const statusText = error
     ? 'Unable to load contacts'
     : isLoadingInitial
@@ -415,30 +438,14 @@ const ContactsPage = () => {
                 </button>
                 <div>
                   <h1 className="text-xl font-bold text-white">Contacts</h1>
-                  <p className="text-white/70 text-xs">{activeContacts.length} {activeTabLabel.toLowerCase()} · {contacts.length} total{statusText ? ` · ${statusText}` : ''}</p>
+                  <p className="text-white/70 text-xs">{contactsCountText}{statusText ? ` · ${statusText}` : ''}</p>
                 </div>
               </div>
               <button onClick={openAdd} className="w-10 h-10 rounded-full bg-white/20 backdrop-blur flex items-center justify-center hover:bg-white/30 transition-colors">
                 <Plus className="w-5 h-5 text-white" />
               </button>
             </div>
-            <div className="mt-4 grid grid-cols-2 gap-2 rounded-xl bg-white/15 p-1 backdrop-blur" role="tablist" aria-label="Contacts main tabs">
-              <button
-                type="button"
-                onClick={() => setActiveTab('trader')}
-                className={mobileArrivalsStyleTab(activeTab === 'trader')}
-              >
-                Trader
-              </button>
-              <button
-                type="button"
-                onClick={() => setActiveTab('global')}
-                className={mobileArrivalsStyleTab(activeTab === 'global')}
-              >
-                Global
-              </button>
-            </div>
-            <div className="relative mt-3">
+            <div className="relative mt-4">
               <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-white/50" />
               <input ref={searchRef} placeholder="Search by name, phone, or mark…" value={search} onChange={e => setSearch(e.target.value)}
                 className="w-full h-10 pl-10 pr-4 rounded-xl bg-white/20 backdrop-blur text-white placeholder:text-white/50 text-sm border border-white/10 focus:outline-none focus:border-white/30" />
@@ -456,7 +463,7 @@ const ContactsPage = () => {
             </div>
             <div>
               <h3 className="text-base font-bold text-foreground">Contact Registry</h3>
-              <p className="text-xs text-muted-foreground">{activeContacts.length} {activeTabLabel.toLowerCase()} · {contacts.length} total{statusText ? ` · ${statusText}` : ''}</p>
+              <p className="text-xs text-muted-foreground">{contactsCountText}{statusText ? ` · ${statusText}` : ''}</p>
             </div>
           </div>
           <div className="flex items-center gap-3">
@@ -472,40 +479,12 @@ const ContactsPage = () => {
         </div>
       )}
 
-      {/* Desktop Contact Tabs */}
-      {isDesktop && (
-        <div className="mb-6 flex min-w-0 flex-wrap items-center gap-2 overflow-x-auto px-8 [-webkit-overflow-scrolling:touch]" role="tablist" aria-label="Contacts main tabs">
-          <button
-            type="button"
-            onClick={() => setActiveTab('trader')}
-            className={arrivalsToggleTabBtn(activeTab === 'trader')}
-          >
-            <Users className="w-4 h-4" />
-            Trader Contacts
-            <span className={arrivalsTabCountPill(activeTab === 'trader')}>
-              {groupedContacts.trader.length}
-            </span>
-          </button>
-          <button
-            type="button"
-            onClick={() => setActiveTab('global')}
-            className={arrivalsToggleTabBtn(activeTab === 'global')}
-          >
-            <BookOpen className="w-4 h-4" />
-            Global Contacts
-            <span className={arrivalsTabCountPill(activeTab === 'global')}>
-              {groupedContacts.global.length}
-            </span>
-          </button>
-        </div>
-      )}
-
       {/* Info Banner */}
       <div className={cn("mb-3", isDesktop ? "px-8" : "px-4")}>
         <div className="rounded-xl bg-emerald-50 dark:bg-emerald-950/20 border border-emerald-200/50 dark:border-emerald-800/30 px-3 py-2 flex items-start gap-2">
           <BookOpen className="w-4 h-4 text-emerald-600 dark:text-emerald-400 mt-0.5 shrink-0" />
           <p className="text-xs text-emerald-700 dark:text-emerald-400">
-            <strong>Trader Contacts</strong> are added by this trader. <strong>Global Contacts</strong> are portal contacts mapped to this trader after transaction use.
+            Contacts include trader-added records and portal contacts mapped to this trader after transaction use.
           </p>
         </div>
       </div>
@@ -805,6 +784,14 @@ const ContactsPage = () => {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <GlobalContactImportDialog
+        open={!!pendingGlobalImport}
+        contact={pendingGlobalImport?.contact ?? null}
+        loading={globalImportLoading}
+        onCancel={() => setPendingGlobalImport(null)}
+        onConfirm={handleConfirmGlobalImport}
+      />
 
       {/* View / Add / Edit Dialog */}
       <AnimatePresence>

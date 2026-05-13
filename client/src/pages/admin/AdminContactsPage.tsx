@@ -1,31 +1,53 @@
 import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
-import { Search, Phone, BookUser } from 'lucide-react';
+import { Search, Phone, BookUser, ChevronLeft, ChevronRight } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Input } from '@/components/ui/input';
+import { Button } from '@/components/ui/button';
 import { contactApi } from '@/services/api';
 import type { Contact } from '@/types/models';
 import { useAdminPermissions } from '@/admin/lib/adminPermissions';
 import AdminForbiddenPage from '@/admin/components/AdminForbiddenPage';
 import { toast } from 'sonner';
 
+const PAGE_SIZE = 50;
+
 const AdminContactsPage = () => {
   const { canAccessModule } = useAdminPermissions();
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [page, setPage] = useState(0);
+  const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setDebouncedSearch(search.trim());
+      setPage(0);
+    }, 300);
+
+    return () => window.clearTimeout(timer);
+  }, [search]);
 
   useEffect(() => {
     let active = true;
 
     const loadContacts = async () => {
+      setLoading(true);
       try {
-        const data = await contactApi.adminList();
+        const data = await contactApi.adminListPage({
+          page,
+          size: PAGE_SIZE,
+          q: debouncedSearch,
+        });
         if (!active) return;
-        setContacts(Array.isArray(data) ? data : []);
+        setContacts(Array.isArray(data.contacts) ? data.contacts : []);
+        setTotal(Number.isFinite(data.total) ? data.total : 0);
       } catch {
         if (!active) return;
         setContacts([]);
+        setTotal(0);
         toast.error('Failed to load contacts');
       } finally {
         if (active) {
@@ -39,23 +61,17 @@ const AdminContactsPage = () => {
     return () => {
       active = false;
     };
-  }, []);
+  }, [debouncedSearch, page]);
 
   if (!canAccessModule('Contacts')) {
     return <AdminForbiddenPage moduleName="Contacts" />;
   }
 
-  const filtered = contacts.filter(c => {
-    const name = typeof c?.name === 'string' ? c.name : '';
-    const phone = typeof c?.phone === 'string' ? c.phone : '';
-    const mark = typeof c?.mark === 'string' ? c.mark : '';
-    const q = search.toLowerCase();
-    return (
-      name.toLowerCase().includes(q) ||
-      phone.includes(q) ||
-      mark.toLowerCase().includes(q)
-    );
-  });
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const firstVisible = total === 0 ? 0 : page * PAGE_SIZE + 1;
+  const lastVisible = total === 0 ? 0 : Math.min(total, page * PAGE_SIZE + contacts.length);
+  const canGoPrevious = page > 0;
+  const canGoNext = page + 1 < totalPages;
 
   return (
     <div className="space-y-5 relative">
@@ -71,7 +87,7 @@ const AdminContactsPage = () => {
         <div>
           <h1 className="text-xl font-bold text-foreground">Contacts Directory</h1>
           <p className="text-sm text-muted-foreground">
-            {loading ? 'Loading contacts...' : `${contacts.length} contacts across all traders`}
+            {loading && total === 0 ? 'Loading contacts...' : `${total.toLocaleString()} contacts across all traders`}
           </p>
         </div>
       </motion.div>
@@ -98,7 +114,11 @@ const AdminContactsPage = () => {
               </tr>
             </thead>
             <tbody>
-              {filtered.map((c, i) => {
+              {loading && contacts.length === 0 ? (
+                <tr>
+                  <td colSpan={6} className="py-12 text-center text-muted-foreground">Loading contacts...</td>
+                </tr>
+              ) : contacts.map((c, i) => {
                 const name = typeof c?.name === 'string' ? c.name : 'Unnamed';
                 const mark = typeof c?.mark === 'string' ? c.mark : '';
                 const phone = typeof c?.phone === 'string' ? c.phone : '';
@@ -106,14 +126,15 @@ const AdminContactsPage = () => {
                 const contactKey = c?.contact_id ? String(c.contact_id) : `contact-${i}`;
                 const balanceRaw = Number(c?.current_balance ?? 0);
                 const balance = Number.isFinite(balanceRaw) ? balanceRaw : 0;
+                const avatarLetter = (mark || name).trim().charAt(0).toUpperCase() || '?';
 
                 return (
-                <motion.tr key={contactKey} initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.25 + i * 0.04 }}
+                <tr key={contactKey}
                   className="border-b border-border/20 hover:bg-primary/5 transition-colors">
                   <td className="py-3.5 px-4">
                     <div className="flex items-center gap-3">
                       <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-emerald-400 to-teal-500 flex items-center justify-center shadow-md">
-                        <span className="text-white font-bold text-xs">{mark || name.charAt(0) || '?'}</span>
+                        <span className="text-white font-bold text-xs">{avatarLetter}</span>
                       </div>
                       <span className="font-semibold text-foreground">{name}</span>
                     </div>
@@ -137,13 +158,45 @@ const AdminContactsPage = () => {
                     </span>
                     <p className="text-[10px] text-muted-foreground">{balance >= 0 ? 'Receivable' : 'Payable'}</p>
                   </td>
-                </motion.tr>
+                </tr>
                 );
               })}
             </tbody>
           </table>
         </div>
-        {!loading && filtered.length === 0 && <div className="p-12 text-center text-muted-foreground">No contacts found</div>}
+        {!loading && contacts.length === 0 && <div className="p-12 text-center text-muted-foreground">No contacts found</div>}
+        <div className="relative z-10 flex flex-col gap-3 border-t border-border/30 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+          <p className="text-xs text-muted-foreground">
+            Showing {firstVisible.toLocaleString()}-{lastVisible.toLocaleString()} of {total.toLocaleString()}
+          </p>
+          <div className="flex items-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setPage(current => Math.max(0, current - 1))}
+              disabled={!canGoPrevious || loading}
+              className="h-9 gap-1"
+            >
+              <ChevronLeft className="h-4 w-4" />
+              Previous
+            </Button>
+            <span className="min-w-[92px] text-center text-xs font-medium text-muted-foreground">
+              Page {Math.min(page + 1, totalPages)} / {totalPages}
+            </span>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setPage(current => current + 1)}
+              disabled={!canGoNext || loading}
+              className="h-9 gap-1"
+            >
+              Next
+              <ChevronRight className="h-4 w-4" />
+            </Button>
+          </div>
+        </div>
       </motion.div>
     </div>
   );

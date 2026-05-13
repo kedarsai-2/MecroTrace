@@ -155,7 +155,7 @@ application:
 otp:
  fast2sms:
    base-url: https://www.fast2sms.com/dev/bulkV2
-   api-key: YOUR_FAST2SMS_API_KEY_HERE
+   api-key: 5vHtp4AE13JuzODC0rKMXbaYBFjyU6dnVT7mqLQsSx2whkZi9ln76yAlNEMskBQY8cCF1txKbV2edIzP
    sender-id: MERCO
    route: dlt
    message-id: 170404

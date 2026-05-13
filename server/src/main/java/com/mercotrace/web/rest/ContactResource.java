@@ -100,13 +100,31 @@ public class ContactResource {
         // Resolve trader ownership from authenticated user
         Long traderId = resolveTraderId();
         contactDTO.setTraderId(traderId);
+        String normalizedPhone = contactIdentityService.normalizePhoneOrThrow(contactDTO.getPhone());
+        contactDTO.setPhone(normalizedPhone);
+
+        Optional<com.mercotrace.domain.Contact> activeContactByPhone = contactRepository.findOneByPhoneAndActiveTrue(normalizedPhone);
+        if (activeContactByPhone.isPresent()) {
+            com.mercotrace.domain.Contact contact = activeContactByPhone.get();
+            if (contact.getTraderId() == null) {
+                throw new BadRequestAlertException(
+                    "This mobile belongs to a global contact. Import it to your contact list.",
+                    ENTITY_NAME,
+                    "portalcontactexists"
+                );
+            }
+            if (Objects.equals(contact.getTraderId(), traderId)) {
+                throw new BadRequestAlertException("This phone number is already registered", ENTITY_NAME, "phoneexists");
+            }
+            throw new BadRequestAlertException("This mobile number is already in use.", ENTITY_NAME, "mobileinuse");
+        }
 
         // Enforce global mobile uniqueness across trader owner, trader staff and contacts
-        contactIdentityService.assertMobileAvailableForContact(contactDTO.getPhone(), null);
+        contactIdentityService.assertMobileAvailableForContact(normalizedPhone, null);
 
         // Enforce phone uniqueness per trader (active or inactive)
         Optional<com.mercotrace.domain.Contact> existingByPhone = contactRepository
-            .findOneByTraderIdAndPhone(traderId, contactDTO.getPhone());
+            .findOneByTraderIdAndPhone(traderId, normalizedPhone);
         if (existingByPhone.isPresent()) {
             if (Boolean.TRUE.equals(existingByPhone.get().getActive())) {
                 throw new BadRequestAlertException("This phone number is already registered", ENTITY_NAME, "phoneexists");
@@ -357,6 +375,32 @@ public class ContactResource {
         }
         ContactDTO dto = contactDTO.get();
         dto.setPortalSignupLinked(dto.getTraderId() == null);
+        return ResponseEntity.ok().body(dto);
+    }
+
+    /**
+     * {@code GET /contacts/import-candidate-by-phone} : exact-phone lookup for a portal/global contact without importing it.
+     */
+    @GetMapping("/import-candidate-by-phone")
+    @PreAuthorize("hasAuthority(\"" + AuthoritiesConstants.CONTACTS_CREATE + "\")")
+    public ResponseEntity<ContactDTO> getPortalContactImportCandidateByPhone(@RequestParam("phone") String phone) {
+        Long traderId = resolveTraderId();
+        String normalizedPhone = contactIdentityService.normalizePhoneOrThrow(phone);
+        LOG.debug("REST request to preview portal Contact import by phone. traderId={}, phone={}", traderId, normalizedPhone);
+        Optional<com.mercotrace.domain.Contact> existing = contactRepository.findOneByPhoneAndActiveTrue(normalizedPhone);
+        if (existing.isEmpty()) {
+            return ResponseEntity.notFound().build();
+        }
+        com.mercotrace.domain.Contact contact = existing.get();
+        if (contact.getTraderId() != null) {
+            return ResponseEntity.notFound().build();
+        }
+        Optional<ContactDTO> contactDTO = contactService.findOne(contact.getId()).filter(dto -> isReadableParticipantContact(dto, traderId));
+        if (contactDTO.isEmpty()) {
+            return ResponseEntity.notFound().build();
+        }
+        ContactDTO dto = contactDTO.get();
+        dto.setPortalSignupLinked(Boolean.TRUE);
         return ResponseEntity.ok().body(dto);
     }
 
