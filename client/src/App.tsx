@@ -79,6 +79,14 @@ import PresetSettingsPage from "./pages/settings/PresetSettingsPage";
 const AdminLayout = lazy(() => import("./components/admin/AdminLayout"));
 const AdminLoginPage = lazy(() => import("./pages/admin/AdminLoginPage"));
 const AdminTradersPage = lazy(() => import("./pages/admin/AdminTradersPage"));
+const AdminCategoriesPage = lazy(() => import("./pages/admin/AdminCategoriesPage"));
+const AdminCommoditiesPage = lazy(() => import("./pages/admin/AdminCommoditiesPage"));
+const AdminContactsPage = lazy(() => import("./pages/admin/AdminContactsPage"));
+const AdminSettingsPage = lazy(() => import("./pages/admin/AdminSettingsPage"));
+const AdminRbacSettingsPage = lazy(() => import("./pages/admin/settings/RbacSettingsPage"));
+const AdminRoleManagementPage = lazy(() => import("./pages/admin/settings/AdminRoleManagementPage"));
+const AdminUserManagementPage = lazy(() => import("./pages/admin/settings/AdminUserManagementPage"));
+const AdminRoleAllocationPage = lazy(() => import("./pages/admin/settings/AdminRoleAllocationPage"));
 const AdminGlobalPresetSettingsPage = lazy(() => import("./pages/admin/settings/AdminGlobalPresetSettingsPage"));
 
 const queryClient = new QueryClient();
@@ -223,9 +231,15 @@ const router = createBrowserRouter(
       >
         <Route index element={<Navigate to="/admin/traders" replace />} />
         <Route path="traders" element={<AdminTradersPage />} />
+        <Route path="categories" element={<AdminCategoriesPage />} />
+        <Route path="commodities" element={<AdminCommoditiesPage />} />
+        <Route path="contacts" element={<AdminContactsPage />} />
+        <Route path="settings/rbac" element={<AdminRbacSettingsPage />} />
         <Route path="settings/global-presets" element={<AdminGlobalPresetSettingsPage />} />
-        {/* Settings module is preset settings only */}
-        <Route path="settings" element={<Navigate to="/admin/settings/global-presets" replace />} />
+        <Route path="settings/roles" element={<AdminRoleManagementPage />} />
+        <Route path="settings/users" element={<AdminUserManagementPage />} />
+        <Route path="settings/role-allocation" element={<AdminRoleAllocationPage />} />
+        <Route path="settings" element={<AdminSettingsPage />} />
       </Route>
 
       <Route path="*" element={<NotFound />} />

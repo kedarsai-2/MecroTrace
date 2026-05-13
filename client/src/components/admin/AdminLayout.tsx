@@ -3,7 +3,10 @@ import { useNavigate, useLocation, Outlet } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Users,
-  Sliders,
+  Store,
+  Package,
+  BookUser,
+  Settings,
   ChevronLeft,
   ChevronRight,
   LogOut,
@@ -32,7 +35,6 @@ const navItems: AdminNavItem[] = [
   { icon: Store, label: 'Categories', path: '/admin/categories', moduleKey: 'Categories' },
   { icon: Package, label: 'Commodities', path: '/admin/commodities', moduleKey: 'Commodities' },
   { icon: BookUser, label: 'Global Contact', path: '/admin/contacts', moduleKey: 'Contacts' },
-  { icon: BarChart3, label: 'Reports', path: '/admin/reports', moduleKey: 'Reports' },
   { icon: Settings, label: 'Settings', path: '/admin/settings', moduleKey: 'Settings' },
 ];
 
