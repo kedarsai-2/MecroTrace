@@ -1187,6 +1187,12 @@ const BillingPage = () => {
   const billingMainTabRef = useRef<BillingMainTab>(billingMainTab);
   billingMainTabRef.current = billingMainTab;
   const [buyerBidMarkInput, setBuyerBidMarkInput] = useState('');
+  /** True while opening a bill from In Progress / Saved (fetch + hydrate). Ref avoids toasts from stray Get/Select Bid during the gap. */
+  const openingBillFromListRef = useRef(false);
+  const [openingBillFromList, setOpeningBillFromList] = useState(false);
+  /** Supersede in-flight list opens (newer row click or Create New Bill) so stale responses never apply. */
+  const billOpenFromListRunIdRef = useRef(0);
+  const billOpenFromListPendingRef = useRef(0);
   const [selectBidBuyer, setSelectBidBuyer] = useState<BuyerPurchase | null>(null);
   const [selectedBidKeys, setSelectedBidKeys] = useState<string[]>([]);
   const [selectedBuyerFromDropdown, setSelectedBuyerFromDropdown] = useState<BuyerPurchase | null>(null);
@@ -2995,6 +3001,7 @@ const BillingPage = () => {
   );
 
   const findBuyerByInput = useCallback((): BuyerPurchase | null => {
+    if (openingBillFromListRef.current) return null;
     if (!billingBuyerActionReady) {
       toast.error(
         billingBuyerListReady
@@ -3072,6 +3079,7 @@ const BillingPage = () => {
   }, [autoSaveCurrentBillBeforeBuyerSwitch, findBuyerByInput, generateBill, selectedBuyer]);
 
   const handleSelectBidMode = useCallback(() => {
+    if (openingBillFromListRef.current) return;
     let buyer: BuyerPurchase | null = null;
     if (bill && selectedBuyer) {
       buyer =
@@ -4489,6 +4497,10 @@ const BillingPage = () => {
   // ═══ BILLING HOME: TABS + LISTS ═══
   const resetBillingCreateFlow = useCallback(async () => {
     if (!(await billingTabConfirmIfDirtyRef.current())) return;
+    billOpenFromListRunIdRef.current += 1;
+    billOpenFromListPendingRef.current = 0;
+    openingBillFromListRef.current = false;
+    setOpeningBillFromList(false);
     setSelectedBuyer(null);
     setBill(null);
     setBuyerBidMarkInput('');
@@ -4506,34 +4518,56 @@ const BillingPage = () => {
     void resetBillingCreateFlow();
   };
 
+  /** True while any bill is loaded (Get Bid / Select Bid → generate, or opened from In Progress / Saved), or while a list row is opening — avoids accidental mark edits / stray Get Bid & Select Bid during fetch. Cleared by Create New Bill. */
+  const buyerMarkSearchLocked = bill != null || openingBillFromList;
+  const buyerMarkSearchFieldTitle = openingBillFromList
+    ? 'Opening bill…'
+    : bill != null
+      ? 'Use “Create New Bill” to search another buyer or mark.'
+      : undefined;
+
   const openBillFromList = (row: SalesBillSummaryDTO | SalesBillDTO) => {
     void (async () => {
       if (!(await billingTabConfirmIfDirtyRef.current())) return;
-      setBuyerBidMarkInput('');
-      setSelectedBuyerFromDropdown(null);
-      setSelectBidBuyer(null);
-      setSelectedBidKeys([]);
-      const b = Array.isArray((row as SalesBillDTO).commodityGroups)
-        ? (row as SalesBillDTO)
-        : await billingApi.getById(row.billId);
-      setSelectedBuyer({
-        buyerMark: b.buyerMark,
-        buyerName: b.buyerName,
-        buyerContactId: b.buyerContactId ?? null,
-        entries: [],
-        tokenAdvanceTotal: 0,
-      });
-      const normalized = recalcGrandTotal(normalizeBillFromApi(b, fullConfigs, commodities) as BillData);
-      // Sync dirty baseline before setState so billHasUnsavedEditsSinceSave (useMemo) does not read
-      // the previous bill's baseline until a follow-up render (Print + Alt+P stayed disabled).
-      const dirtyId = String(normalized.billId ?? '');
-      billDirtyIdentityRef.current = dirtyId;
-      billDirtyBaselineRef.current = serializeBillForDirty(normalized);
-      setBill(normalized);
-      setHasSavedOnce(isBackendBillId(String(b.billId)));
-      setSelectedPrintVersion('latest');
-      setEditLocked(isNumberedSavedBill(normalized));
-      setBillingMainTab('create');
+      billOpenFromListPendingRef.current += 1;
+      const myRun = ++billOpenFromListRunIdRef.current;
+      openingBillFromListRef.current = true;
+      setOpeningBillFromList(true);
+      try {
+        setSelectedBuyerFromDropdown(null);
+        setSelectBidBuyer(null);
+        setSelectedBidKeys([]);
+        const b = Array.isArray((row as SalesBillDTO).commodityGroups)
+          ? (row as SalesBillDTO)
+          : await billingApi.getById(row.billId);
+        if (billOpenFromListRunIdRef.current !== myRun) return;
+        const markOrName = (b.buyerMark || b.buyerName || '').trim();
+        setBuyerBidMarkInput(markOrName);
+        setSelectedBuyer({
+          buyerMark: b.buyerMark,
+          buyerName: b.buyerName,
+          buyerContactId: b.buyerContactId ?? null,
+          entries: [],
+          tokenAdvanceTotal: 0,
+        });
+        const normalized = recalcGrandTotal(normalizeBillFromApi(b, fullConfigs, commodities) as BillData);
+        // Sync dirty baseline before setState so billHasUnsavedEditsSinceSave (useMemo) does not read
+        // the previous bill's baseline until a follow-up render (Print + Alt+P stayed disabled).
+        const dirtyId = String(normalized.billId ?? '');
+        billDirtyIdentityRef.current = dirtyId;
+        billDirtyBaselineRef.current = serializeBillForDirty(normalized);
+        setBill(normalized);
+        setHasSavedOnce(isBackendBillId(String(b.billId)));
+        setSelectedPrintVersion('latest');
+        setEditLocked(isNumberedSavedBill(normalized));
+        setBillingMainTab('create');
+      } finally {
+        billOpenFromListPendingRef.current = Math.max(0, billOpenFromListPendingRef.current - 1);
+        if (billOpenFromListPendingRef.current === 0) {
+          openingBillFromListRef.current = false;
+          setOpeningBillFromList(false);
+        }
+      }
     })();
   };
 
@@ -5292,16 +5326,19 @@ const BillingPage = () => {
                   placeholder="Search buyer mark or name..."
                   className="h-11 sm:h-12 rounded-xl text-base font-medium bg-muted/20 border-border/30 pr-9"
                   autoCapitalize="characters"
+                  disabled={buyerMarkSearchLocked}
+                  title={buyerMarkSearchFieldTitle}
                 />
                 <button
                   type="button"
                   onClick={() => setShowBuyerSuggestions(prev => !prev)}
                   className="absolute right-2 top-1/2 -translate-y-1/2 h-7 w-7 rounded-md flex items-center justify-center text-muted-foreground hover:bg-muted/40"
                   aria-label="Toggle buyer suggestions"
+                  disabled={buyerMarkSearchLocked}
                 >
                   <ChevronDown className={cn('w-4 h-4 transition-transform', showBuyerSuggestions && 'rotate-180')} />
                 </button>
-                {showBuyerSuggestions && !searchBidDialogOpen && (
+                {showBuyerSuggestions && !searchBidDialogOpen && !buyerMarkSearchLocked && (
                   <div className={cn("absolute z-50 top-full mt-1 w-full max-h-56 overflow-y-auto rounded-xl border border-border bg-background shadow-lg", searchBidDialogOpen && "z-[20]")}>
                     {!billingBuyerListReady ? (
                       <p className="px-3 py-2 text-xs text-muted-foreground">Loading buyer list…</p>
@@ -5342,10 +5379,10 @@ const BillingPage = () => {
                   </div>
                 )}
               </div>
-              <Button type="button" variant="outline" onClick={() => void handleGetBidsForMark()} className={cn(arrSolidLg, 'sm:self-end')}>
+              <Button type="button" variant="outline" onClick={() => void handleGetBidsForMark()} disabled={buyerMarkSearchLocked} className={cn(arrSolidLg, 'sm:self-end')}>
                 Get Bid
               </Button>
-              <Button type="button" variant="outline" onClick={handleSelectBidMode} className={cn(arrSolidLg, 'sm:self-end')}>
+              <Button type="button" variant="outline" onClick={handleSelectBidMode} disabled={openingBillFromList} title={openingBillFromList ? 'Opening bill…' : undefined} className={cn(arrSolidLg, 'sm:self-end')}>
                 Select Bid
               </Button>
               <Button
