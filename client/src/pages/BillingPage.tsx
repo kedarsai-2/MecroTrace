@@ -4234,33 +4234,35 @@ const BillingPage = () => {
     }
     const run = (async (): Promise<SalesBillDTO | null> => {
       setBillPersisting(true);
-    const built = buildSavePayload(options);
-    if (!built) return null;
-    const { payload, isUpdate } = built;
-    try {
-      const result = isUpdate
-        ? await billingApi.update(built.billIdForUpdate!, payload)
-        : await billingApi.create(payload);
       try {
-        const norm = normalizeBillFromApi(result, fullConfigs, commodities) as BillData;
-        if (norm.commodityGroups.some(g => (g.items?.length ?? 0) > 0)) {
-          await syncAuctionEntriesToBillBuyer(norm);
+        const built = buildSavePayload(options);
+        if (!built) return null;
+        const { payload, isUpdate } = built;
+        try {
+          const result = isUpdate
+            ? await billingApi.update(built.billIdForUpdate!, payload)
+            : await billingApi.create(payload);
+          try {
+            const norm = normalizeBillFromApi(result, fullConfigs, commodities) as BillData;
+            if (norm.commodityGroups.some(g => (g.items?.length ?? 0) > 0)) {
+              await syncAuctionEntriesToBillBuyer(norm);
+            }
+          } catch (syncErr) {
+            console.warn(syncErr);
+            toast.warning(
+              'Bill saved, but some auction bids could not be updated to match this buyer. Refresh billing data or check Sales Pad.',
+            );
+          }
+          void refetchAuctions().catch(() => {});
+          return result;
+        } catch (e) {
+          toast.error(e instanceof Error ? e.message : 'Failed to save bill');
+          return null;
         }
-      } catch (syncErr) {
-        console.warn(syncErr);
-        toast.warning(
-          'Bill saved, but some auction bids could not be updated to match this buyer. Refresh billing data or check Sales Pad.',
-        );
+      } finally {
+        setBillPersisting(false);
+        persistBillPromiseRef.current = null;
       }
-      void refetchAuctions().catch(() => {});
-      return result;
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Failed to save bill');
-      return null;
-    } finally {
-      setBillPersisting(false);
-      persistBillPromiseRef.current = null;
-    }
     })();
     persistBillPromiseRef.current = run;
     return run;
@@ -4308,7 +4310,15 @@ const BillingPage = () => {
     const skipAssignNumber =
       persistedHasNoBillNumber && billHasAnyLineWeightZeroOrMissing(bill);
     // Assign bill number only when every line has weight — otherwise stay in Bill In Progress (no billNumber).
-    const dtoAfter = skipAssignNumber ? result : await billingApi.assignNumber(result.billId);
+    let dtoAfter = result;
+    if (!skipAssignNumber) {
+      try {
+        dtoAfter = await billingApi.assignNumber(result.billId);
+      } catch (e) {
+        toast.error(e instanceof Error ? e.message : 'Failed to assign bill number.');
+        dtoAfter = result;
+      }
+    }
     const normalized = recalcGrandTotal(normalizeBillFromApi(dtoAfter, fullConfigs, commodities) as BillData);
     const withTempFlag: BillData = {
       ...normalized,
@@ -4360,7 +4370,15 @@ const BillingPage = () => {
     const persistedHasNoBillNumber = !String(result.billNumber ?? '').trim();
     const skipAssignNumber =
       persistedHasNoBillNumber && billHasAnyLineWeightZeroOrMissing(prior);
-    const dtoAfter = skipAssignNumber ? result : await billingApi.assignNumber(result.billId);
+    let dtoAfter = result;
+    if (!skipAssignNumber) {
+      try {
+        dtoAfter = await billingApi.assignNumber(result.billId);
+      } catch (e) {
+        toast.error(e instanceof Error ? e.message : 'Failed to assign bill number.');
+        dtoAfter = result;
+      }
+    }
     const normalized = recalcGrandTotal(normalizeBillFromApi(dtoAfter, fullConfigs, commodities) as BillData);
     const withTempFlag: BillData = {
       ...normalized,

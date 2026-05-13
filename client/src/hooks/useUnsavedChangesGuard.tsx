@@ -1,6 +1,7 @@
 import * as React from "react";
 import { Loader2 } from "lucide-react";
 import { useBlocker, useBeforeUnload } from "react-router-dom";
+import { toast } from "sonner";
 
 import {
   AlertDialog,
@@ -105,8 +106,8 @@ export default function useUnsavedChangesGuard(options: UseUnsavedChangesGuardOp
       }
       if (isRouteBlocked) blocker.proceed();
       else resolveLocal(true);
-    } catch {
-      /* onBeforeContinue surfaced its own error; stay on dialog */
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not complete save. Please try again.");
     } finally {
       if (asyncSave) setSaving(false);
       continuingRef.current = false;
