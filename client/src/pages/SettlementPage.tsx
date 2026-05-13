@@ -5562,10 +5562,14 @@ const SettlementPage = () => {
       lotOvForSeller: Record<string, LotSalesOverride>
     ) => {
       if (settlementFormMode !== 'saved' || isSettlementFormReadOnly) return;
-      if (!tr.isExtraBid && tr.entryIndex !== 0) return;
-      if (!tr.isExtraBid && (tr.lot.entries?.length ?? 0) > 1) {
-        toast.message('Split is only for a single buyer row per lot. This lot has multiple bids with separate weights.');
-        return;
+      if (tr.isExtraBid === false) {
+        if (tr.entryIndex !== 0) return;
+        if ((tr.lot.entries?.length ?? 0) > 1) {
+          toast.message(
+            'Split is only for a single buyer row per lot. This lot has multiple bids with separate weights.'
+          );
+          return;
+        }
       }
       const sid = seller.sellerId;
       if (activeSplitGroupIdBySellerIdRef.current[sid]) {
@@ -7511,23 +7515,31 @@ const SettlementPage = () => {
                 const qtyOutOfBalance = allowedQtyBags > 0 && qtyTot !== allowedQtyBags;
                 const invalidLotFieldBySid: Record<string, { qty?: true; weight?: true; rate?: true }> = {};
                 for (const tr of tableRows) {
-                  const r = tr.isExtraBid
-                    ? mergeLotDisplayRow(tr.lot, tr.sid, undefined, getLotDivisor(tr.lot))
-                    : mergeLotEntryDisplayRow(
-                        seller,
-                        tr.lot,
-                        tr.entryIndex,
-                        lotOv,
-                        tr.sid,
-                        getLotDivisor(tr.lot)
-                      );
+                  let r: ReturnType<typeof mergeLotDisplayRow>;
+                  if (tr.isExtraBid === false) {
+                    r = mergeLotEntryDisplayRow(
+                      seller,
+                      tr.lot,
+                      tr.entryIndex,
+                      lotOv,
+                      tr.sid,
+                      getLotDivisor(tr.lot)
+                    );
+                  } else {
+                    r = mergeLotDisplayRow(tr.lot, tr.sid, undefined, getLotDivisor(tr.lot));
+                  }
                   const inv: { qty?: true; weight?: true; rate?: true } = {};
                   if (!Number.isFinite(r.qty) || r.qty <= 0) inv.qty = true;
                   if (!Number.isFinite(r.weight) || r.weight <= 0) inv.weight = true;
                   if (!Number.isFinite(r.ratePerBag) || r.ratePerBag <= 0) inv.rate = true;
                   if (Object.keys(inv).length > 0) {
                     const nEnt = (tr.lot.entries ?? []).length;
-                    const entryKey = tr.isExtraBid ? tr.sid : lotSalesOverrideStorageKey(tr.sid, tr.entryIndex, nEnt);
+                    let entryKey: string;
+                    if (tr.isExtraBid === false) {
+                      entryKey = lotSalesOverrideStorageKey(tr.sid, tr.entryIndex, nEnt);
+                    } else {
+                      entryKey = tr.sid;
+                    }
                     invalidLotFieldBySid[entryKey] = inv;
                   }
                 }
@@ -8160,7 +8172,12 @@ const SettlementPage = () => {
                             ) : (
                               tableRows.map((tr, displayIdx) => {
                                 const { lot, sid, isExtraBid } = tr;
-                                const entryIndex = tr.isExtraBid ? 0 : tr.entryIndex;
+                                let entryIndex: number;
+                                if (tr.isExtraBid === false) {
+                                  entryIndex = tr.entryIndex;
+                                } else {
+                                  entryIndex = 0;
+                                }
                                 const lotEntryCount = (lot.entries ?? []).length;
                                 const rowKey = getSalesRowKeyForTableRow(isExtraBid, sid);
                                 const splitSnap = splitSnapForSeller;
