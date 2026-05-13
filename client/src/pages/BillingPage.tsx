@@ -3072,13 +3072,24 @@ const BillingPage = () => {
   }, [autoSaveCurrentBillBeforeBuyerSwitch, findBuyerByInput, generateBill, selectedBuyer]);
 
   const handleSelectBidMode = useCallback(() => {
-    const buyer = findBuyerByInput();
+    let buyer: BuyerPurchase | null = null;
+    if (bill && selectedBuyer) {
+      buyer =
+        buyersForBilling.find(
+          b =>
+            (b.buyerMark || '').toLowerCase() === (selectedBuyer.buyerMark || '').toLowerCase()
+            && (b.buyerName || '').toLowerCase() === (selectedBuyer.buyerName || '').toLowerCase(),
+        ) ?? null;
+    }
+    if (!buyer) {
+      buyer = findBuyerByInput();
+    }
     if (!buyer) return;
     setShowBuyerSuggestions(false);
     setSelectBidBuyer(buyer);
     setSelectedBidKeys(buyer.entries.map(e => getBidSelectionKey(e)));
     toast.success(`Loaded ${buyer.entries.length} bids. Select required bids to create bill.`);
-  }, [findBuyerByInput]);
+  }, [bill, selectedBuyer, buyersForBilling, findBuyerByInput]);
 
   const toggleBidSelection = (entry: BillEntry) => {
     const key = getBidSelectionKey(entry);
@@ -3724,6 +3735,77 @@ const BillingPage = () => {
     setBill(recalcGrandTotal(updated));
   };
 
+  const stripBrokerFromBill = useCallback(
+    (root: BillData): BillData => {
+      const cleared: BillData = {
+        ...root,
+        buyerAsBroker: false,
+        brokerName: '',
+        brokerMark: '',
+        brokerContactId: null,
+        brokerPhone: '',
+        brokerAddress: '',
+        brokerageType: 'AMOUNT',
+        brokerageValue: 0,
+      };
+      const updated = { ...cleared };
+      updated.commodityGroups = cleared.commodityGroups.map(group => {
+        const groupCopy = { ...group };
+        const commName = groupCopy.commodityName;
+        const commodity = commodities.find((c: any) => c.commodity_name === commName);
+        const fullCfg = commodity
+          ? fullConfigs.find((f: FullCommodityConfigDto) => String(f.commodityId) === String(commodity.commodity_id))
+          : null;
+        const dynCharges = fullCfg?.dynamicCharges ?? [];
+        const divisorUsed = groupCopy.divisor > 0 ? groupCopy.divisor : 50;
+        const items = groupCopy.items.map(item => {
+          const itemCopy = { ...item, brokerage: 0 };
+          const preset = (itemCopy as { presetApplied?: number }).presetApplied ?? 0;
+          const netBase = netBaseRateAfterPreset(itemCopy.baseRate, preset);
+          itemCopy.newRate = roundMoney2(netBase + itemCopy.brokerage + itemCopy.otherCharges);
+          itemCopy.amount = roundMoney2((itemCopy.weight * itemCopy.newRate) / divisorUsed);
+          const weight = itemCopy.weight || 0;
+          const qty = itemCopy.quantity || 0;
+          const baseNewRateWithoutOther = roundMoney2(netBase + itemCopy.brokerage);
+          const baseAmount = (weight * baseNewRateWithoutOther) / divisorUsed;
+          let sellerOtherCharges = 0;
+          dynCharges.forEach((ch: any) => {
+            const appliesTo = String(ch.appliesTo || 'BUYER').toUpperCase();
+            if (appliesTo !== 'SELLER') return;
+            const chargeType = String(ch.chargeType || ch.charge_type || 'FIXED').toUpperCase();
+            const chVal = Number(ch.valueAmount ?? ch.value ?? 0) || 0;
+            if (chVal <= 0) return;
+            if (chargeType === 'PERCENT') {
+              const chargeTotal = baseAmount * (chVal / 100);
+              const rateAdd = weight > 0 ? (chargeTotal * divisorUsed) / weight : 0;
+              sellerOtherCharges += rateAdd;
+            } else {
+              const fixedBasis = String(ch.fixedBasis || ch.fixed_basis || 'PER_50KG').toUpperCase();
+              if (fixedBasis === 'PER_COUNT') {
+                const chargeTotal = chVal * qty;
+                const rateAdd = weight > 0 ? (chargeTotal * divisorUsed) / weight : 0;
+                sellerOtherCharges += rateAdd;
+              } else {
+                sellerOtherCharges += chVal * (divisorUsed / 50);
+              }
+            }
+          });
+          itemCopy.sellerOtherCharges = roundMoney2(sellerOtherCharges);
+          return itemCopy;
+        });
+        const subtotal = roundMoney2(items.reduce((s, i) => s + i.amount, 0));
+        const g2 = { ...groupCopy, items, subtotal };
+        g2.commissionAmount = percentOfAmount(subtotal, groupCopy.commissionPercent);
+        g2.userFeeAmount = percentOfAmount(subtotal, groupCopy.userFeePercent);
+        const gst = totalGstRupeesForGroup(g2);
+        g2.totalCharges = roundMoney2(g2.commissionAmount + g2.userFeeAmount + gst);
+        return g2;
+      });
+      return recalcGrandTotal(updated);
+    },
+    [commodities, fullConfigs, recalcGrandTotal],
+  );
+
   const removeLineItem = (commIdx: number, itemIdx: number) => {
     if (!bill) return;
     const updated = { ...bill };
@@ -3857,8 +3939,9 @@ const BillingPage = () => {
   type PersistBillOptions = { skipClientValidationErrorToast?: boolean };
 
   const buildSavePayload = (options?: PersistBillOptions) => {
-    if (!bill) return;
-    const { isValid, errors } = validateBill(bill, commodityAvgWeightBounds);
+    const b = billRef.current;
+    if (!b) return;
+    const { isValid, errors } = validateBill(b, commodityAvgWeightBounds);
     if (!isValid) {
       if (!options?.skipClientValidationErrorToast) {
         const count = Object.keys(errors).length;
@@ -3868,27 +3951,27 @@ const BillingPage = () => {
     }
     /** Backend @NotBlank buyerName; temp buyer may leave display name empty — mirror mark / billing name. */
     const buyerNameForApi =
-      billingBuyerDisplayLine(bill)
-      || (bill.billingName ?? '').trim()
-      || (bill.buyerMark ?? '').trim()
+      billingBuyerDisplayLine(b)
+      || (b.billingName ?? '').trim()
+      || (b.buyerMark ?? '').trim()
       || '—';
-    const brokerPersistOk = billHasBrokerForBrokerage(bill);
+    const brokerPersistOk = billHasBrokerForBrokerage(b);
     const payload = {
       buyerName: buyerNameForApi,
-      buyerMark: bill.buyerMark,
-      buyerContactId: bill.buyerContactId,
-      buyerPhone: bill.buyerPhone ?? '',
-      buyerAddress: bill.buyerAddress ?? '',
-      buyerAsBroker: !!bill.buyerAsBroker,
-      brokerName: bill.buyerAsBroker ? '' : (bill.brokerName ?? ''),
-      brokerMark: bill.buyerAsBroker ? '' : (bill.brokerMark ?? ''),
-      brokerContactId: bill.buyerAsBroker ? null : (bill.brokerContactId ?? null),
-      brokerPhone: bill.buyerAsBroker ? '' : (bill.brokerPhone ?? ''),
-      brokerAddress: bill.buyerAsBroker ? '' : (bill.brokerAddress ?? ''),
-      billingName: bill.billingName,
-      billDate: typeof bill.billDate === 'string' ? bill.billDate : new Date(bill.billDate).toISOString(),
+      buyerMark: b.buyerMark,
+      buyerContactId: b.buyerContactId,
+      buyerPhone: b.buyerPhone ?? '',
+      buyerAddress: b.buyerAddress ?? '',
+      buyerAsBroker: !!b.buyerAsBroker,
+      brokerName: b.buyerAsBroker ? '' : (b.brokerName ?? ''),
+      brokerMark: b.buyerAsBroker ? '' : (b.brokerMark ?? ''),
+      brokerContactId: b.buyerAsBroker ? null : (b.brokerContactId ?? null),
+      brokerPhone: b.buyerAsBroker ? '' : (b.brokerPhone ?? ''),
+      brokerAddress: b.buyerAsBroker ? '' : (b.brokerAddress ?? ''),
+      billingName: b.billingName,
+      billDate: typeof b.billDate === 'string' ? b.billDate : new Date(b.billDate).toISOString(),
       // Keep all persisted commodity-group values; only remove frontend-only helper fields.
-      commodityGroups: bill.commodityGroups.map(
+      commodityGroups: b.commodityGroups.map(
         ({
           divisor: _divisor,
           taxMode: _taxMode,
@@ -3918,23 +4001,23 @@ const BillingPage = () => {
           }),
         };
       }),
-      outboundFreight: bill.outboundFreight ?? 0,
-      outboundVehicle: bill.outboundVehicle ?? '',
-      tokenAdvance: sumLineTokenAdvances(bill),
-      grandTotal: bill.grandTotal,
-      brokerageType: brokerPersistOk ? (bill.brokerageType ?? 'AMOUNT') : 'AMOUNT',
-      brokerageValue: brokerPersistOk ? (bill.brokerageValue ?? 0) : 0,
-      globalOtherCharges: bill.globalOtherCharges ?? 0,
-      pendingBalance: bill.pendingBalance ?? bill.grandTotal,
+      outboundFreight: b.outboundFreight ?? 0,
+      outboundVehicle: b.outboundVehicle ?? '',
+      tokenAdvance: sumLineTokenAdvances(b),
+      grandTotal: b.grandTotal,
+      brokerageType: brokerPersistOk ? (b.brokerageType ?? 'AMOUNT') : 'AMOUNT',
+      brokerageValue: brokerPersistOk ? (b.brokerageValue ?? 0) : 0,
+      globalOtherCharges: b.globalOtherCharges ?? 0,
+      pendingBalance: b.pendingBalance ?? b.grandTotal,
     };
     const canCreate = can('Billing', 'Create');
     const canEdit = can('Billing', 'Edit');
-    const isUpdate = bill.billId && isBackendBillId(bill.billId);
+    const isUpdate = b.billId && isBackendBillId(b.billId);
     if ((isUpdate && !canEdit) || (!isUpdate && !canCreate)) {
       toast.error('You do not have permission to save bills.');
       return null;
     }
-    return { payload, isUpdate };
+    return { payload, isUpdate, billIdForUpdate: isUpdate ? String(b.billId) : undefined };
   };
 
   const persistBill = async (options?: PersistBillOptions): Promise<SalesBillDTO | null> => {
@@ -3948,7 +4031,7 @@ const BillingPage = () => {
     const { payload, isUpdate } = built;
     try {
       const result = isUpdate
-        ? await billingApi.update(bill!.billId, payload)
+        ? await billingApi.update(built.billIdForUpdate!, payload)
         : await billingApi.create(payload);
       try {
         const norm = normalizeBillFromApi(result, fullConfigs, commodities) as BillData;
@@ -3976,21 +4059,22 @@ const BillingPage = () => {
   };
 
   async function autoSaveCurrentBillBeforeBuyerSwitch(): Promise<boolean> {
-    if (!bill) return true;
-    const hasItems = bill.commodityGroups.some(g => (g.items?.length ?? 0) > 0);
+    const b = billRef.current;
+    if (!b) return true;
+    const hasItems = b.commodityGroups.some(g => (g.items?.length ?? 0) > 0);
     if (!hasItems) return true;
 
     const baseline = billDirtyBaselineRef.current;
     const unchanged =
-      baseline != null && serializeBillForDirty(bill) === baseline;
+      baseline != null && serializeBillForDirty(b) === baseline;
     if (unchanged) {
       return true;
     }
 
-    const currentBuyerLabel = bill.buyerMark || bill.buyerName || 'current buyer';
+    const currentBuyerLabel = b.buyerMark || b.buyerName || 'current buyer';
     const saved = await persistBill({ skipClientValidationErrorToast: true });
     if (!saved) {
-      const { isValid } = validateBill(bill, commodityAvgWeightBounds);
+      const { isValid } = validateBill(b, commodityAvgWeightBounds);
       if (!isValid) {
         toast.error('Could not auto-save current bill. Please fix highlighted fields and try again.');
       }
@@ -4048,27 +4132,46 @@ const BillingPage = () => {
     return true;
   }, [bill, showPrint, serializeBillForDirty, editLocked]);
   const handleBillingPartialSave = async (): Promise<boolean> => {
-    if (!bill) return true;
-    const hasItems = bill.commodityGroups.some(g => (g.items?.length ?? 0) > 0);
+    const prior = billRef.current;
+    if (!prior) return true;
+    if (isFrozenBill(prior)) {
+      toast.error('This printed bill is frozen. Reopen it before saving changes.');
+      return false;
+    }
+    if (isNumberedSavedBill(prior) && editLocked) {
+      toast.error('Press Edit (Alt+E) to enable changes before saving.');
+      return false;
+    }
+    const hasItems = prior.commodityGroups.some(g => (g.items?.length ?? 0) > 0);
     if (!hasItems) return true;
-    const saved = await persistBill();
-    if (!saved) {
+    const result = await persistBill();
+    if (!result) {
       toast.error('Failed to save bill progress.');
       return false;
     }
-    setHasSavedOnce(isBackendBillId(String(saved.billId)));
-    billDirtyBaselineRef.current = serializeBillForDirty(bill);
+    const persistedHasNoBillNumber = !String(result.billNumber ?? '').trim();
+    const skipAssignNumber =
+      persistedHasNoBillNumber && billHasAnyLineWeightZeroOrMissing(prior);
+    const dtoAfter = skipAssignNumber ? result : await billingApi.assignNumber(result.billId);
+    const normalized = recalcGrandTotal(normalizeBillFromApi(dtoAfter, fullConfigs, commodities) as BillData);
+    const withTempFlag: BillData = {
+      ...normalized,
+      buyerIsTemporary: !normalized.buyerContactId && Boolean(prior.buyerIsTemporary),
+    };
+    setBill(withTempFlag);
+    billDirtyBaselineRef.current = serializeBillForDirty(withTempFlag);
+    setHasSavedOnce(isBackendBillId(String(dtoAfter.billId)));
     void refreshBillingCachesAfterMutation();
-    toast.success('Bill progress saved.');
+    toast.success(skipAssignNumber ? 'Saved to Bill In Progress.' : 'Bill progress saved.');
     return true;
   };
   const { confirmIfDirty, UnsavedChangesDialog } = useUnsavedChangesGuard({
     when: isBillingDirty,
-    title: 'Save your progress?',
-    description: 'You have unsaved changes. Would you like to save your progress before leaving?',
-    continueLabel: 'Save to Bill In Progress',
+    title: 'Save Your Changes?',
+    description: 'Save moves this bill to Bill In Progress. Discard clears the editor so you can start fresh.',
+    continueLabel: 'Save',
     stayLabel: 'Discard',
-    closeLabel: 'Stay On Page',
+    closeLabel: 'Cancel',
     onBeforeContinue: handleBillingPartialSave,
   });
   billingTabConfirmIfDirtyRef.current = confirmIfDirty;
@@ -4384,9 +4487,8 @@ const BillingPage = () => {
   }
 
   // ═══ BILLING HOME: TABS + LISTS ═══
-  const handleClearBillEditor = async () => {
-    const saved = await autoSaveCurrentBillBeforeBuyerSwitch();
-    if (!saved) return;
+  const resetBillingCreateFlow = useCallback(async () => {
+    if (!(await billingTabConfirmIfDirtyRef.current())) return;
     setSelectedBuyer(null);
     setBill(null);
     setBuyerBidMarkInput('');
@@ -4395,22 +4497,22 @@ const BillingPage = () => {
     setSelectBidBuyer(null);
     setSelectedBidKeys([]);
     setHasSavedOnce(false);
-  };
+    setSelectedPrintVersion('latest');
+    setEditLocked(false);
+    setBillingMainTab('create');
+  }, []);
 
   const handleCreateNewBill = () => {
-    void (async () => {
-      if (!(await billingTabConfirmIfDirtyRef.current())) return;
-      setBill(null);
-      setHasSavedOnce(false);
-      setSelectedPrintVersion('latest');
-      setEditLocked(false);
-      setBillingMainTab('create');
-    })();
+    void resetBillingCreateFlow();
   };
 
   const openBillFromList = (row: SalesBillSummaryDTO | SalesBillDTO) => {
     void (async () => {
       if (!(await billingTabConfirmIfDirtyRef.current())) return;
+      setBuyerBidMarkInput('');
+      setSelectedBuyerFromDropdown(null);
+      setSelectBidBuyer(null);
+      setSelectedBidKeys([]);
       const b = Array.isArray((row as SalesBillDTO).commodityGroups)
         ? (row as SalesBillDTO)
         : await billingApi.getById(row.billId);
@@ -5249,7 +5351,7 @@ const BillingPage = () => {
               <Button
                 type="button"
                 variant="outline"
-                onClick={() => void handleClearBillEditor()}
+                onClick={() => void resetBillingCreateFlow()}
                 disabled={!bill && !selectedBuyer}
                 className={cn(arrSolidLg, 'sm:self-end')}
               >
@@ -5652,7 +5754,7 @@ const BillingPage = () => {
                       const checked = e.target.checked;
                       if (!bill) return;
                       if (!checked) {
-                        setBill({ ...bill, buyerAsBroker: false });
+                        setBill(stripBrokerFromBill(bill));
                         return;
                       }
                       setBill({
@@ -5665,10 +5767,30 @@ const BillingPage = () => {
                         brokerAddress: bill.buyerAddress ?? '',
                       });
                     }}
-                    disabled={!bill}
+                    disabled={!bill || billFormReadOnly}
                   />
                   Use buyer as broker
                 </label>
+                {bill && billHasBrokerForBrokerage(bill) ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className={cn(arrSolidMd, 'whitespace-nowrap shrink-0')}
+                    disabled={billFormReadOnly}
+                    title={
+                      billFormReadOnly
+                        ? 'Printed bill is frozen. Press Edit (Alt+E) to reopen before removing broker.'
+                        : undefined
+                    }
+                    onClick={() => {
+                      if (!bill || billFormReadOnly) return;
+                      setBill(stripBrokerFromBill(bill));
+                      setReplaceTarget('BUYER');
+                    }}
+                  >
+                    Remove broker
+                  </Button>
+                ) : null}
                 <Button
                   type="button"
                   variant="outline"
@@ -6253,6 +6375,11 @@ const BillingPage = () => {
                   </ul>
                 </div>
               )}
+              {bill.commodityGroups.every(g => (g.items?.length ?? 0) === 0) ? (
+                <div className="rounded-xl border border-border/50 bg-background/40 px-4 py-10 text-center text-sm text-muted-foreground">
+                  No data available. Select at least one bid to see commodity summary, freight charges, and grand totals.
+                </div>
+              ) : (
               <div className="flex flex-col gap-1.5 xl:flex-row xl:items-stretch xl:gap-3 min-w-0">
                 <div
                   className="w-full min-w-0 flex-1 overflow-x-auto overflow-y-clip rounded-xl border border-border/50 bg-background/40 shadow-sm overscroll-x-contain xl:w-max xl:max-w-full xl:flex-none xl:shrink-0"
@@ -7001,6 +7128,7 @@ const BillingPage = () => {
                   />
                 </div>
               </div>
+              )}
             </motion.div>
             </fieldset>
 
