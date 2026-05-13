@@ -27,6 +27,22 @@ const CONTACTS_STALE_TIME_MS = 2 * 60 * 1000;
 const CONTACTS_LOCAL_CACHE_PREFIX = 'mercotrace.contacts.registry';
 const EMPTY_CONTACTS: Contact[] = [];
 
+/** Indian 10-digit mobile: leading digit 6–9 (matches contact form validation). */
+const CONTACT_MOBILE_10_REGEX = /^[6-9]\d{9}$/;
+
+/**
+ * If the search box contains exactly one valid 10-digit mobile (no extra digit characters)
+ * and no registry contact already uses that number, return it for the add-contact form.
+ * Snapshot-only at open time — does not sync ongoing search typing to the form.
+ */
+function phonePrefillForNewContactFromSearch(search: string, allContacts: Contact[]): string {
+  const digits = search.replace(/\D/g, '');
+  if (digits.length !== 10 || !CONTACT_MOBILE_10_REGEX.test(digits)) return '';
+  const taken = allContacts.some(c => (c.phone ?? '').replace(/\D/g, '') === digits);
+  if (taken) return '';
+  return digits;
+}
+
 type CachedContactsSnapshot = {
   savedAt: number;
   contacts: Contact[];
@@ -185,7 +201,8 @@ const ContactsPage = () => {
       toast.error('You do not have permission to create contacts.');
       return;
     }
-    setFormData({ name: '', phone: '', mark: '', address: '', enablePortal: true });
+    const phoneFromSearch = phonePrefillForNewContactFromSearch(search, contacts);
+    setFormData({ name: '', phone: phoneFromSearch, mark: '', address: '', enablePortal: true });
     setErrors({});
     setModalMode('add');
   };
@@ -227,7 +244,7 @@ const ContactsPage = () => {
     if (!formData.name.trim()) errs.name = 'Name is required';
     if (!formData.phone.trim()) {
       errs.phone = 'Phone number is required';
-    } else if (!/^[6-9]\d{9}$/.test(formData.phone.trim())) {
+    } else if (!CONTACT_MOBILE_10_REGEX.test(formData.phone.trim())) {
       errs.phone = 'Enter a valid 10-digit mobile number';
     } else if (contacts.some(c => c.phone === formData.phone.trim() && (!isEdit || c.contact_id !== selectedContact?.contact_id))) {
       errs.phone = 'This phone number is already registered';
