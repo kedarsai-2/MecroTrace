@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { Suspense, useState } from 'react';
 import { useNavigate, useLocation, Outlet } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
@@ -41,6 +41,29 @@ const navItems: AdminNavItem[] = [
   { icon: BarChart3, label: 'Reports', path: '/admin/reports', moduleKey: 'Reports' },
   { icon: Settings, label: 'Settings', path: '/admin/settings', moduleKey: 'Settings' },
 ];
+
+const AdminContentFallback = () => (
+  <div className="min-h-[calc(100vh-7rem)] rounded-2xl border border-border/30 bg-card/40 p-6 shadow-sm backdrop-blur">
+    <div className="mb-6 flex items-center gap-3">
+      <div className="h-12 w-12 animate-pulse rounded-2xl bg-muted" />
+      <div className="space-y-2">
+        <div className="h-4 w-40 animate-pulse rounded bg-muted" />
+        <div className="h-3 w-56 animate-pulse rounded bg-muted/70" />
+      </div>
+    </div>
+    <div className="mb-5 h-10 max-w-sm animate-pulse rounded-xl bg-muted/80" />
+    <div className="overflow-hidden rounded-2xl border border-border/30 bg-background/50">
+      <div className="h-12 bg-muted/60" />
+      {[...Array(6)].map((_, index) => (
+        <div key={index} className="flex items-center gap-4 border-t border-border/20 px-4 py-4">
+          <div className="h-10 w-10 animate-pulse rounded-xl bg-muted" />
+          <div className="h-3 flex-1 animate-pulse rounded bg-muted/80" />
+          <div className="h-3 w-28 animate-pulse rounded bg-muted/70" />
+        </div>
+      ))}
+    </div>
+  </div>
+);
 
 const AdminLayout = () => {
   const [collapsed, setCollapsed] = useState(false);
@@ -224,7 +247,9 @@ const AdminLayout = () => {
 
         {/* Page Content */}
         <main id="route-autofocus-root" className="p-6 relative z-10">
-          <Outlet />
+          <Suspense fallback={<AdminContentFallback />}>
+            <Outlet />
+          </Suspense>
         </main>
       </motion.div>
     </div>

@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
-import { Search, Gem } from 'lucide-react';
+import { Search, Gem, ChevronLeft, ChevronRight } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Input } from '@/components/ui/input';
+import { Button } from '@/components/ui/button';
 import { commodityApi } from '@/services/api';
 import type { Commodity } from '@/types/models';
 import { useAdminPermissions } from '@/admin/lib/adminPermissions';
@@ -15,22 +16,73 @@ import tomatoImg from '@/assets/commodities/tomato.jpg';
 
 const commodityImages: Record<string, string> = { 'Onion': onionImg, 'Potato': potatoImg, 'Dry Chili': dryChiliImg, 'Tomato': tomatoImg };
 
+const PAGE_SIZE = 50;
+
 const AdminCommoditiesPage = () => {
   const { canAccessModule } = useAdminPermissions();
   const [commodities, setCommodities] = useState<Commodity[]>([]);
   const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [page, setPage] = useState(0);
+  const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(true);
+
+  const canView = canAccessModule('Commodities');
 
   useEffect(() => {
-    commodityApi.adminList().then(setCommodities).catch(() => {
-      setCommodities([]);
-    });
-  }, []);
+    const timer = window.setTimeout(() => {
+      setDebouncedSearch(search.trim());
+      setPage(0);
+    }, 300);
 
-  if (!canAccessModule('Commodities')) {
+    return () => window.clearTimeout(timer);
+  }, [search]);
+
+  useEffect(() => {
+    if (!canView) {
+      return;
+    }
+
+    let active = true;
+
+    const loadCommodities = async () => {
+      setLoading(true);
+      try {
+        const data = await commodityApi.adminListPage({
+          page,
+          size: PAGE_SIZE,
+          q: debouncedSearch,
+        });
+        if (!active) return;
+        setCommodities(Array.isArray(data.commodities) ? data.commodities : []);
+        setTotal(Number.isFinite(data.total) ? data.total : 0);
+      } catch {
+        if (!active) return;
+        setCommodities([]);
+        setTotal(0);
+      } finally {
+        if (active) {
+          setLoading(false);
+        }
+      }
+    };
+
+    void loadCommodities();
+
+    return () => {
+      active = false;
+    };
+  }, [canView, debouncedSearch, page]);
+
+  if (!canView) {
     return <AdminForbiddenPage moduleName="Commodities" />;
   }
 
-  const filtered = commodities.filter(c => c.commodity_name.toLowerCase().includes(search.toLowerCase()));
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const firstVisible = total === 0 ? 0 : page * PAGE_SIZE + 1;
+  const lastVisible = total === 0 ? 0 : Math.min(total, page * PAGE_SIZE + commodities.length);
+  const canGoPrevious = page > 0;
+  const canGoNext = page + 1 < totalPages;
 
   return (
     <div className="space-y-5 relative">
@@ -45,7 +97,9 @@ const AdminCommoditiesPage = () => {
         </div>
         <div>
           <h1 className="text-xl font-bold text-foreground">Commodities Overview</h1>
-          <p className="text-sm text-muted-foreground">{commodities.length} commodities configured</p>
+          <p className="text-sm text-muted-foreground">
+            {loading && total === 0 ? 'Loading commodities...' : `${total.toLocaleString()} commodities configured`}
+          </p>
         </div>
       </motion.div>
 
@@ -65,7 +119,11 @@ const AdminCommoditiesPage = () => {
               </tr>
             </thead>
             <tbody>
-              {filtered.map((c, i) => (
+              {loading && commodities.length === 0 ? (
+                <tr>
+                  <td colSpan={2} className="py-12 text-center text-muted-foreground">Loading commodities...</td>
+                </tr>
+              ) : commodities.map((c, i) => (
                 <motion.tr key={c.commodity_id} initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.25 + i * 0.04 }}
                   className="border-b border-border/20 hover:bg-primary/5 transition-colors">
                   <td className="py-3.5 px-4">
@@ -88,7 +146,39 @@ const AdminCommoditiesPage = () => {
             </tbody>
           </table>
         </div>
-        {filtered.length === 0 && <div className="p-12 text-center text-muted-foreground">No commodities found</div>}
+        {!loading && commodities.length === 0 && <div className="p-12 text-center text-muted-foreground">No commodities found</div>}
+        <div className="relative z-10 flex flex-col gap-3 border-t border-border/30 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+          <p className="text-xs text-muted-foreground">
+            Showing {firstVisible.toLocaleString()}-{lastVisible.toLocaleString()} of {total.toLocaleString()}
+          </p>
+          <div className="flex items-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setPage(current => Math.max(0, current - 1))}
+              disabled={!canGoPrevious || loading}
+              className="h-9 gap-1"
+            >
+              <ChevronLeft className="h-4 w-4" />
+              Previous
+            </Button>
+            <span className="min-w-[92px] text-center text-xs font-medium text-muted-foreground">
+              Page {Math.min(page + 1, totalPages)} / {totalPages}
+            </span>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setPage(current => current + 1)}
+              disabled={!canGoNext || loading}
+              className="h-9 gap-1"
+            >
+              Next
+              <ChevronRight className="h-4 w-4" />
+            </Button>
+          </div>
+        </div>
       </motion.div>
     </div>
   );

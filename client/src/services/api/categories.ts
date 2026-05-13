@@ -11,6 +11,11 @@ type BusinessCategoryDto = {
   updated_at?: string;
 };
 
+export type BusinessCategoryListPage = {
+  categories: BusinessCategory[];
+  total: number;
+};
+
 function mapDtoToCategory(dto: BusinessCategoryDto): BusinessCategory {
   const id = dto.id;
   return {
@@ -64,12 +69,29 @@ export const categoryApi = {
 
   /** List categories (admin context: /api/admin/categories). Use from Admin UI so admin JWT/cookie is used. */
   async adminList(): Promise<BusinessCategory[]> {
-    const params = new URLSearchParams({ page: '0', size: '1000' });
+    const page = await this.adminListPage({ page: 0, size: 1000 });
+    return page.categories;
+  },
+
+  /** Paginated categories (admin context). */
+  async adminListPage(opts: { page: number; size: number; q?: string }): Promise<BusinessCategoryListPage> {
+    const params = new URLSearchParams({
+      page: String(opts.page),
+      size: String(opts.size),
+      sort: 'categoryName,asc',
+    });
+    if (opts.q?.trim()) {
+      params.set('q', opts.q.trim());
+    }
     const res = await apiFetch(`${ADMIN_CATEGORIES_BASE}?${params.toString()}`, {
       method: 'GET',
     });
     const data = await handleResponse<BusinessCategoryDto[]>(res, 'Failed to load categories');
-    return data.map(mapDtoToCategory);
+    const categories = data.map(mapDtoToCategory);
+    return {
+      categories,
+      total: Number(res.headers.get('X-Total-Count') ?? categories.length),
+    };
   },
 
   async create(payload: { category_name: string; is_active?: boolean }): Promise<BusinessCategory> {
@@ -135,5 +157,4 @@ export const categoryApi = {
     if (!res.ok) await handleResponse<unknown>(res, 'Failed to delete category');
   },
 };
-
 

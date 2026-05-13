@@ -1,6 +1,6 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Plus, Search, Edit2, Trash2, Store, Check, X, Layers, Sparkles } from 'lucide-react';
+import { Plus, Search, Edit2, Trash2, Store, Check, X, Layers, Sparkles, ChevronLeft, ChevronRight } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
@@ -13,9 +13,16 @@ import { ConfirmDeleteDialog } from '@/components/ConfirmDeleteDialog';
 
 const cardGradients = ['from-blue-500 via-blue-400 to-cyan-400','from-violet-500 via-purple-500 to-fuchsia-500','from-amber-400 via-orange-500 to-rose-500','from-emerald-400 via-green-500 to-teal-500','from-pink-400 via-rose-500 to-red-500','from-indigo-500 via-blue-500 to-cyan-500'];
 
+const PAGE_SIZE = 50;
+
 const AdminCategoriesPage = () => {
   const [categories, setCategories] = useState<BusinessCategory[]>([]);
   const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [page, setPage] = useState(0);
+  const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [reloadToken, setReloadToken] = useState(0);
   const [showAdd, setShowAdd] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
   const [form, setForm] = useState({ category_name: '' });
@@ -30,21 +37,63 @@ const AdminCategoriesPage = () => {
   const canEdit = can('Categories', 'Edit');
   const canDelete = can('Categories', 'Delete');
 
+  const reloadCategories = useCallback(() => setReloadToken(current => current + 1), []);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setDebouncedSearch(search.trim());
+      setPage(0);
+    }, 300);
+
+    return () => window.clearTimeout(timer);
+  }, [search]);
+
+  useEffect(() => {
+    if (!canView) {
+      return;
+    }
+
+    let active = true;
+
+    const loadCategories = async () => {
+      setLoading(true);
+      try {
+        const data = await categoryApi.adminListPage({
+          page,
+          size: PAGE_SIZE,
+          q: debouncedSearch,
+        });
+        if (!active) return;
+        setCategories(Array.isArray(data.categories) ? data.categories : []);
+        setTotal(Number.isFinite(data.total) ? data.total : 0);
+      } catch (e) {
+        if (!active) return;
+        console.error('Failed to load categories', e);
+        setCategories([]);
+        setTotal(0);
+      } finally {
+        if (active) {
+          setLoading(false);
+        }
+      }
+    };
+
+    void loadCategories();
+
+    return () => {
+      active = false;
+    };
+  }, [canView, debouncedSearch, page, reloadToken]);
+
   if (!canView) {
     return <AdminForbiddenPage moduleName="Categories" />;
   }
 
-  useEffect(() => {
-    categoryApi
-      .adminList()
-      .then(setCategories)
-      .catch(e => {
-        console.error('Failed to load categories', e);
-        setCategories([]);
-      });
-  }, []);
-
-  const filtered = categories.filter(c => c.category_name.toLowerCase().includes(search.toLowerCase()));
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const firstVisible = total === 0 ? 0 : page * PAGE_SIZE + 1;
+  const lastVisible = total === 0 ? 0 : Math.min(total, page * PAGE_SIZE + categories.length);
+  const canGoPrevious = page > 0;
+  const canGoNext = page + 1 < totalPages;
 
   const handleAdd = async () => {
     if (!canCreate) {
@@ -52,7 +101,10 @@ const AdminCategoriesPage = () => {
     }
     try {
       const created = await categoryApi.adminCreate({ category_name: form.category_name, is_active: true });
-      setCategories(prev => [...prev, created]);
+      setCategories(prev => page === 0 ? [created, ...prev].slice(0, PAGE_SIZE) : prev);
+      setTotal(prev => prev + 1);
+      setPage(0);
+      reloadCategories();
       setForm({ category_name: '' });
       setShowAdd(false);
     } catch (e) {
@@ -68,6 +120,7 @@ const AdminCategoriesPage = () => {
       const cat = categories.find(c => c.category_id === id);
       const updated = await categoryApi.adminUpdate(id, { category_name: form.category_name, is_active: cat?.is_active ?? true });
       setCategories(prev => prev.map(c => c.category_id === id ? updated : c));
+      reloadCategories();
       setEditId(null);
       setForm({ category_name: '' });
     } catch (e) {
@@ -82,6 +135,8 @@ const AdminCategoriesPage = () => {
     try {
       await categoryApi.adminDelete(id);
       setCategories(prev => prev.filter(c => c.category_id !== id));
+      setTotal(prev => Math.max(0, prev - 1));
+      reloadCategories();
     } catch (e) {
       console.error('Failed to delete category', e);
     }
@@ -96,6 +151,7 @@ const AdminCategoriesPage = () => {
     try {
       const updated = await categoryApi.adminUpdate(id, { category_name: cat.category_name, is_active: !cat.is_active });
       setCategories(prev => prev.map(c => c.category_id === id ? updated : c));
+      reloadCategories();
     } catch (e) {
       console.error('Failed to toggle category', e);
     }
@@ -115,7 +171,9 @@ const AdminCategoriesPage = () => {
           </div>
           <div>
             <h1 className="text-xl font-bold text-foreground">Business Categories</h1>
-            <p className="text-sm text-muted-foreground">Master list managed by Super Admin</p>
+            <p className="text-sm text-muted-foreground">
+              {loading && total === 0 ? 'Loading categories...' : `${total.toLocaleString()} categories managed by Super Admin`}
+            </p>
           </div>
         </div>
         <Button
@@ -137,7 +195,11 @@ const AdminCategoriesPage = () => {
       </motion.div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 relative z-10">
-        {filtered.map((cat, i) => {
+        {loading && categories.length === 0 ? (
+          <div className="col-span-full p-12 text-center text-muted-foreground glass-card rounded-2xl">
+            Loading categories...
+          </div>
+        ) : categories.map((cat, i) => {
           const grad = cardGradients[i % cardGradients.length];
           return (
             <motion.div key={cat.category_id} initial={{ opacity: 0, y: 15, scale: 0.95 }} animate={{ opacity: 1, y: 0, scale: 1 }} transition={{ delay: 0.15 + i * 0.05 }} whileHover={{ scale: 1.02, y: -2 }}
@@ -198,6 +260,44 @@ const AdminCategoriesPage = () => {
             </motion.div>
           );
         })}
+      </div>
+      {!loading && categories.length === 0 && (
+        <div className="p-12 text-center text-muted-foreground glass-card rounded-2xl relative z-10">
+          No categories found
+        </div>
+      )}
+
+      <div className="relative z-10 flex flex-col gap-3 rounded-2xl border border-white/40 bg-card/70 px-4 py-3 shadow-sm backdrop-blur sm:flex-row sm:items-center sm:justify-between dark:border-white/10">
+        <p className="text-xs text-muted-foreground">
+          Showing {firstVisible.toLocaleString()}-{lastVisible.toLocaleString()} of {total.toLocaleString()}
+        </p>
+        <div className="flex items-center gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => setPage(current => Math.max(0, current - 1))}
+            disabled={!canGoPrevious || loading}
+            className="h-9 gap-1"
+          >
+            <ChevronLeft className="h-4 w-4" />
+            Previous
+          </Button>
+          <span className="min-w-[92px] text-center text-xs font-medium text-muted-foreground">
+            Page {Math.min(page + 1, totalPages)} / {totalPages}
+          </span>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => setPage(current => current + 1)}
+            disabled={!canGoNext || loading}
+            className="h-9 gap-1"
+          >
+            Next
+            <ChevronRight className="h-4 w-4" />
+          </Button>
+        </div>
       </div>
 
       <AnimatePresence>

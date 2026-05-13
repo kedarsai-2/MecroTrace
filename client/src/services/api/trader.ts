@@ -1,5 +1,4 @@
 import type { Trader } from '@/types/models';
-import { API_BASE } from './http';
 import { apiFetch } from './http';
 
 type TraderDTO = {
@@ -27,6 +26,11 @@ type TraderDTO = {
   approval_decision_at?: string | null;
   active?: boolean;
   presetEnabled?: boolean;
+};
+
+export type TraderListPage = {
+  traders: Trader[];
+  total: number;
 };
 
 function mapDtoToTrader(dto: TraderDTO): Trader {
@@ -71,13 +75,35 @@ export const traderApi = {
 
   /** Admin: list traders (GET /api/admin/traders). */
   async listForAdmin(params: { page?: number; size?: number } = {}): Promise<Trader[]> {
+    const page = await this.listForAdminPage(params);
+    return page.traders;
+  },
+
+  /** Admin: paginated trader list (GET /api/admin/traders). */
+  async listForAdminPage(params: {
+    page?: number;
+    size?: number;
+    q?: string;
+    approvalStatus?: Trader['approval_status'] | 'ALL';
+  } = {}): Promise<TraderListPage> {
     const searchParams = new URLSearchParams();
     searchParams.set('page', String(params.page ?? 0));
     searchParams.set('size', String(params.size ?? 100));
+    searchParams.set('sort', 'createdAt,desc');
+    if (params.q?.trim()) {
+      searchParams.set('q', params.q.trim());
+    }
+    if (params.approvalStatus && params.approvalStatus !== 'ALL') {
+      searchParams.set('approvalStatus.equals', params.approvalStatus);
+    }
     const res = await apiFetch(`/admin/traders?${searchParams.toString()}`, { method: 'GET' });
     if (!res.ok) throw new Error('Failed to load traders');
     const data = (await res.json()) as TraderDTO[];
-    return (Array.isArray(data) ? data : []).map(mapDtoToTrader);
+    const traders = (Array.isArray(data) ? data : []).map(mapDtoToTrader);
+    return {
+      traders,
+      total: Number(res.headers.get('X-Total-Count') ?? traders.length),
+    };
   },
 
   /** Admin: approve trader (PATCH /api/admin/traders/{id}/approve). */
@@ -98,13 +124,27 @@ export const traderApi = {
 
   /** Admin: list inactive traders (GET /api/admin/traders/inactive). */
   async listInactive(params: { page?: number; size?: number } = {}): Promise<Trader[]> {
+    const page = await this.listInactivePage(params);
+    return page.traders;
+  },
+
+  /** Admin: paginated inactive trader list (GET /api/admin/traders/inactive). */
+  async listInactivePage(params: { page?: number; size?: number; q?: string } = {}): Promise<TraderListPage> {
     const searchParams = new URLSearchParams();
     searchParams.set('page', String(params.page ?? 0));
     searchParams.set('size', String(params.size ?? 100));
+    searchParams.set('sort', 'createdAt,desc');
+    if (params.q?.trim()) {
+      searchParams.set('q', params.q.trim());
+    }
     const res = await apiFetch(`/admin/traders/inactive?${searchParams.toString()}`, { method: 'GET' });
     if (!res.ok) throw new Error('Failed to load inactive traders');
     const data = (await res.json()) as TraderDTO[];
-    return (Array.isArray(data) ? data : []).map(mapDtoToTrader);
+    const traders = (Array.isArray(data) ? data : []).map(mapDtoToTrader);
+    return {
+      traders,
+      total: Number(res.headers.get('X-Total-Count') ?? traders.length),
+    };
   },
 
   /** Admin: activate trader (PATCH /api/admin/traders/{id}/activate). Returns 204, no body. */
@@ -136,4 +176,3 @@ export const traderApi = {
     return mapDtoToTrader(dto);
   },
 };
-

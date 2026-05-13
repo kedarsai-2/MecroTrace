@@ -45,7 +45,14 @@ public class AdminCategorySpecResource {
     }
 
     @GetMapping("")
-    public ResponseEntity<List<BusinessCategoryDTO>> list(BusinessCategoryCriteria criteria, Pageable pageable) {
+    public ResponseEntity<List<BusinessCategoryDTO>> list(
+        BusinessCategoryCriteria criteria,
+        @RequestParam(name = "q", required = false, defaultValue = "") String q,
+        Pageable pageable
+    ) {
+        if (q != null && !q.isBlank()) {
+            criteria.categoryName().setContains(q.trim());
+        }
         Page<BusinessCategoryDTO> page = businessCategoryQueryService.findByCriteria(criteria, pageable);
         return ResponseEntity.ok()
             .headers(PaginationUtil.generatePaginationHttpHeaders(ServletUriComponentsBuilder.fromCurrentRequest(), page))
