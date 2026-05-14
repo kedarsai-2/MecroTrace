@@ -104,7 +104,7 @@ public class ContactAuthResource {
     @Value("${jhipster.security.authentication.jwt.token-validity-in-seconds-for-remember-me:0}")
     private long tokenValidityInSecondsForRememberMe;
 
-    @Value("${application.security.access-token-validity-in-seconds:1800}")
+    @Value("${application.security.access-token-validity-in-seconds:86400}")
     private long accessTokenValidityInSeconds;
 
     @Value("${application.security.cookie.secure:true}")

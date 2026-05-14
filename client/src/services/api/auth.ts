@@ -1,6 +1,6 @@
 import type { Trader, User } from '@/types/models';
-import { apiFetch, captureAuthTokenFromResponse, captureRefreshTokenFromResponse, REFRESH_TOKEN_HEADER } from './http';
-import { getTraderRefreshToken, setTraderRefreshToken, setTraderToken } from './tokenStore';
+import { apiFetch, captureAuthTokenFromResponse, captureRefreshTokenFromResponse, refreshSessionForKind, REFRESH_TOKEN_HEADER } from './http';
+import { getTraderRefreshToken, setTraderRefreshToken } from './tokenStore';
 
 /** Default message when we cannot show a specific validation message. */
 const REGISTRATION_FAILED = 'Registration failed. Please try again.';
@@ -490,27 +490,6 @@ export const authApi = {
   },
 
   async refreshSession(): Promise<boolean> {
-    const refreshToken = await getTraderRefreshToken();
-    const res = await apiFetch('/auth/refresh', {
-      method: 'POST',
-      headers: refreshToken ? { [REFRESH_TOKEN_HEADER]: refreshToken } : undefined,
-      body: JSON.stringify(refreshToken ? { refresh_token: refreshToken } : {}),
-    });
-
-    if (!res.ok) {
-      await setTraderToken(null);
-      await setTraderRefreshToken(null);
-      return false;
-    }
-
-    const data = await res.json().catch(() => ({}));
-    const tokenFromBody = (data as any)?.id_token ?? (data as any)?.token;
-    if (typeof tokenFromBody === 'string' && tokenFromBody.trim()) {
-      await setTraderToken(tokenFromBody.trim());
-    } else {
-      await captureAuthTokenFromResponse(res, 'trader');
-    }
-    await captureRefreshTokenFromResponse(res, 'trader', (data as any)?.refresh_token);
-    return true;
+    return refreshSessionForKind('trader');
   },
 };

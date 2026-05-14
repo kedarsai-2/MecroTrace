@@ -231,4 +231,7 @@ jhipster:
 # https://www.jhipster.tech/common-application-properties/
 # ===================================================================
 
-# application:
+application:
+  security:
+    access-token-validity-in-seconds: 86400
+    refresh-token-rotation-grace-seconds: 15

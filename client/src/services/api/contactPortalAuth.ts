@@ -1,4 +1,4 @@
-import { apiFetch, captureAuthTokenFromResponse, captureRefreshTokenFromResponse, REFRESH_TOKEN_HEADER } from './http';
+import { apiFetch, captureAuthTokenFromResponse, captureRefreshTokenFromResponse, refreshSessionForKind, REFRESH_TOKEN_HEADER } from './http';
 import { getContactRefreshToken, setContactRefreshToken, setContactToken } from './tokenStore';
 
 type ProblemDetails = {
@@ -359,27 +359,6 @@ export const contactPortalAuthApi = {
   },
 
   async refreshSession(): Promise<boolean> {
-    const refreshToken = await getContactRefreshToken();
-    const res = await apiFetch('/portal/auth/refresh', {
-      method: 'POST',
-      headers: refreshToken ? { [REFRESH_TOKEN_HEADER]: refreshToken } : undefined,
-      body: JSON.stringify(refreshToken ? { refresh_token: refreshToken } : {}),
-    });
-
-    if (!res.ok) {
-      await setContactToken(null);
-      await setContactRefreshToken(null);
-      return false;
-    }
-
-    const data = await res.json().catch(() => ({}));
-    const tokenFromBody = (data as any)?.token ?? (data as any)?.id_token;
-    if (typeof tokenFromBody === 'string' && tokenFromBody.trim()) {
-      await setContactToken(tokenFromBody.trim());
-    } else {
-      await captureAuthTokenFromResponse(res, 'contact');
-    }
-    await captureRefreshTokenFromResponse(res, 'contact', (data as any)?.refresh_token);
-    return true;
+    return refreshSessionForKind('contact');
   },
 };

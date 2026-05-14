@@ -24,6 +24,9 @@ export const API_BASE = RAW_API_URL.replace(/\/+$/, '').endsWith('/api')
 
 export type TokenKind = 'trader' | 'admin' | 'contact';
 export const REFRESH_TOKEN_HEADER = 'X-Merco-Refresh-Token';
+type RefreshTokenKind = Exclude<TokenKind, 'admin'>;
+
+const refreshPromises: Partial<Record<RefreshTokenKind, Promise<boolean>>> = {};
 
 function resolveTokenKind(path: string): TokenKind {
   if (path.startsWith('/admin/')) {
@@ -77,7 +80,7 @@ function shouldAttemptRefresh(path: string, kind: TokenKind, response: Response)
   return true;
 }
 
-async function refreshAccessToken(kind: Exclude<TokenKind, 'admin'>): Promise<boolean> {
+async function requestAccessTokenRefresh(kind: RefreshTokenKind): Promise<boolean> {
   const refreshToken = kind === 'contact' ? await getContactRefreshToken() : await getTraderRefreshToken();
   const path = kind === 'contact' ? '/portal/auth/refresh' : '/auth/refresh';
   const headers = new Headers({ 'Content-Type': 'application/json' });
@@ -114,6 +117,21 @@ async function refreshAccessToken(kind: Exclude<TokenKind, 'admin'>): Promise<bo
   }
   await captureRefreshTokenFromResponse(res, kind, (data as any)?.refresh_token);
   return true;
+}
+
+export async function refreshSessionForKind(kind: RefreshTokenKind): Promise<boolean> {
+  const existing = refreshPromises[kind];
+  if (existing) {
+    return existing;
+  }
+
+  const refreshPromise = requestAccessTokenRefresh(kind).finally(() => {
+    if (refreshPromises[kind] === refreshPromise) {
+      delete refreshPromises[kind];
+    }
+  });
+  refreshPromises[kind] = refreshPromise;
+  return refreshPromise;
 }
 
 async function performFetch(path: string, init: RequestInit, kind: TokenKind): Promise<Response> {
@@ -155,7 +173,7 @@ export async function apiFetch(path: string, init: RequestInit = {}): Promise<Re
     return first;
   }
 
-  const refreshed = await refreshAccessToken(kind);
+  const refreshed = await refreshSessionForKind(kind);
   if (!refreshed) {
     return first;
   }
