@@ -80,6 +80,19 @@ function normalizeArrivalSearchQuery(query: string): string {
   return query.trim().toLowerCase();
 }
 
+/** Digits + at most one '.' — avoids native number spinners and accidental scroll-to-change. */
+function sanitizeDecimalNumericInput(raw: string): string {
+  const cleaned = raw.replace(/[^\d.]/g, '');
+  const firstDot = cleaned.indexOf('.');
+  if (firstDot === -1) return cleaned;
+  return cleaned.slice(0, firstDot + 1) + cleaned.slice(firstDot + 1).replace(/\./g, '');
+}
+
+/** Whole digits only (e.g. bag counts). */
+function sanitizeIntegerNumericInput(raw: string): string {
+  return raw.replace(/\D/g, '');
+}
+
 function arrivalSearchFieldIncludes(fields: Array<string | number | null | undefined>, query: string): boolean {
   return fields.some((field) => {
     if (field == null) return false;
@@ -1798,7 +1811,7 @@ const ArrivalsPage = () => {
     if (!freightRate || !freightRate.trim()) return false;
     const fr = parseFloat(freightRate);
     if (Number.isNaN(fr)) return true;
-    return fr < 0 || fr > 100000;
+    return fr < 0;
   }, [noRental, freightRate]);
 
   const isFreightKgsInvalid = useMemo(() => {
@@ -3471,24 +3484,45 @@ const ArrivalsPage = () => {
                           <label className={cn("text-[10px] mb-1 block", isLoadedWeightInvalid ? "text-red-500 font-bold" : "text-muted-foreground")}>
                             Loaded Weight (kg) {isLoadedWeightInvalid && '⚠ 0–100,000'}
                           </label>
-                          <Input type="number" placeholder="0" value={loadedWeight} onChange={e => setLoadedWeight(e.target.value)}
+                          <Input
+                            type="text"
+                            inputMode="decimal"
+                            autoComplete="off"
+                            placeholder="0"
+                            value={loadedWeight}
+                            onChange={e => setLoadedWeight(sanitizeDecimalNumericInput(e.target.value))}
                             ref={loadedWeightInputRef}
-                            className={cn("h-11 rounded-xl text-sm font-medium", isLoadedWeightInvalid && "border-red-500 ring-2 ring-red-500/30 bg-red-50 dark:bg-red-950/20")} min={0} max={100000} step="0.01" />
+                            className={cn("h-11 rounded-xl text-sm font-medium", isLoadedWeightInvalid && "border-red-500 ring-2 ring-red-500/30 bg-red-50 dark:bg-red-950/20")}
+                          />
                         </div>
                         <div>
                           <label className={cn("text-[10px] mb-1 block", isEmptyWeightInvalid ? "text-red-500 font-bold" : "text-muted-foreground")}>
                             Empty Weight (kg) {isEmptyWeightInvalid && (emptyWeight?.trim() ? (parseFloat(emptyWeight) > (parseFloat(loadedWeight) || 0) ? '⚠ ≤ Loaded' : '⚠ 0–100,000') : '')}
                           </label>
-                          <Input type="number" placeholder="0" value={emptyWeight} onChange={e => setEmptyWeight(e.target.value)}
-                            className={cn("h-11 rounded-xl text-sm font-medium", isEmptyWeightInvalid && "border-red-500 ring-2 ring-red-500/30 bg-red-50 dark:bg-red-950/20")} min={0} max={100000} step="0.01" />
+                          <Input
+                            type="text"
+                            inputMode="decimal"
+                            autoComplete="off"
+                            placeholder="0"
+                            value={emptyWeight}
+                            onChange={e => setEmptyWeight(sanitizeDecimalNumericInput(e.target.value))}
+                            className={cn("h-11 rounded-xl text-sm font-medium", isEmptyWeightInvalid && "border-red-500 ring-2 ring-red-500/30 bg-red-50 dark:bg-red-950/20")}
+                          />
                         </div>
                       </div>
                       <div className="mb-3">
                         <label className={cn("text-[10px] mb-1 block", isDeductedWeightInvalid ? "text-red-500 font-bold" : "text-muted-foreground")}>
                           Deducted Weight (Fuel/Dust) (kg) — optional {isDeductedWeightInvalid && '⚠ 0–10,000'}
                         </label>
-                        <Input type="number" placeholder="0" value={deductedWeight} onChange={e => setDeductedWeight(e.target.value)}
-                          className={cn("h-11 rounded-xl text-sm font-medium", isDeductedWeightInvalid && "border-red-500 ring-2 ring-red-500/30 bg-red-50 dark:bg-red-950/20")} min={0} max={10000} step="0.01" />
+                        <Input
+                          type="text"
+                          inputMode="decimal"
+                          autoComplete="off"
+                          placeholder="0"
+                          value={deductedWeight}
+                          onChange={e => setDeductedWeight(sanitizeDecimalNumericInput(e.target.value))}
+                          className={cn("h-11 rounded-xl text-sm font-medium", isDeductedWeightInvalid && "border-red-500 ring-2 ring-red-500/30 bg-red-50 dark:bg-red-950/20")}
+                        />
                       </div>
                       {step === 1 && !isLotsFlow && (
                         <div className="grid grid-cols-2 gap-2">
@@ -3606,18 +3640,32 @@ const ArrivalsPage = () => {
                           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 sm:gap-3 mb-3">
                             <div className={cn(freightMethod === 'BY_WEIGHT' ? '' : 'sm:col-span-2')}>
                               <label className={cn("text-[10px] mb-1 block", isFreightRateInvalid ? "text-red-500 font-bold" : "text-muted-foreground")}>
-                                Rate {isFreightRateInvalid && '⚠ 0–100,000'}
+                                Rate {isFreightRateInvalid && '⚠ invalid'}
                               </label>
-                              <Input type="number" placeholder="0" value={freightRate} onChange={e => setFreightRate(e.target.value)}
-                                className={cn("h-11 rounded-xl text-sm font-medium", isFreightRateInvalid && "border-red-500 ring-2 ring-red-500/30 bg-red-50 dark:bg-red-950/20")} min={0} max={100000} step="0.01" />
+                              <Input
+                                type="text"
+                                inputMode="decimal"
+                                autoComplete="off"
+                                placeholder="0"
+                                value={freightRate}
+                                onChange={e => setFreightRate(sanitizeDecimalNumericInput(e.target.value))}
+                                className={cn("h-11 rounded-xl text-sm font-medium", isFreightRateInvalid && "border-red-500 ring-2 ring-red-500/30 bg-red-50 dark:bg-red-950/20")}
+                              />
                             </div>
                             {freightMethod === 'BY_WEIGHT' && (
                               <div>
                                 <label className={cn("text-[10px] mb-1 block", isFreightKgsInvalid ? "text-red-500 font-bold" : "text-muted-foreground")}>
                                   Kgs {isFreightKgsInvalid && '⚠ > 0'}
                                 </label>
-                                <Input type="number" placeholder="1" value={freightKgs} onChange={e => setFreightKgs(e.target.value)}
-                                  className={cn("h-11 rounded-xl text-sm font-medium", isFreightKgsInvalid && "border-red-500 ring-2 ring-red-500/30 bg-red-50 dark:bg-red-950/20")} min={0.01} max={100000} step="0.01" />
+                                <Input
+                                  type="text"
+                                  inputMode="decimal"
+                                  autoComplete="off"
+                                  placeholder="1"
+                                  value={freightKgs}
+                                  onChange={e => setFreightKgs(sanitizeDecimalNumericInput(e.target.value))}
+                                  className={cn("h-11 rounded-xl text-sm font-medium", isFreightKgsInvalid && "border-red-500 ring-2 ring-red-500/30 bg-red-50 dark:bg-red-950/20")}
+                                />
                               </div>
                             )}
                             <div className="rounded-xl bg-amber-50 dark:bg-amber-950/20 p-2 sm:p-3 text-center border border-amber-200/50 dark:border-amber-800/30 flex flex-col justify-center">
@@ -3629,8 +3677,15 @@ const ArrivalsPage = () => {
                             <label className={cn("text-[10px] mb-1 block", isAdvancePaidInvalid ? "text-red-500 font-bold" : "text-muted-foreground")}>
                               Advance Paid (to driver) — optional {isAdvancePaidInvalid && '⚠ 0–1,000,000'}
                             </label>
-                            <Input type="number" placeholder="0" value={advancePaid} onChange={e => setAdvancePaid(e.target.value)}
-                              className={cn("h-11 rounded-xl text-sm font-medium", isAdvancePaidInvalid && "border-red-500 ring-2 ring-red-500/30 bg-red-50 dark:bg-red-950/20")} min={0} max={1000000} step="0.01" />
+                            <Input
+                              type="text"
+                              inputMode="decimal"
+                              autoComplete="off"
+                              placeholder="0"
+                              value={advancePaid}
+                              onChange={e => setAdvancePaid(sanitizeDecimalNumericInput(e.target.value))}
+                              className={cn("h-11 rounded-xl text-sm font-medium", isAdvancePaidInvalid && "border-red-500 ring-2 ring-red-500/30 bg-red-50 dark:bg-red-950/20")}
+                            />
                           </div>
                           <div>
                             <label className="text-[10px] text-muted-foreground mb-1 block">Narration</label>
@@ -3823,14 +3878,24 @@ const ArrivalsPage = () => {
                                   {/* Bags */}
                                   <div className="w-[5.5rem] sm:w-[6rem] md:w-[5.5rem] lg:w-[7rem] xl:w-[8rem] flex-none">
                                     <Input
-                                      type="number"
+                                      type="text"
+                                      inputMode="numeric"
+                                      autoComplete="off"
                                       placeholder="Bags"
                                       value={addLotForm.bags}
-                                      onChange={e => setAddLotForm(prev => prev ? { ...prev, bags: e.target.value, errors: { ...prev.errors, bags: undefined } } : null)}
+                                      onChange={e =>
+                                        setAddLotForm(prev =>
+                                          prev
+                                            ? {
+                                                ...prev,
+                                                bags: sanitizeIntegerNumericInput(e.target.value),
+                                                errors: { ...prev.errors, bags: undefined },
+                                              }
+                                            : null,
+                                        )
+                                      }
                                       onFocus={() => handleLotEntryFieldFocus(seller.seller_vehicle_id)}
                                       className={cn("h-10 sm:h-9 text-sm rounded-lg focus-visible:ring-0 focus-visible:ring-offset-0 focus-visible:border-primary focus-visible:shadow-[0_0_0_2px_hsl(var(--ring)/0.25)]", addLotForm.errors.bags && "border-red-500 ring-2 ring-red-500/30 bg-red-50 dark:bg-red-950/20")}
-                                      min={1}
-                                      max={100000}
                                     />
                                     {addLotForm.errors.bags && <p className="text-[10px] text-red-500 mt-0.5">{addLotForm.errors.bags}</p>}
                                   </div>
@@ -4521,24 +4586,45 @@ const ArrivalsPage = () => {
                           <label className={cn("text-[10px] mb-1 block", isLoadedWeightInvalid ? "text-red-500 font-bold" : "text-muted-foreground")}>
                             Loaded (kg) {isLoadedWeightInvalid && '⚠ 0–100k'}
                           </label>
-                          <Input type="number" placeholder="0" value={loadedWeight} onChange={e => setLoadedWeight(e.target.value)}
+                          <Input
+                            type="text"
+                            inputMode="decimal"
+                            autoComplete="off"
+                            placeholder="0"
+                            value={loadedWeight}
+                            onChange={e => setLoadedWeight(sanitizeDecimalNumericInput(e.target.value))}
                             ref={loadedWeightInputRef}
-                            className={cn("h-12 rounded-xl text-base font-medium", isLoadedWeightInvalid && "border-red-500 ring-2 ring-red-500/30 bg-red-50 dark:bg-red-950/20")} min={0} max={100000} step="0.01" />
+                            className={cn("h-12 rounded-xl text-base font-medium", isLoadedWeightInvalid && "border-red-500 ring-2 ring-red-500/30 bg-red-50 dark:bg-red-950/20")}
+                          />
                         </div>
                         <div>
                           <label className={cn("text-[10px] mb-1 block", isEmptyWeightInvalid ? "text-red-500 font-bold" : "text-muted-foreground")}>
                             Empty (kg) {isEmptyWeightInvalid && (emptyWeight?.trim() ? (parseFloat(emptyWeight) > (parseFloat(loadedWeight) || 0) ? '⚠ ≤ Loaded' : '⚠ 0–100k') : '')}
                           </label>
-                          <Input type="number" placeholder="0" value={emptyWeight} onChange={e => setEmptyWeight(e.target.value)}
-                            className={cn("h-12 rounded-xl text-base font-medium", isEmptyWeightInvalid && "border-red-500 ring-2 ring-red-500/30 bg-red-50 dark:bg-red-950/20")} min={0} max={100000} step="0.01" />
+                          <Input
+                            type="text"
+                            inputMode="decimal"
+                            autoComplete="off"
+                            placeholder="0"
+                            value={emptyWeight}
+                            onChange={e => setEmptyWeight(sanitizeDecimalNumericInput(e.target.value))}
+                            className={cn("h-12 rounded-xl text-base font-medium", isEmptyWeightInvalid && "border-red-500 ring-2 ring-red-500/30 bg-red-50 dark:bg-red-950/20")}
+                          />
                         </div>
                       </div>
                       <div className="mb-3">
                         <label className={cn("text-[10px] mb-1 block", isDeductedWeightInvalid ? "text-red-500 font-bold" : "text-muted-foreground")}>
                           Deducted (kg) optional {isDeductedWeightInvalid && '⚠ 0–10,000'}
                         </label>
-                        <Input type="number" placeholder="0" value={deductedWeight} onChange={e => setDeductedWeight(e.target.value)}
-                          className={cn("h-12 rounded-xl text-base font-medium", isDeductedWeightInvalid && "border-red-500 ring-2 ring-red-500/30 bg-red-50 dark:bg-red-950/20")} min={0} max={10000} step="0.01" />
+                        <Input
+                          type="text"
+                          inputMode="decimal"
+                          autoComplete="off"
+                          placeholder="0"
+                          value={deductedWeight}
+                          onChange={e => setDeductedWeight(sanitizeDecimalNumericInput(e.target.value))}
+                          className={cn("h-12 rounded-xl text-base font-medium", isDeductedWeightInvalid && "border-red-500 ring-2 ring-red-500/30 bg-red-50 dark:bg-red-950/20")}
+                        />
                       </div>
                       {step === 1 && !isLotsFlow && (
                         <div className="grid grid-cols-2 gap-2">
@@ -4656,18 +4742,32 @@ const ArrivalsPage = () => {
                           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 sm:gap-3 mb-3">
                             <div className={cn(freightMethod === 'BY_WEIGHT' ? '' : 'sm:col-span-2')}>
                               <label className={cn("text-[10px] mb-1 block", isFreightRateInvalid ? "text-red-500 font-bold" : "text-muted-foreground")}>
-                                Rate {isFreightRateInvalid && '⚠ 0–100k'}
+                                Rate {isFreightRateInvalid && '⚠ invalid'}
                               </label>
-                              <Input type="number" placeholder="0" value={freightRate} onChange={e => setFreightRate(e.target.value)}
-                                className={cn("h-12 rounded-xl text-base font-medium", isFreightRateInvalid && "border-red-500 ring-2 ring-red-500/30 bg-red-50 dark:bg-red-950/20")} min={0} max={100000} step="0.01" />
+                              <Input
+                                type="text"
+                                inputMode="decimal"
+                                autoComplete="off"
+                                placeholder="0"
+                                value={freightRate}
+                                onChange={e => setFreightRate(sanitizeDecimalNumericInput(e.target.value))}
+                                className={cn("h-12 rounded-xl text-base font-medium", isFreightRateInvalid && "border-red-500 ring-2 ring-red-500/30 bg-red-50 dark:bg-red-950/20")}
+                              />
                             </div>
                             {freightMethod === 'BY_WEIGHT' && (
                               <div>
                                 <label className={cn("text-[10px] mb-1 block", isFreightKgsInvalid ? "text-red-500 font-bold" : "text-muted-foreground")}>
                                   Kgs {isFreightKgsInvalid && '⚠ > 0'}
                                 </label>
-                                <Input type="number" placeholder="1" value={freightKgs} onChange={e => setFreightKgs(e.target.value)}
-                                  className={cn("h-12 rounded-xl text-base font-medium", isFreightKgsInvalid && "border-red-500 ring-2 ring-red-500/30 bg-red-50 dark:bg-red-950/20")} min={0.01} max={100000} step="0.01" />
+                                <Input
+                                  type="text"
+                                  inputMode="decimal"
+                                  autoComplete="off"
+                                  placeholder="1"
+                                  value={freightKgs}
+                                  onChange={e => setFreightKgs(sanitizeDecimalNumericInput(e.target.value))}
+                                  className={cn("h-12 rounded-xl text-base font-medium", isFreightKgsInvalid && "border-red-500 ring-2 ring-red-500/30 bg-red-50 dark:bg-red-950/20")}
+                                />
                               </div>
                             )}
                           </div>
@@ -4679,8 +4779,15 @@ const ArrivalsPage = () => {
                             <label className={cn("text-[10px] mb-1 block", isAdvancePaidInvalid ? "text-red-500 font-bold" : "text-muted-foreground")}>
                               Advance (optional) {isAdvancePaidInvalid && '⚠ 0–1M'}
                             </label>
-                            <Input type="number" placeholder="0" value={advancePaid} onChange={e => setAdvancePaid(e.target.value)}
-                              className={cn("h-12 rounded-xl text-base font-medium", isAdvancePaidInvalid && "border-red-500 ring-2 ring-red-500/30 bg-red-50 dark:bg-red-950/20")} min={0} max={1000000} step="0.01" />
+                            <Input
+                              type="text"
+                              inputMode="decimal"
+                              autoComplete="off"
+                              placeholder="0"
+                              value={advancePaid}
+                              onChange={e => setAdvancePaid(sanitizeDecimalNumericInput(e.target.value))}
+                              className={cn("h-12 rounded-xl text-base font-medium", isAdvancePaidInvalid && "border-red-500 ring-2 ring-red-500/30 bg-red-50 dark:bg-red-950/20")}
+                            />
                           </div>
                           <div>
                             <label className="text-[10px] text-muted-foreground mb-1 block">Narration</label>
@@ -4912,17 +5019,27 @@ const ArrivalsPage = () => {
                                   <div className="min-w-0 space-y-1">
                                     <label className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Bags</label>
                                     <Input
-                                      type="number"
+                                      type="text"
+                                      inputMode="numeric"
+                                      autoComplete="off"
                                       placeholder="Bags"
                                       value={addLotForm.bags}
-                                      onChange={e => setAddLotForm(prev => prev ? { ...prev, bags: e.target.value, errors: { ...prev.errors, bags: undefined } } : null)}
+                                      onChange={e =>
+                                        setAddLotForm(prev =>
+                                          prev
+                                            ? {
+                                                ...prev,
+                                                bags: sanitizeIntegerNumericInput(e.target.value),
+                                                errors: { ...prev.errors, bags: undefined },
+                                              }
+                                            : null,
+                                        )
+                                      }
                                       onFocus={() => handleLotEntryFieldFocus(seller.seller_vehicle_id)}
                                       className={cn(
                                         "h-11 w-full min-w-0 rounded-xl text-sm focus-visible:border-primary focus-visible:shadow-[0_0_0_2px_hsl(var(--ring)/0.25)] focus-visible:ring-0 focus-visible:ring-offset-0",
                                         addLotForm.errors.bags && "border-red-500 bg-red-50 ring-2 ring-red-500/30 dark:bg-red-950/20",
                                       )}
-                                      min={1}
-                                      max={100000}
                                     />
                                     {addLotForm.errors.bags && <p className="text-[9px] leading-tight text-red-500">{addLotForm.errors.bags}</p>}
                                   </div>
