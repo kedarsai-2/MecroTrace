@@ -40,7 +40,7 @@ import ContactPortalStatementsPage from "./pages/ContactPortalStatementsPage";
 import ContactPortalSettlementsPage from "./pages/ContactPortalSettlementsPage";
 import ContactPortalProfilePage from "./pages/ContactPortalProfilePage";
 
-// Eagerly loaded — all trader routes for instant navigation (no white flash)
+// Eagerly loaded trader routes. Very large routes can opt into local Suspense fallbacks below.
 import OnboardingScreen from "./pages/OnboardingScreen";
 import RegisterScreen from "./pages/RegisterScreen";
 import TraderSetupPage from "./pages/TraderSetupPage";
@@ -56,7 +56,6 @@ import LogisticsPage from "./pages/LogisticsPage";
 import WeighingPage from "./pages/WeighingPage";
 import SummaryPage from "./pages/SummaryPage";
 import WritersPadPage from "./pages/WritersPadPage";
-import SettlementPage from "./pages/SettlementPage";
 import BillingPage from "./pages/BillingPage";
 import AccountingPage from "./pages/AccountingPage";
 import VouchersPage from "./pages/VouchersPage";
@@ -96,11 +95,18 @@ const AdminUserManagementPage = lazy(() => import("./pages/admin/settings/AdminU
 const AdminRoleAllocationPage = lazy(() => import("./pages/admin/settings/AdminRoleAllocationPage"));
 const AdminRbacSettingsPage = lazy(() => import("./pages/admin/settings/RbacSettingsPage"));
 const AdminGlobalPresetSettingsPage = lazy(() => import("./pages/admin/settings/AdminGlobalPresetSettingsPage"));
+const SettlementPage = lazy(() => import("./pages/SettlementPage"));
 
 const queryClient = new QueryClient();
 
 const LazyFallback = () => (
   <div className="min-h-screen flex items-center justify-center bg-background">
+    <div className="w-8 h-8 border-3 border-primary border-t-transparent rounded-full animate-spin" />
+  </div>
+);
+
+const SettlementRouteFallback = () => (
+  <div className="min-h-[calc(100dvh-4rem)] flex items-center justify-center bg-background">
     <div className="w-8 h-8 border-3 border-primary border-t-transparent rounded-full animate-spin" />
   </div>
 );
@@ -170,7 +176,14 @@ const router = createBrowserRouter(
         <Route path="/logistics" element={<LogisticsPage />} />
         <Route path="/weighing" element={<WeighingPage />} />
         <Route path="/writers-pad" element={<WritersPadPage />} />
-        <Route path="/settlement" element={<SettlementPage />} />
+        <Route
+          path="/settlement"
+          element={
+            <Suspense fallback={<SettlementRouteFallback />}>
+              <SettlementPage />
+            </Suspense>
+          }
+        />
         <Route path="/billing" element={<BillingPage />} />
         <Route path="/accounting" element={<AccountingPage />} />
         <Route path="/vouchers" element={<VouchersPage />} />
