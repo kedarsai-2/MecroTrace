@@ -199,6 +199,7 @@ export function formatArrivalDeletionBlockerCodes(codes: string[]): string {
     AUCTION: 'Auction',
     AUCTION_SELF_SALE: 'Auction self-sale',
     SELF_SALE_CLOSURE: 'Self-sale closure',
+    SETTLEMENT_PATTI: 'Settlement patti',
     CDN: 'CDN',
     STOCK_PURCHASE: 'Stock purchase',
     WEIGHING: 'Weighing',
@@ -400,12 +401,14 @@ export const arrivalsApi = {
     if (payload.partially_completed !== undefined) body.partiallyCompleted = payload.partially_completed;
     if (payload.sellers !== undefined && payload.sellers.length > 0) {
       body.sellers = payload.sellers.map(s => ({
+        sellerVehicleId: s.seller_vehicle_id,
         contactId: s.contact_id !== undefined && s.contact_id !== null ? s.contact_id : null,
         sellerSerialNumber: s.seller_serial_number,
         sellerName: s.seller_name,
         sellerPhone: s.seller_phone,
         sellerMark: s.seller_mark,
         lots: s.lots.map(l => ({
+          id: l.lot_id,
           lotName: l.lot_name,
           lotSerialNumber: l.lot_serial_number,
           bagCount: l.quantity,

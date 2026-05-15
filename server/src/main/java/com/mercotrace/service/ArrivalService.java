@@ -85,6 +85,7 @@ public class ArrivalService {
     private final CdnItemRepository cdnItemRepository;
     private final StockPurchaseItemRepository stockPurchaseItemRepository;
     private final WriterPadSessionRepository writerPadSessionRepository;
+    private final PattiRepository pattiRepository;
 
     @PersistenceContext
     private EntityManager entityManager;
@@ -111,7 +112,8 @@ public class ArrivalService {
         SelfSaleClosureRepository selfSaleClosureRepository,
         CdnItemRepository cdnItemRepository,
         StockPurchaseItemRepository stockPurchaseItemRepository,
-        WriterPadSessionRepository writerPadSessionRepository
+        WriterPadSessionRepository writerPadSessionRepository,
+        PattiRepository pattiRepository
     ) {
         this.vehicleRepository = vehicleRepository;
         this.vehicleWeightRepository = vehicleWeightRepository;
@@ -135,6 +137,7 @@ public class ArrivalService {
         this.cdnItemRepository = cdnItemRepository;
         this.stockPurchaseItemRepository = stockPurchaseItemRepository;
         this.writerPadSessionRepository = writerPadSessionRepository;
+        this.pattiRepository = pattiRepository;
     }
 
     /**
@@ -798,7 +801,7 @@ public class ArrivalService {
                     if (existing == null || !Objects.equals(existing.getSellerVehicleId(), siv.getId())) {
                         throw new IllegalArgumentException("Lot does not belong to this arrival: " + lotDTO.getId());
                     }
-                    assertExistingLotUnchanged(traderId, existing, lotDTO, blockers);
+                    applyExistingLotAppendOnlyUpdate(traderId, existing, lotDTO, blockers);
                     seenExistingLots.add(existing.getId());
                     continue;
                 }
@@ -932,17 +935,35 @@ public class ArrivalService {
         }
     }
 
-    private void assertExistingLotUnchanged(Long traderId, Lot existing, ArrivalLotDTO incoming, List<ArrivalDeletionBlocker> blockers) {
+    private void applyExistingLotAppendOnlyUpdate(Long traderId, Lot existing, ArrivalLotDTO incoming, List<ArrivalDeletionBlocker> blockers) {
         Long incomingCommodityId = incoming.getCommodityName() != null && !incoming.getCommodityName().isBlank()
             ? resolveCommodityId(traderId, incoming.getCommodityName().trim())
             : null;
+        int existingBagCount = existing.getBagCount() != null ? existing.getBagCount() : 0;
+        int incomingBagCount = incoming.getBagCount();
         if (!sameText(existing.getLotName(), incoming.getLotName())
             || !Objects.equals(existing.getCommodityId(), incomingCommodityId)
-            || !Objects.equals(existing.getBagCount() != null ? existing.getBagCount() : 0, incoming.getBagCount())
             || !sameText(existing.getBrokerTag(), incoming.getBrokerTag())
-            || !sameText(existing.getVariant(), incoming.getVariant())) {
+            || !sameText(existing.getVariant(), incoming.getVariant())
+            || incomingBagCount < existingBagCount) {
             throwBlockedAppendOnly(blockers);
         }
+        if (incomingBagCount > existingBagCount && !canIncreaseLinkedArrivalLotQuantity(blockers)) {
+            throwBlockedAppendOnly(blockers);
+        }
+        if (incomingBagCount > existingBagCount) {
+            existing.setBagCount(incomingBagCount);
+            lotRepository.save(existing);
+        }
+    }
+
+    private boolean canIncreaseLinkedArrivalLotQuantity(List<ArrivalDeletionBlocker> blockers) {
+        return blockers.stream()
+            .allMatch(
+                blocker -> blocker == ArrivalDeletionBlocker.AUCTION ||
+                    blocker == ArrivalDeletionBlocker.AUCTION_SELF_SALE ||
+                    blocker == ArrivalDeletionBlocker.SELF_SALE_CLOSURE
+            );
     }
 
     private boolean sameText(String a, String b) {
@@ -954,10 +975,13 @@ public class ArrivalService {
     private void throwBlockedAppendOnly(List<ArrivalDeletionBlocker> blockers) {
         List<String> codes = blockers.stream().map(Enum::name).toList();
         String labels = blockers.stream().map(ArrivalDeletionBlocker::displayLabel).collect(Collectors.joining(", "));
+        String allowedAction = canIncreaseLinkedArrivalLotQuantity(blockers)
+            ? ". You can increase an existing lot's bag quantity or add a new lot, but linked lots cannot be decreased, deleted, or otherwise changed."
+            : ". Linked seller and lot details cannot be changed until those records are removed, reopened, or adjusted first.";
         throw new ArrivalDeletionBlockedException(
             "Existing seller or lot details cannot be changed because this arrival is already linked in: " +
                 labels +
-                ". You can add a new lot to the vehicle, but existing linked lots must stay unchanged.",
+                allowedAction,
             codes
         );
     }
@@ -1023,6 +1047,25 @@ public class ArrivalService {
         }
         if (selfSaleClosureRepository.existsActiveByTraderIdAndLotIdIn(traderId, lotIds)) {
             out.add(ArrivalDeletionBlocker.SELF_SALE_CLOSURE);
+        }
+        List<String> sellerIdsWithPrintedPatti = lotRepository
+            .findAllById(lotIds)
+            .stream()
+            .map(Lot::getSellerVehicleId)
+            .filter(Objects::nonNull)
+            .map(String::valueOf)
+            .distinct()
+            .toList();
+        if (
+            !sellerIdsWithPrintedPatti.isEmpty() &&
+            !pattiRepository
+                .findAllByTraderIdAndSellerIdInAndLockedAtIsNotNullAndReopenedAtIsNullAndInProgressFalse(
+                    traderId,
+                    sellerIdsWithPrintedPatti
+                )
+                .isEmpty()
+        ) {
+            out.add(ArrivalDeletionBlocker.SETTLEMENT_PATTI);
         }
         if (cdnItemRepository.existsActiveByLotIdIn(lotIds)) {
             out.add(ArrivalDeletionBlocker.CDN);

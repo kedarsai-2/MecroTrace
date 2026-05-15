@@ -9,6 +9,7 @@ public enum ArrivalDeletionBlocker {
     AUCTION,
     AUCTION_SELF_SALE,
     SELF_SALE_CLOSURE,
+    SETTLEMENT_PATTI,
     CDN,
     STOCK_PURCHASE,
     WEIGHING,
@@ -21,6 +22,7 @@ public enum ArrivalDeletionBlocker {
             case AUCTION -> "Auction";
             case AUCTION_SELF_SALE -> "Auction self-sale";
             case SELF_SALE_CLOSURE -> "Self-sale closure";
+            case SETTLEMENT_PATTI -> "Settlement patti";
             case CDN -> "CDN";
             case STOCK_PURCHASE -> "Stock purchase";
             case WEIGHING -> "Weighing";
