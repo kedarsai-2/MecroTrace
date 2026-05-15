@@ -19,6 +19,7 @@ import com.mercotrace.domain.ContactOtpToken;
 import com.mercotrace.repository.ContactOtpTokenRepository;
 import com.mercotrace.repository.ContactRepository;
 import com.mercotrace.security.SecurityUtils;
+import com.mercotrace.service.AuthRefreshSessionService;
 import com.mercotrace.web.rest.vm.ContactOtpRequestVM;
 import com.mercotrace.web.rest.vm.ContactOtpVerifyVM;
 import com.mercotrace.web.rest.vm.ContactRegisterVM;
@@ -388,6 +389,49 @@ class ContactAuthResourceTest {
                     .content(objectMapper.writeValueAsBytes(vm))
             )
             .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    @Transactional
+    void refresh_withJustRotatedContactTokenWithinGrace_returnsFreshTokens() throws Exception {
+        createLoginCapableContact("9876543210", "contact-refresh@example.com", "strongpass");
+
+        ContactRegisterVM vm = new ContactRegisterVM();
+        vm.setPhone("9876543210");
+        vm.setPassword("strongpass");
+
+        ResultActions loginResult = mockMvc
+            .perform(
+                post("/api/portal/auth/login")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content(objectMapper.writeValueAsBytes(vm))
+            )
+            .andExpect(status().isOk());
+        String oldRefreshToken = loginResult.andReturn().getResponse().getHeader(AuthRefreshSessionService.REFRESH_TOKEN_HEADER);
+
+        ResultActions firstRefresh = mockMvc
+            .perform(post("/api/portal/auth/refresh").header(AuthRefreshSessionService.REFRESH_TOKEN_HEADER, oldRefreshToken))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.token").isString())
+            .andExpect(jsonPath("$.refresh_token").isString());
+        String firstRotatedToken = objectMapper.readTree(firstRefresh.andReturn().getResponse().getContentAsString()).get("refresh_token").asText();
+
+        ResultActions duplicateRefresh = mockMvc
+            .perform(post("/api/portal/auth/refresh").header(AuthRefreshSessionService.REFRESH_TOKEN_HEADER, oldRefreshToken))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.token").isString())
+            .andExpect(jsonPath("$.refresh_token").isString());
+        String duplicateRotatedToken = objectMapper
+            .readTree(duplicateRefresh.andReturn().getResponse().getContentAsString())
+            .get("refresh_token")
+            .asText();
+
+        org.assertj.core.api.Assertions.assertThat(firstRotatedToken).isNotBlank().isNotEqualTo(oldRefreshToken);
+        org.assertj.core.api.Assertions
+            .assertThat(duplicateRotatedToken)
+            .isNotBlank()
+            .isNotEqualTo(oldRefreshToken)
+            .isNotEqualTo(firstRotatedToken);
     }
 
     // ----- OTP request & verify -----

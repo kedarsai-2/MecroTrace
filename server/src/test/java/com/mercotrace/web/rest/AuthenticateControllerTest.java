@@ -12,14 +12,22 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mercotrace.IntegrationTest;
+import com.mercotrace.domain.RefreshSession;
 import com.mercotrace.domain.User;
+import com.mercotrace.repository.RefreshSessionRepository;
 import com.mercotrace.repository.UserRepository;
+import com.mercotrace.security.SecurityUtils;
+import com.mercotrace.service.AuthRefreshSessionService;
 import com.mercotrace.web.rest.vm.LoginVM;
+import java.time.Instant;
+import java.util.Set;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.http.MediaType;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.transaction.annotation.Transactional;
@@ -31,6 +39,7 @@ import org.springframework.transaction.annotation.Transactional;
  */
 @AutoConfigureMockMvc
 @IntegrationTest
+@TestPropertySource(properties = "application.security.refresh-token-rotation-grace-seconds=1")
 class AuthenticateControllerTest {
 
     @Autowired
@@ -44,6 +53,12 @@ class AuthenticateControllerTest {
 
     @Autowired
     private MockMvc mockMvc;
+
+    @Autowired
+    private RefreshSessionRepository refreshSessionRepository;
+
+    @Autowired
+    private AuthRefreshSessionService refreshSessionService;
 
     // ----- POST /api/authenticate (login) - positive -----
 
@@ -213,5 +228,100 @@ class AuthenticateControllerTest {
         String token = authHeader != null && authHeader.startsWith("Bearer ") ? authHeader.substring(7) : authHeader;
 
         mockMvc.perform(get("/api/authenticate").header(AUTHORIZATION, "Bearer " + token)).andExpect(status().isNoContent());
+    }
+
+    @Test
+    @Transactional
+    void refresh_withJustRotatedTraderTokenWithinGrace_returnsFreshTokens() throws Exception {
+        createActivatedUser("refresh-grace", "refresh-grace@example.com", "validpass");
+        String oldRefreshToken = loginAndReturnRefreshToken("refresh-grace", "validpass");
+
+        ResultActions firstRefresh = mockMvc
+            .perform(post("/api/auth/refresh").header(AuthRefreshSessionService.REFRESH_TOKEN_HEADER, oldRefreshToken))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.id_token").isString())
+            .andExpect(jsonPath("$.refresh_token").isString());
+        String firstRotatedToken = refreshTokenFrom(firstRefresh);
+
+        ResultActions duplicateRefresh = mockMvc
+            .perform(post("/api/auth/refresh").header(AuthRefreshSessionService.REFRESH_TOKEN_HEADER, oldRefreshToken))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.id_token").isString())
+            .andExpect(jsonPath("$.refresh_token").isString());
+        String duplicateRotatedToken = refreshTokenFrom(duplicateRefresh);
+
+        org.assertj.core.api.Assertions.assertThat(firstRotatedToken).isNotBlank().isNotEqualTo(oldRefreshToken);
+        org.assertj.core.api.Assertions
+            .assertThat(duplicateRotatedToken)
+            .isNotBlank()
+            .isNotEqualTo(oldRefreshToken)
+            .isNotEqualTo(firstRotatedToken);
+    }
+
+    @Test
+    @Transactional
+    void refresh_withRotatedTraderTokenAfterGrace_returns401() throws Exception {
+        createActivatedUser("refresh-expired-grace", "refresh-expired-grace@example.com", "validpass");
+        String oldRefreshToken = loginAndReturnRefreshToken("refresh-expired-grace", "validpass");
+
+        mockMvc
+            .perform(post("/api/auth/refresh").header(AuthRefreshSessionService.REFRESH_TOKEN_HEADER, oldRefreshToken))
+            .andExpect(status().isOk());
+
+        RefreshSession revokedSession = refreshSessionRepository
+            .findAll()
+            .stream()
+            .filter(session -> "refresh-expired-grace".equals(session.getSubject()))
+            .filter(session -> session.getRevokedAt() != null)
+            .findFirst()
+            .orElseThrow();
+        revokedSession.setRevokedAt(Instant.now().minusSeconds(5));
+        refreshSessionRepository.saveAndFlush(revokedSession);
+
+        mockMvc
+            .perform(post("/api/auth/refresh").header(AuthRefreshSessionService.REFRESH_TOKEN_HEADER, oldRefreshToken))
+            .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    @Transactional
+    void refresh_withContactRefreshTokenOnTraderEndpoint_returns401() throws Exception {
+        AuthRefreshSessionService.IssuedRefreshSession contactSession = refreshSessionService.issue(
+            SecurityUtils.TOKEN_TYPE_CONTACT,
+            "9876543210",
+            null,
+            null,
+            Set.of(new SimpleGrantedAuthority("ROLE_CONTACT"))
+        );
+
+        mockMvc
+            .perform(post("/api/auth/refresh").header(AuthRefreshSessionService.REFRESH_TOKEN_HEADER, contactSession.rawToken()))
+            .andExpect(status().isUnauthorized());
+    }
+
+    private User createActivatedUser(String login, String email, String rawPassword) {
+        User user = new User();
+        user.setLogin(login);
+        user.setEmail(email);
+        user.setActivated(true);
+        user.setPassword(passwordEncoder.encode(rawPassword));
+        return userRepository.saveAndFlush(user);
+    }
+
+    private String loginAndReturnRefreshToken(String username, String password) throws Exception {
+        LoginVM login = new LoginVM();
+        login.setUsername(username);
+        login.setPassword(password);
+
+        ResultActions loginResult = mockMvc
+            .perform(post("/api/authenticate").contentType(MediaType.APPLICATION_JSON).content(objectMapper.writeValueAsBytes(login)))
+            .andExpect(status().isOk());
+
+        return refreshTokenFrom(loginResult);
+    }
+
+    private String refreshTokenFrom(ResultActions result) throws Exception {
+        String body = result.andReturn().getResponse().getContentAsString();
+        return objectMapper.readTree(body).get("refresh_token").asText();
     }
 }

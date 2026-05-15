@@ -1,5 +1,4 @@
-import { useState, useEffect, useMemo, useCallback, useRef, type ReactNode } from 'react';
-import { useVirtualizer, measureElement } from '@tanstack/react-virtual';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { flushSync } from 'react-dom';
 import { motion } from 'framer-motion';
 import {
@@ -48,7 +47,6 @@ import {
   generateSalesPattiPrintHTMLPages,
   type PattiPrintData,
 } from '@/utils/printDocumentTemplates';
-import { formatAuctionLotIdentifier, lotBagCountForIdentifier } from '@/utils/auctionLotIdentifier';
 import { useAuth } from '@/context/AuthContext';
 import ForbiddenPage from '@/components/ForbiddenPage';
 import { usePermissions } from '@/lib/permissions';
@@ -65,2198 +63,138 @@ import {
 } from '@/components/ui/alert-dialog';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import GlobalContactImportDialog from '@/components/contacts/GlobalContactImportDialog';
-
-const SETTLEMENT_SAVED_PATTI_LAYOUT_STORAGE_KEY = 'merco.settlement.savedPatti.layout';
-
-/**
- * Settlement button language:
- * - Premium gradient (same family as table headers)
- * - Hover highlight border + stronger glow
- */
-const settlementBtnGradient =
-  '!bg-[linear-gradient(90deg,#4B7CF3_0%,#5B8CFF_45%,#7B61FF_100%)] !text-white border border-white/25 shadow-[0_10px_24px_-12px_rgba(91,140,255,0.85)] hover:!brightness-110 hover:border-white/45 hover:shadow-[0_14px_30px_-12px_rgba(123,97,255,0.9)] active:scale-[0.99] transition-all';
-const arrOutlineMd = cn('rounded-xl h-9 text-sm font-semibold', settlementBtnGradient);
-const arrOutlineTall = cn('rounded-xl h-12 text-sm font-semibold', settlementBtnGradient);
-const arrOutlineSm = cn('rounded-xl h-8 text-xs font-semibold', settlementBtnGradient);
-const arrSolid =
-  cn('rounded-xl font-bold', settlementBtnGradient);
-const arrSolidMd = cn(arrSolid, 'h-9 px-3 text-sm');
-const arrSolidTall = cn(arrSolid, 'h-12 px-6 text-sm');
-const arrSolidSm = cn(arrSolid, 'h-8 px-2.5 text-xs');
-
-/**
- * Settlement toggle row: same visual language as New Patti / Saved Patti (rounded-xl, gradient active).
- * Used for main tabs (Arrival summary / Create settlements) and arrival-summary sub-tabs.
- */
-const settlementToggleTabBtn = (active: boolean) =>
-  cn(
-    'shrink-0 px-4 py-2 rounded-xl text-sm font-semibold transition-all inline-flex items-center justify-center gap-2 min-h-10',
-    active
-      ? 'bg-gradient-to-r from-primary to-accent text-white shadow-md'
-      : 'glass-card text-muted-foreground hover:text-foreground',
-  );
-
-/** Same as settlementToggleTabBtn but inactive state readable on the teal mobile hero. */
-const settlementToggleTabBtnOnHero = (active: boolean) =>
-  cn(
-    'shrink-0 px-4 py-2 rounded-xl text-sm font-semibold transition-all inline-flex items-center justify-center gap-2 min-h-10',
-    active
-      ? 'bg-gradient-to-r from-primary to-accent text-white shadow-md'
-      : 'bg-white/15 text-white/90 hover:bg-white/25 border border-white/10 backdrop-blur-sm',
-  );
-
-/** Lightweight inline hint for keyboard shortcuts (same pattern as Billing). */
-const tabHint = (key: string) => ` (${key})`;
-
-/** Commodity-settings style toggle shell for settlement expense card. */
-const settlementExpenseToggleBtnClass = (
-  checked: boolean,
-  tone: 'emerald' | 'violet',
-  disabled?: boolean
-) =>
-  cn(
-    'w-[54px] h-[30px] rounded-full transition-all relative shadow-inner',
-    checked
-      ? tone === 'emerald'
-        ? 'bg-[linear-gradient(90deg,#4B7CF3_0%,#5B8CFF_45%,#7B61FF_100%)] shadow-[0_8px_20px_-12px_rgba(91,140,255,0.9)]'
-        : 'bg-[linear-gradient(90deg,#4B7CF3_0%,#5B8CFF_45%,#7B61FF_100%)] shadow-[0_8px_20px_-12px_rgba(123,97,255,0.9)]'
-      : 'bg-slate-300 dark:bg-slate-600',
-    disabled && 'opacity-60 cursor-not-allowed'
-  );
-
-/** Sales report: outer card border per seller (same accent idea as Vehicle details tiles). */
-const SALES_REPORT_SELLER_CARD_STYLES = [
-  'border-blue-500/20 bg-muted/30',
-  'border-cyan-500/20 bg-muted/30',
-  'border-amber-500/20 bg-muted/30',
-  'border-emerald-500/20 bg-muted/30',
-  'border-violet-500/20 bg-muted/30',
-  'border-fuchsia-500/20 bg-muted/30',
-] as const;
-
-/** Same gradient language as `DesktopSidebar` (linear + radial shine). */
-const DESKTOP_SIDEBAR_LIKE_GRADIENT_BG =
-  'bg-[linear-gradient(180deg,#4B7CF3_0%,#5B8CFF_30%,#7B61FF_100%)]';
-const DESKTOP_SIDEBAR_LIKE_SHINE =
-  'pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_30%_20%,rgba(255,255,255,0.15)_0%,transparent_60%)]';
-/** Horizontal variant so the full sweep reads across column headers. */
-const SETTLEMENT_LOTS_TABLE_HEADER_GRADIENT =
-  'bg-[linear-gradient(90deg,#4B7CF3_0%,#5B8CFF_45%,#7B61FF_100%)]';
-
-// ── Types ─────────────────────────────────────────────────
-interface SellerSettlement {
-  sellerId: string;
-  sellerName: string;
-  sellerMark: string;
-  /** Arrivals vehicle id (from settlement API) for direct arrival freight lookup. */
-  vehicleId?: number;
-  vehicleNumber: string;
-  /** Same as Billing/Auction `formatAuctionLotIdentifier` vehicle mark segment. */
-  vehicleMark?: string;
-  /** Total bags on vehicle (all sellers); identifier segment. */
-  vehicleTotalQty?: number;
-  /** Arrivals: Σ lot bag counts for this seller. */
-  arrivalTotalBags?: number;
-  /** Arrivals: vehicle net billable kg from weighing (shared per vehicle). */
-  vehicleArrivalNetBillableKg?: number;
-  /** Billing: Σ commodity-group line weights for this seller's lots. */
-  billingNetWeightKg?: number;
-  contactId?: string | null;
-  sellerPhone?: string | null;
-  fromLocation?: string;
-  sellerSerialNo?: string | number;
-  createdAt?: string;
-  date?: string;
-  lots: SettlementLot[];
-}
-
-/** Canonical `VM-VTOT/SM-STOT/lotName/lotQty` — same util as Auction, Billing, PrintHub. */
-function formatSettlementAuctionLotIdentifier(seller: SellerSettlement, lot: SettlementLot): string {
-  const rawBags = Number(lot.arrivalBagCount) || 0;
-  const lotBagCount = lotBagCountForIdentifier(lot.arrivalBagCount);
-  const lotName = String(lot.lotName || '').trim() || String(rawBags || '');
-  const vTotal =
-    Number(seller.vehicleTotalQty ?? seller.arrivalTotalBags ?? rawBags) || rawBags;
-  const sTotal = Number(seller.arrivalTotalBags ?? rawBags) || rawBags;
-  return formatAuctionLotIdentifier({
-    vehicleMark: seller.vehicleMark,
-    vehicleTotalQty: vTotal,
-    sellerMark: seller.sellerMark,
-    sellerTotalQty: sTotal,
-    lotName,
-    lotQty: lotBagCount,
-  });
-}
-
-interface SettlementLot {
-  lotId: string;
-  lotName: string;
-  commodityName: string;
-  /** Arrivals module: `lot.bag_count` (from settlement API). */
-  arrivalBagCount?: number;
-  /** Σ billing line weights for this lot (kg), when invoiced. */
-  billingWeightKg?: number | null;
-  entries: SettlementEntry[];
-}
-
-interface SettlementEntry {
-  bidNumber: number;
-  buyerMark: string;
-  buyerName: string;
-  /** Auction base bid per bag */
-  rate: number;
-  /** Vehicle-ops summary rate per bag (final; pad preset already reflected). Not added to preset again on modified. */
-  summarySellerRate?: number;
-  /** From auction (signed); effective = base + presetMargin for original or modified */
-  presetMargin?: number;
-  quantity: number;
-  weight: number;
-}
-
-/** Sales Patti print footers: auction-based vs summary-based settlement. */
-/**
- * Print Settings → Settlement named copies (Original, Duplicate, …). Each name generates two physical sheets
- * (original-rate vs modified-rate layout); footer shows only the configured label (optional seller suffix).
- */
-function buildSettlementPattiPagesForConfiguredCopies(
-  copyLabels: string[],
-  printPayloadOrig: PattiPrintData,
-  printPayloadMod: PattiPrintData,
-  sellerDisplaySuffix?: string,
-): { patti: PattiPrintData; copyLabel: string }[] {
-  const labels =
-    copyLabels.length > 0
-      ? copyLabels.map((l) => (l && String(l).trim()) || 'COPY').filter((s) => s.length > 0)
-      : ['ORIGINAL COPY'];
-  const tail =
-    sellerDisplaySuffix != null && String(sellerDisplaySuffix).trim() !== ''
-      ? ` — ${String(sellerDisplaySuffix).trim()}`
-      : '';
-  const out: { patti: PattiPrintData; copyLabel: string }[] = [];
-  for (const raw of labels) {
-    const caption = `${raw}${tail}`;
-    out.push({ patti: printPayloadOrig, copyLabel: caption }, { patti: printPayloadMod, copyLabel: caption });
-  }
-  return out;
-}
-
-interface RateCluster {
-  rate: number;
-  totalQuantity: number;
-  totalWeight: number;
-  amount: number;
-}
-
-interface DeductionItem {
-  key: string;
-  label: string;
-  amount: number;
-  editable: boolean;
-  autoPulled: boolean;
-}
-
-interface PattiData {
-  pattiId: string;
-  sellerName: string;
-  rateClusters: RateCluster[];
-  grossAmount: number;
-  deductions: DeductionItem[];
-  totalDeductions: number;
-  netPayable: number;
-  createdAt: string;
-  useAverageWeight: boolean;
-}
-
-function isFrozenPatti(dto: PattiDTO | null | undefined): boolean {
-  return !!dto && (dto.frozen === true || (!!dto.lockedAt && !dto.reopenedAt));
-}
-
-interface ArrivalSummaryRow {
-  key: string;
-  vehicleNumber: string;
-  fromLocation: string;
-  serialNo: string | number | null;
-  dateLabel: string;
-  sellerNames: string;
-  lots: number;
-  bids: number;
-  weighed: number;
-  sellerIds: string[];
-  representativeSeller: SellerSettlement;
-}
-
-interface SavedArrivalSummaryRow {
-  key: string;
-  vehicleNumber: string;
-  fromLocation: string;
-  serialNo: string | number | null;
-  dateLabel: string;
-  sellerNames: string;
-  sellerIds: string[];
-  lots: number;
-  bids: number;
-  weighed: number;
-  representativePattiId: number | null;
-  /** Sum over pattis in this vehicle group: max(Σ rate-cluster qty, seller lots) per patti. */
-  totalBags: number;
-}
-
-type InProgressSettlementDraft = {
-  key: string;
-  updatedAt: string;
-  representativeSellerId: string;
-  sellerIds: string[];
-  /** Settlement DB row id per seller (for updates when multiple sellers share one arrival). */
-  dbPattiIdsBySellerId: Record<string, number>;
-  vehicleNumber?: string;
-  sellerNames?: string;
-  fromLocation?: string;
-  serialNo?: string;
-  dateLabel?: string;
-  lots?: number;
-  bids?: number;
-  weighed?: number;
-  pattiData: PattiData;
-  sellerExpensesById?: Record<string, SellerExpenseFormState>;
-  removedLotsBySellerId?: Record<string, string[]>;
-  lotSalesOverridesBySellerId?: Record<string, Record<string, LotSalesOverride>>;
-};
-
-/** Lower SL No. sorts first; missing serial sorts last (stable tie-break on sellerId). */
-function sellerSerialSortKey(serial: string | number | null | undefined): number {
-  if (serial == null || serial === '') return Number.POSITIVE_INFINITY;
-  const n = Number(serial);
-  return Number.isFinite(n) ? n : Number.POSITIVE_INFINITY;
-}
-
-function pickFirstArrivalSeller(
-  sellerIds: string[],
-  sellerById: Map<string, SellerSettlement>
-): SellerSettlement | undefined {
-  const list = sellerIds
-    .map(id => sellerById.get(String(id)))
-    .filter((s): s is SellerSettlement => s != null);
-  if (list.length === 0) return undefined;
-  list.sort((a, b) => {
-    const d = sellerSerialSortKey(a.sellerSerialNo) - sellerSerialSortKey(b.sellerSerialNo);
-    if (d !== 0) return d;
-    return String(a.sellerId).localeCompare(String(b.sellerId));
-  });
-  return list[0];
-}
-
-function formatSettlementSellerLabel(s: SellerSettlement): string {
-  const name = (s.sellerName || '').trim();
-  const mark = (s.sellerMark || '').trim();
-  if (!name && !mark) return '-';
-  return mark ? `${name} – ${mark}` : name;
-}
-
-/** One label for the arrival-summary table: first seller on the vehicle by arrival serial. */
-function firstArrivalSellerLabel(
-  sellerIds: string[],
-  sellerById: Map<string, SellerSettlement>,
-  fallbackName?: string
-): string {
-  const first = pickFirstArrivalSeller(sellerIds, sellerById);
-  if (first) return formatSettlementSellerLabel(first);
-  const fb = (fallbackName || '').trim();
-  return fb || '-';
-}
-
-function uniqueArrivalSellerCount(sellerIds: string[] | undefined): number {
-  const set = new Set<string>();
-  for (const raw of sellerIds ?? []) {
-    const s = String(raw ?? '').trim();
-    if (s) set.add(s);
-  }
-  return set.size;
-}
-
-/** Saved / New / In-progress cards: primary seller plus “(+N more)” when row bundles multiple sellers. */
-function formatArrivalSellerListLabel(
-  sellerIds: string[],
-  sellerById: Map<string, SellerSettlement>,
-  fallbackName?: string
-): string {
-  const first = firstArrivalSellerLabel(sellerIds, sellerById, fallbackName);
-  const n = uniqueArrivalSellerCount(sellerIds);
-  if (n <= 1) return first;
-  return `${first} (+${n - 1} more)`;
-}
-
-/** Group pattis onto one arrival vehicle row — use `vehicleId` when known so duplicate plates on different trips do not collide. */
-function arrivalVehicleGroupSegment(vehicleNumber: string, seller?: SellerSettlement): string {
-  const vid = seller?.vehicleId;
-  if (vid != null && Number.isFinite(Number(vid))) return `vid:${Number(vid)}`;
-  return `plate:${(vehicleNumber || '').trim().toLowerCase()}`;
-}
-
-/**
- * Sellers in current patti workspace. Prefer explicit ids; never fall back to everyone on normalized plate string.
- */
-function sellersForSettlementArrivalScope(
-  sellers: SellerSettlement[],
-  selectedSeller: SellerSettlement,
-  selectedArrivalSellerIds: string[]
-): SellerSettlement[] {
-  if (selectedArrivalSellerIds.length > 0) {
-    const idSet = new Set(selectedArrivalSellerIds.map(String));
-    const scoped = sellers.filter(s => idSet.has(String(s.sellerId)));
-    if (scoped.length > 0) return scoped;
-    const lone = sellers.find(s => String(s.sellerId) === String(selectedSeller.sellerId));
-    return lone ? [lone] : [selectedSeller];
-  }
-  return [selectedSeller];
-}
-
-/** Sales Patti “compound” identity: links seller-1 … seller-N rows (`pattiBaseNumber` or part of `BASE-SEQ`). */
-function settlementPattiCompoundBaseKey(p: PattiDTO): string {
-  const raw = String(p.pattiBaseNumber ?? '').trim();
-  if (raw) return raw;
-  const pid = String(p.pattiId ?? '').trim();
-  const m = pid.match(/^(.*)-(\d+)$/);
-  return m ? m[1].trim() : '';
-}
-
-function parseCompoundBaseFromPattiId(pattiId?: string): string {
-  const raw = String(pattiId ?? '').trim();
-  const m = raw.match(/^(.*)-(\d+)$/);
-  return m ? m[1].trim() : '';
-}
-
-function parseCompoundSeqFromPattiId(pattiId?: string): number | undefined {
-  const raw = String(pattiId ?? '').trim();
-  const m = raw.match(/^(.*)-(\d+)$/);
-  if (!m) return undefined;
-  const n = Number(m[2]);
-  return Number.isFinite(n) && n > 0 ? n : undefined;
-}
-
-/**
- * Key for Saved / In-progress summaries: rows that share compound base merge even if `createdAt` differs
- * (avoids splitting one main patti into two saved cards).
- */
-function settlementPattiListGroupKey(p: PattiDTO, seller: SellerSettlement | undefined): string {
-  const vehicleNumber = (p.vehicleNumber || '').trim();
-  const fromLocation = (p.fromLocation || '').trim();
-  const dateRaw = (p.date ?? p.createdAt ?? '').toString();
-  const vseg = arrivalVehicleGroupSegment(vehicleNumber, seller);
-  const flo = fromLocation.toLowerCase();
-  const compound = settlementPattiCompoundBaseKey(p);
-  if (compound) return `compound:${compound}|${vseg}|${flo}`;
-  return `legacy:${vseg}|${flo}|${dateRaw}`;
-}
-
-function totalBagsFromPattiRateClusters(p: PattiDTO): number {
-  let s = 0;
-  for (const c of p.rateClusters ?? []) {
-    const q = (c as { totalQuantity?: unknown }).totalQuantity;
-    const n = typeof q === 'number' && !Number.isNaN(q) ? q : Number(q) || 0;
-    s += n;
-  }
-  return Math.round(s);
-}
-
-/** Vehicle-group saved patti card (same grouping as table): bags + weighed bar + aggregated sellers. */
-function SettlementSavedPattiVehicleCard({
-  row,
-  onOpen,
-}: {
-  row: SavedArrivalSummaryRow;
-  onOpen: () => void;
-}) {
-  const total = Math.round(Math.max(row.totalBags ?? 0, row.lots));
-  const weighedPct = total > 0 ? (Math.min(Math.max(0, row.weighed), total) / total) * 100 : 0;
-  const nSellers = uniqueArrivalSellerCount(row.sellerIds);
-  const canOpen = row.representativePattiId != null;
-
-  return (
-    <button
-      type="button"
-      disabled={!canOpen}
-      onClick={onOpen}
-      className={cn(
-        'w-full rounded-2xl border border-border/50 bg-white p-4 text-left shadow-sm transition-colors dark:bg-card touch-manipulation',
-        canOpen
-          ? 'hover:bg-muted/25 active:scale-[0.99]'
-          : 'cursor-not-allowed opacity-60',
-      )}
-    >
-      <div className="mb-3 flex items-start justify-between gap-3">
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="inline-flex items-center rounded-full bg-[#eef0ff] px-2 py-0.5 text-[10px] font-bold text-[#6075FF] dark:bg-[#6075FF]/20">
-              {row.vehicleNumber}
-            </span>
-            <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-semibold text-muted-foreground tabular-nums">
-              {nSellers} seller{nSellers === 1 ? '' : 's'}
-            </span>
-          </div>
-          <p className="mt-2 line-clamp-2 text-sm font-bold text-foreground">{row.sellerNames || '-'}</p>
-          <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">{row.fromLocation}</p>
-        </div>
-        <div className="shrink-0 text-right">
-          <p className="text-lg font-bold tabular-nums leading-none text-foreground">{total}</p>
-          <p className="text-[11px] font-medium text-muted-foreground">Bags</p>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-3 gap-2 text-center">
-        <div className="rounded-lg bg-muted/40 px-1 py-2">
-          <div className="text-base font-bold tabular-nums text-foreground">{row.lots}</div>
-          <div className="text-[9px] font-medium uppercase tracking-wide text-muted-foreground">Lots</div>
-        </div>
-        <div className="rounded-lg bg-muted/40 px-1 py-2">
-          <div className="text-base font-bold tabular-nums text-foreground">{row.bids}</div>
-          <div className="text-[9px] font-medium uppercase tracking-wide text-muted-foreground">Bids</div>
-        </div>
-        <div className="rounded-lg bg-muted/40 px-1 py-2">
-          <div className="text-base font-bold tabular-nums text-foreground">{row.weighed}</div>
-          <div className="text-[9px] font-medium uppercase tracking-wide text-muted-foreground">Weighed</div>
-        </div>
-      </div>
-
-      <div className="mt-3 flex min-w-0 items-center gap-2 border-t border-border/30 pt-2">
-        <span className="shrink-0 text-xs font-semibold text-emerald-600 dark:text-emerald-400">Completed</span>
-        <div
-          className="relative h-8 min-h-[2rem] min-w-0 flex-1 overflow-hidden rounded-xl border-2 border-foreground/15 shadow-inner dark:border-white/20"
-          title={total > 0 ? `Weighed ${row.weighed} of ${total} bags` : 'Bag total unavailable'}
-          aria-label={total > 0 ? `Weighed ${row.weighed} of ${total} bags` : 'Weighing progress'}
-        >
-          <div className="absolute inset-0 bg-red-500" aria-hidden />
-          <div
-            className="absolute inset-y-0 left-0 bg-emerald-500 transition-[width] duration-300 ease-out"
-            style={{ width: `${weighedPct}%` }}
-            aria-hidden
-          />
-          <div className="relative flex h-full items-center justify-center px-2">
-            <span className="text-[11px] font-bold tabular-nums text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.85)]">
-              {total > 0 ? `${row.weighed}/${total}` : '—'}
-            </span>
-          </div>
-        </div>
-        <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{row.dateLabel}</span>
-      </div>
-    </button>
-  );
-}
-
-function InlineCalcTip({ label, lines }: { label: string; lines: string[] }) {
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <button
-          type="button"
-          className="inline-flex h-4 w-4 items-center justify-center rounded-sm text-muted-foreground hover:bg-muted/60"
-          aria-label={label}
-        >
-          <Info className="h-3 w-3" />
-        </button>
-      </TooltipTrigger>
-      <TooltipContent side="top" sideOffset={8} className="z-[99999] max-w-[300px] text-xs leading-relaxed">
-        <div className="space-y-0.5">
-          {lines.map((line, idx) => (
-            <p key={`${label}-${idx}`}>{line}</p>
-          ))}
-        </div>
-      </TooltipContent>
-    </Tooltip>
-  );
-}
-
-/** Map backend PattiDTO to form PattiData (numbers and ISO date). */
-function mapPattiDTOToPattiData(dto: PattiDTO): PattiData {
-  const toNum = (v: unknown): number => (typeof v === 'number' && !Number.isNaN(v) ? v : Number(v) || 0);
-  const rateClusters = (dto.rateClusters ?? []).map((c: { rate?: unknown; totalQuantity?: unknown; totalWeight?: unknown; amount?: unknown }) => ({
-    rate: toNum(c.rate),
-    totalQuantity: toNum(c.totalQuantity),
-    totalWeight: toNum(c.totalWeight),
-    amount: toNum(c.amount),
-  }));
-  const deductions: DeductionItem[] = (dto.deductions ?? []).map((d: { key?: string; label?: string; amount?: unknown; editable?: boolean; autoPulled?: boolean }) => ({
-    key: d.key ?? `ded_${Date.now()}_${Math.random().toString(36).slice(2)}`,
-    label: d.label ?? 'Deduction',
-    amount: toNum(d.amount),
-    editable: d.editable ?? true,
-    autoPulled: d.autoPulled ?? false,
-  }));
-  const grossAmount = toNum(dto.grossAmount);
-  const totalDeductions = deductions.reduce((s, d) => s + d.amount, 0);
-  const netPayable = toNum(dto.netPayable);
-  let createdAt = '';
-  if (dto.createdAt != null) {
-    if (typeof dto.createdAt === 'string') createdAt = dto.createdAt;
-    else createdAt = new Date(dto.createdAt as number | Date).toISOString();
-  } else {
-    createdAt = new Date().toISOString();
-  }
-  return {
-    pattiId: dto.pattiId ?? '',
-    sellerName: dto.sellerName ?? '',
-    rateClusters,
-    grossAmount,
-    deductions,
-    totalDeductions,
-    netPayable,
-    createdAt,
-    useAverageWeight: dto.useAverageWeight ?? false,
-  };
-}
-
-/**
- * Alt+O original view: body fields (clusters, extensionJson, amounts) come only from immutable snapshot `raw`.
- * Do not fall back to current `pattiDetailDto` for those keys — missing keys mean empty/default, not “live” split/edit state.
- */
-function pattiDtoFromOriginalSnapshotPayload(baseDto: PattiDTO, raw: Record<string, unknown>): PattiDTO {
-  const has = (key: string): boolean => Object.prototype.hasOwnProperty.call(raw, key);
-
-  const rateClusters: PattiDTO['rateClusters'] =
-    has('rateClusters') && Array.isArray(raw.rateClusters)
-      ? (raw.rateClusters as PattiDTO['rateClusters'])
-      : [];
-
-  const deductions: PattiDTO['deductions'] =
-    has('deductions') && Array.isArray(raw.deductions)
-      ? (raw.deductions as PattiDTO['deductions'])
-      : [];
-
-  const toNum = (key: string, defaultValue: number): number => {
-    if (!has(key)) return defaultValue;
-    const v = raw[key];
-    if (typeof v === 'number' && Number.isFinite(v)) return v;
-    const n = Number(v);
-    return Number.isFinite(n) ? n : defaultValue;
-  };
-
-  const totalDeductionsFromLines = deductions.reduce((s, d) => s + (Number(d.amount) || 0), 0);
-  const grossAmount = toNum('grossAmount', 0);
-  const totalDeductions = has('totalDeductions') ? toNum('totalDeductions', totalDeductionsFromLines) : totalDeductionsFromLines;
-  const netPayable = has('netPayable') ? toNum('netPayable', grossAmount - totalDeductions) : grossAmount - totalDeductions;
-
-  let extensionJson: string | undefined;
-  if (has('extensionJson')) {
-    const ej = raw.extensionJson;
-    if (ej == null || ej === '') extensionJson = undefined;
-    else extensionJson = typeof ej === 'string' ? ej : String(ej);
-  } else {
-    extensionJson = undefined;
-  }
-
-  const useAverageWeight = has('useAverageWeight') ? Boolean(raw.useAverageWeight) : false;
-
-  const sellerName =
-    has('sellerName') && raw.sellerName != null ? String(raw.sellerName) : baseDto.sellerName;
-  const vehicleNumber = has('vehicleNumber')
-    ? raw.vehicleNumber == null
-      ? undefined
-      : String(raw.vehicleNumber)
-    : baseDto.vehicleNumber;
-  const fromLocation = has('fromLocation')
-    ? raw.fromLocation == null
-      ? undefined
-      : String(raw.fromLocation)
-    : baseDto.fromLocation;
-
-  const createdAt = has('createdAt')
-    ? raw.createdAt == null
-      ? baseDto.createdAt
-      : typeof raw.createdAt === 'string'
-        ? raw.createdAt
-        : String(raw.createdAt)
-    : baseDto.createdAt;
-
-  const pattiBaseNumber = has('pattiBaseNumber')
-    ? raw.pattiBaseNumber == null
-      ? undefined
-      : String(raw.pattiBaseNumber)
-    : baseDto.pattiBaseNumber;
-
-  let sellerSequenceNumber = baseDto.sellerSequenceNumber;
-  if (has('sellerSequenceNumber')) {
-    const v = raw.sellerSequenceNumber;
-    if (typeof v === 'number' && Number.isFinite(v)) sellerSequenceNumber = v;
-    else {
-      const n = Number(v);
-      if (Number.isFinite(n)) sellerSequenceNumber = n;
-    }
-  }
-
-  const sellerSerialNo = has('sellerSerialNo')
-    ? (raw.sellerSerialNo as PattiDTO['sellerSerialNo'])
-    : baseDto.sellerSerialNo;
-
-  const date = has('date') ? (raw.date == null ? baseDto.date : String(raw.date)) : baseDto.date;
-
-  return {
-    id: baseDto.id,
-    pattiId: baseDto.pattiId,
-    pattiBaseNumber,
-    sellerSequenceNumber,
-    sellerId: baseDto.sellerId,
-    sellerName,
-    vehicleNumber,
-    fromLocation,
-    sellerSerialNo,
-    date,
-    rateClusters,
-    grossAmount,
-    deductions,
-    totalDeductions,
-    netPayable,
-    createdAt,
-    useAverageWeight,
-    inProgress: has('inProgress') ? Boolean(raw.inProgress) : baseDto.inProgress,
-    extensionJson,
-    originalData: baseDto.originalData,
-  };
-}
-
-/** Arrival-summary stats from saved patti body (stays in sync after weight/qty edits are saved). */
-function tallyFromPattiDtoClusters(dto: PattiDTO): { lots: number; bids: number; weighed: number } {
-  const clusters = dto.rateClusters ?? [];
-  let lots = 0;
-  let weighed = 0;
-  for (const c of clusters) {
-    lots += Number(c.totalQuantity) || 0;
-    weighed += Number(c.totalWeight) || 0;
-  }
-  return { lots, bids: clusters.length, weighed };
-}
-
-function sumPattiClusterQty(pd: PattiData): number {
-  return pd.rateClusters.reduce((s, c) => s + (Number(c.totalQuantity) || 0), 0);
-}
-
-function sumPattiClusterWeight(pd: PattiData): number {
-  return pd.rateClusters.reduce((s, c) => s + (Number(c.totalWeight) || 0), 0);
-}
-
-/** INR display: always two decimals (en-IN), signed-safe (unlike `roundMoney2` which floors negatives). */
-function formatMoney2Display(n: number): string {
-  if (!Number.isFinite(n)) {
-    return (0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  }
-  const x = Math.round((n + Number.EPSILON) * 100) / 100;
-  return x.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-}
-
-/** Restore per-seller expense form from saved patti deduction lines. */
-function deductionsToSellerExpenseForm(
-  deds: DeductionItem[],
-  opts?: { inferredWeighmanFromSlabs?: number }
-): SellerExpenseFormState {
-  const byKey = Object.fromEntries(deds.map(d => [d.key, d.amount])) as Record<string, number>;
-  const freightDed = deds.find(d => d.key === 'freight');
-  const hasWeighingLine = deds.some(d => d.key === 'weighing' || d.key === 'weighman');
-
-  let freight = Number(byKey.freight ?? 0);
-  let weighman = Number(byKey.weighing ?? byKey.weighman ?? 0);
-
-  /**
-   * Legacy saves (Add to freight ON): single `freight` row held freight+weighing with no `weighing` key.
-   * Split using slab-derived weighing when freight label indicates merged line.
-   */
-  if (
-    !hasWeighingLine &&
-    freight > 0 &&
-    weighman === 0 &&
-    opts?.inferredWeighmanFromSlabs != null &&
-    Number.isFinite(opts.inferredWeighmanFromSlabs)
-  ) {
-    const inf = clampMoney(opts.inferredWeighmanFromSlabs);
-    const lab = String(freightDed?.label ?? '').toLowerCase();
-    const looksMergedFreight = lab.includes('incl');
-    if (looksMergedFreight && inf > 0) {
-      const w = Math.min(inf, freight);
-      weighman = w;
-      freight = clampMoney(freight - w);
-    }
-  }
-
-  return {
-    freight: clampMoney(freight),
-    unloading: Number(byKey.coolie ?? byKey.unloading ?? 0),
-    weighman: clampMoney(weighman),
-    cashAdvance: Number(byKey.advance ?? 0),
-    gunnies: Number(byKey.gunnies ?? 0),
-    others: Number(byKey.others ?? 0),
-  };
-}
-
-/** Main patti deduction rows from primary seller expense state (labels for print/save). */
-function buildDeductionItemsFromSellerExpenses(
-  exp: SellerExpenseFormState,
-  coolieMode: 'FLAT' | 'RECALCULATED',
-  weighingEnabled: boolean,
-  mergeWeighingIntoFreight: boolean
-): DeductionItem[] {
-  const coolieLabel =
-    coolieMode === 'FLAT'
-      ? 'Unloading (Coolie) — commodity slab'
-      : 'Unloading (Coolie) — commodity slab (weight mode reference)';
-
-  const merged = weighingEnabled && mergeWeighingIntoFreight;
-  /** Always persist base freight + weighing on separate rows so reopening saved pattis restores `weighman` (Quick Adjustment + expense card). UI merge only affects display, not stored shape. */
-  const freightAmt = exp.freight;
-
-  const items: DeductionItem[] = [
-    {
-      key: 'freight',
-      label: merged ? 'Freight (incl. weighing)' : 'Freight',
-      amount: freightAmt,
-      editable: true,
-      autoPulled: true,
-    },
-    { key: 'coolie', label: coolieLabel, amount: exp.unloading, editable: true, autoPulled: true },
-  ];
-  if (weighingEnabled) {
-    items.push({
-      key: 'weighing',
-      label: 'Weighing Charges',
-      amount: exp.weighman,
-      editable: true,
-      autoPulled: true,
-    });
-  }
-  items.push(
-    { key: 'advance', label: 'Cash Advance', amount: exp.cashAdvance, editable: true, autoPulled: false },
-    { key: 'gunnies', label: 'Gunnies', amount: exp.gunnies, editable: true, autoPulled: false },
-    { key: 'others', label: 'Others', amount: exp.others, editable: true, autoPulled: false }
-  );
-  return items;
-}
-
-function totalSellerExpenses(
-  exp: SellerExpenseFormState,
-  weighingEnabled: boolean,
-  mergeWeighingIntoFreight: boolean
-): number {
-  let freight = exp.freight;
-  let w = 0;
-  if (weighingEnabled) {
-    if (mergeWeighingIntoFreight) {
-      freight = exp.freight + exp.weighman;
-    } else {
-      w = exp.weighman;
-    }
-  }
-  return freight + exp.unloading + w + exp.cashAdvance + exp.gunnies + exp.others;
-}
-
-// ── Validation constants (align with ArrivalService multi-seller: 2–12 chars) ──
-const DEDUCTION_MAX = 10_000_000;
-const VEHICLE_NUMBER_MIN = 2;
-const VEHICLE_NUMBER_MAX = 12;
-
-function clampMoney(value: number, min = 0, max = DEDUCTION_MAX): number {
-  return Math.max(min, Math.min(max, Math.round(value * 100) / 100));
-}
-
-function isVehicleNumberValid(v: string): boolean {
-  return v.length >= VEHICLE_NUMBER_MIN && v.length <= VEHICLE_NUMBER_MAX;
-}
-
-function presetDelta(entry: SettlementEntry): number {
-  const p = entry.presetMargin;
-  if (p == null) return 0;
-  const n = Number(p);
-  return Number.isFinite(n) ? n : 0;
-}
-
-/**
- * Per-bag amount for settlement:
- * - Original: bid (rate) + preset (signed, from pad).
- * - Modified: vehicle-ops summary new seller rate only — that value is the final per-bag amount (pad preset already incorporated there). Do not add preset again. If missing, fall back to bid + preset (legacy / extra-bid rows).
- */
-function settlementEffectiveRatePerBag(entry: SettlementEntry, mode: 'original' | 'modified'): number {
-  if (mode === 'original') {
-    return (Number(entry.rate) || 0) + presetDelta(entry);
-  }
-  if (entry.summarySellerRate != null && Number.isFinite(Number(entry.summarySellerRate))) {
-    return Number(entry.summarySellerRate);
-  }
-  return (Number(entry.rate) || 0) + presetDelta(entry);
-}
-
-function normalizeVehicleKey(v: string | undefined): string {
-  return (v ?? '').trim().toUpperCase().replace(/\s+/g, '');
-}
-
-function totalBagsForSeller(s: SellerSettlement): number {
-  return s.lots.reduce((acc, l) => acc + l.entries.reduce((a2, e) => a2 + (Number(e.quantity) || 0), 0), 0);
-}
-
-/** Sales Pad style estimate: Σ (bags × 50 kg) when actual weight not yet applied. */
-function totalPadEstimateWeightForSeller(s: SellerSettlement): number {
-  return s.lots.reduce(
-    (acc, l) => acc + l.entries.reduce((a2, e) => a2 + (Number(e.quantity) || 0) * 50, 0),
-    0
-  );
-}
-
-/** Arrivals module: total bags (lot.bag_count) for this seller. */
-function totalArrivalBagsForSeller(s: SellerSettlement): number {
-  if (typeof s.arrivalTotalBags === 'number' && !Number.isNaN(s.arrivalTotalBags)) {
-    return s.arrivalTotalBags;
-  }
-  return s.lots.reduce((acc, l) => acc + (Number(l.arrivalBagCount) || 0), 0);
-}
-
-/** Billing module: Σ persisted line weights for this seller's lots; falls back to pad estimate if API omitted. */
-function totalBillingNetWeightForSeller(s: SellerSettlement): number {
-  if (s.billingNetWeightKg != null && Number.isFinite(Number(s.billingNetWeightKg))) {
-    return Number(s.billingNetWeightKg);
-  }
-  return totalPadEstimateWeightForSeller(s);
-}
-
-function vehicleArrivalNetBillableKgForSeller(s: SellerSettlement): number | null {
-  if (s.vehicleArrivalNetBillableKg == null || !Number.isFinite(Number(s.vehicleArrivalNetBillableKg))) {
-    return null;
-  }
-  return Number(s.vehicleArrivalNetBillableKg);
-}
-
-function roundMoney2(n: number): number {
-  return Math.round(Math.max(0, n) * 100) / 100;
-}
-
-/** SRS hamali / weighing slab: charge = Rf × max(1, W / T). Round only after bag distribution (see modal / auto-pull). */
-function computeSlabChargeTotal(actualWeight: number, fixedRate: number, threshold: number): number {
-  const w = Math.max(0, Number(actualWeight) || 0);
-  const T = Math.max(0, Number(threshold) || 0);
-  const F = Math.max(0, Number(fixedRate) || 0);
-  if (T <= 0) return 0;
-  return F * Math.max(1, w / T);
-}
-
-function findArrivalSellerForSettlement(
-  arrival: ArrivalFullDetail,
-  settlement: SellerSettlement
-): ArrivalSellerFullDetail | undefined {
-  const sellers = arrival.sellers ?? [];
-  const byMark = sellers.find(
-    x =>
-      (x.sellerName || '').trim().toLowerCase() === (settlement.sellerName || '').trim().toLowerCase() &&
-      (x.sellerMark || '').trim().toLowerCase() === (settlement.sellerMark || '').trim().toLowerCase()
-  );
-  if (byMark) return byMark;
-  return sellers.find(
-    x => (x.sellerName || '').trim().toLowerCase() === (settlement.sellerName || '').trim().toLowerCase()
-  );
-}
-
-function bagsFromArrivalSeller(arrivalSeller: ArrivalSellerFullDetail | undefined): number {
-  if (!arrivalSeller) return 0;
-  return arrivalSeller.lots.reduce((a, l) => a + (Number(l.bagCount) || 0), 0);
-}
-
-function formatOptionalKg(value: number | null): string {
-  if (value == null || Number.isNaN(value)) return '—';
-  return `${value.toLocaleString(undefined, { maximumFractionDigits: 1 })} kg`;
-}
-
-function formatOptionalInt(value: number | null): string {
-  if (value == null || Number.isNaN(value)) return '—';
-  return String(Math.round(value));
-}
-
-function formatRupeeInr(value: number): string {
-  return `₹ ${value.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-}
-
-/** Parsed `grossAmount` from a stored original snapshot body (session JSON or API `originalData`). */
-function grossAmountFromOriginalPayloadRecord(raw: Record<string, unknown> | null | undefined): number | null {
-  if (!raw || typeof raw !== 'object') return null;
-  const g = raw.grossAmount;
-  if (typeof g === 'number' && Number.isFinite(g)) return g;
-  const n = Number(g);
-  return Number.isFinite(n) ? n : null;
-}
-
-function stringifyOriginalDataForHydration(od: unknown): string | null {
-  if (!od || typeof od !== 'object' || Array.isArray(od)) return null;
-  try {
-    return JSON.stringify(od);
-  } catch {
-    return null;
-  }
-}
-
-/** Copy API `originalData` into session ref so multi-seller footers can sum every seller's first snapshot. */
-function hydrateSessionOriginalSnapshotFromDto(bucket: Record<string, string>, p: PattiDTO | null | undefined): void {
-  if (!p?.sellerId) return;
-  const sid = String(p.sellerId).trim();
-  if (!sid) return;
-  const s = stringifyOriginalDataForHydration(p.originalData);
-  if (s) bucket[sid] = s;
-}
-
-function clearSessionOriginalSnapshotsForSellerIds(bucket: Record<string, string>, ids: Iterable<string>): void {
-  for (const raw of ids) {
-    const sid = String(raw ?? '').trim();
-    if (sid) delete bucket[sid];
-  }
-}
-
-function readOriginalGrossForSellerId(
-  sellerId: string,
-  sessionJsonBySellerId: Record<string, string>,
-  pattiDetail: PattiDTO | null,
-): number | null {
-  const sid = String(sellerId ?? '').trim();
-  if (!sid) return null;
-  const json = sessionJsonBySellerId[sid];
-  if (json) {
-    try {
-      const g = grossAmountFromOriginalPayloadRecord(JSON.parse(json) as Record<string, unknown>);
-      if (g != null) return g;
-    } catch {
-      /* ignore */
-    }
-  }
-  if (pattiDetail && String(pattiDetail.sellerId ?? '').trim() === sid) {
-    return grossAmountFromOriginalPayloadRecord(pattiDetail.originalData as Record<string, unknown>);
-  }
-  return null;
-}
-
-/** Same visual language as Billing commodity read-only cells (computed fields). */
-const settlementReadOnlyCellClass =
-  'h-9 lg:h-8 min-h-[2.25rem] px-2 lg:px-1.5 border border-dashed border-border/70 rounded-md bg-muted/50 text-muted-foreground inline-flex items-center justify-center w-full text-xs lg:text-[11px] cursor-not-allowed shadow-inner select-text tabular-nums';
-
-/** Uniform editable expense amount fields (per seller). */
-const settlementExpenseInputClass =
-  'h-9 w-full min-w-[5.5rem] max-w-[6.75rem] rounded-md border border-border bg-background px-2 text-right text-xs tabular-nums shadow-sm [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none';
-
-/** Freight & unloading on Expenses card: auto-derived — dashed border, muted fill, lock (matches Billing computed-cell language). */
-const settlementExpenseDerivedInputAffordanceClass =
-  'border-dashed border-border/75 bg-muted/45 shadow-inner cursor-not-allowed select-text';
-
-/** Per-seller registration (Sales report): registered = linked to contact registry. */
-interface SellerRegFormState {
-  registrationChosen: boolean;
-  registered: boolean;
-  contactId: string | null;
-  replacementSellerId: string | null;
-  mark: string;
-  name: string;
-  mobile: string;
-  contactSearchQuery: string;
-  addAndChangeSeller: boolean;
-  allowRegisteredEdit: boolean;
-  /** Manual confirmation for printing when the seller is not registry-linked (`registered` / `contactId`). Checkbox starts unchecked. */
-  unregisteredPrintConfirmed: boolean;
-}
-
-/** True when the bill treats this seller as registry-backed (no manual Unregistered print confirmation needed). */
-function isSettlementSellerPrintRegistered(form: SellerRegFormState): boolean {
-  if (form.registered) return true;
-  const cid = form.contactId;
-  return cid != null && String(cid).trim() !== '';
-}
-
-/** Print allowed for registered (or linked-contact) sellers without checking Unregistered; otherwise requires `unregisteredPrintConfirmed`. */
-function isSettlementSellerPrintAllowed(_seller: SellerSettlement, form: SellerRegFormState): boolean {
-  if (isSettlementSellerPrintRegistered(form)) return true;
-  return form.unregisteredPrintConfirmed === true;
-}
-
-function settlementSellerPrintGateMessage(seller: SellerSettlement, form: SellerRegFormState): string | null {
-  if (isSettlementSellerPrintAllowed(seller, form)) return null;
-  const name = (seller.sellerName || 'Seller').trim();
-  const mark = (seller.sellerMark || '').trim();
-  const label = mark ? `${name} – ${mark}` : name;
-  return `${label}: check Unregistered to confirm printing for this non-registered seller.`;
-}
-
-interface SellerExpenseFormState {
-  freight: number;
-  unloading: number;
-  weighman: number;
-  cashAdvance: number;
-  gunnies: number;
-  others: number;
-}
-
-/** Vehicle-level expense lines (Add Expense modal). */
-interface VehicleExpenseRow {
-  id: string;
-  sellerId: string;
-  sellerName: string;
-  quantity: number;
-  freight: number;
-  unloading: number;
-  weighing: number;
-  gunnies: number;
-}
-type VehicleExpenseField = 'freight' | 'unloading' | 'weighing' | 'gunnies';
-type VehicleExpenseFieldValues = Pick<VehicleExpenseRow, VehicleExpenseField>;
-
-interface AddVoucherRowState {
-  id?: number;
-  localId: string;
-  voucherName: string;
-  forWhoName: string;
-  description: string;
-  expenseAmount: string;
-}
-
-/** Distribute total lot weight across entries (billing total or sum of entry weights). */
-function distributeLotEntryWeights(lot: SettlementLot, totalW: number): number[] {
-  const entries = lot.entries ?? [];
-  const n = entries.length;
-  if (n === 0) return [];
-
-  const tw = Math.max(0, Number(totalW) || 0);
-  if (tw <= 0) return entries.map(() => 0);
-
-  const sumEw = entries.reduce((s, e) => s + (Number(e.weight) || 0), 0);
-  if (sumEw > 0) {
-    return entries.map(e => ((Number(e.weight) || 0) / sumEw) * tw);
-  }
-
-  // Per-bid kg often missing until Sales/Patti edits; split merged lot kg by bag shares, else evenly.
-  const qtyParts = entries.map(e => Math.max(0, Math.round(Number(e.quantity) || 0)));
-  const sumQ = qtyParts.reduce((a, b) => a + b, 0);
-  if (sumQ > 0) {
-    const shares = qtyParts.map(q => (q / sumQ) * tw);
-    const sumFirst = shares.slice(0, -1).reduce((a, b) => a + b, 0);
-    return [...shares.slice(0, -1), tw - sumFirst];
-  }
-
-  const base = tw / n;
-  return entries.map((_, i) => (i === n - 1 ? tw - base * (n - 1) : base));
-}
-
-/**
- * Lot-level Sales Patti row: amount = Σ (distributedWeight × rate per bag) / commodity divisor (same as Billing).
- */
-function lotBaseSalesRow(
-  lot: SettlementLot,
-  divisor: number,
-  settlementRateMode: 'original' | 'modified' = 'modified'
-) {
-  const div = divisor > 0 ? divisor : 50;
-  const qty = lot.entries.reduce((s, e) => s + (Number(e.quantity) || 0), 0);
-  const sumEntryW = lot.entries.reduce((s, e) => s + (Number(e.weight) || 0), 0);
-  const bw = lot.billingWeightKg;
-  // Weight comes strictly from billing. Prefer lot-level aggregate if > 0, else sum of billing-sourced entries.
-  const weight = bw != null && Number(bw) > 0 ? Number(bw) : sumEntryW;
-  const itemLabel = lot.lotName || lot.commodityName || '—';
-  if (qty <= 0 || weight <= 0) {
-    return {
-      itemLabel,
-      qty,
-      weight,
-      avg: 0,
-      ratePerBag: 0,
-      amount: 0,
-      divisor: div,
-    };
-  }
-  const distW = distributeLotEntryWeights(lot, weight);
-  let amount = 0;
-  lot.entries.forEach((e, i) => {
-    const w = distW[i] ?? 0;
-    amount += (w * settlementEffectiveRatePerBag(e, settlementRateMode)) / div;
-  });
-  amount = roundMoney2(amount);
-  const ratePerBag = weight > 0 ? roundMoney2((amount * div) / weight) : 0;
-  const avg = qty > 0 ? weight / qty : 0;
-  return {
-    itemLabel,
-    qty,
-    weight,
-    avg,
-    ratePerBag,
-    amount,
-    divisor: div,
-  };
-}
-
-/** User edits in Sales report table (per lot row). */
-interface LotSalesOverride {
-  qty?: number;
-  weight?: number;
-  /** Seller settlement rate per bag (₹/bag), aligned with Billing new-rate / divisor model. */
-  ratePerBag?: number;
-}
-
-function hasLotSalesOverride(o: LotSalesOverride | undefined): boolean {
-  if (!o) return false;
-  return o.qty !== undefined || o.weight !== undefined || o.ratePerBag !== undefined;
-}
-
-/** Storage key for Sales report overrides: one key per lot when a single bid; per-bid keys when multiple buyers. */
-function lotSalesOverrideStorageKey(sid: string, entryIndex: number, numEntries: number): string {
-  if (numEntries <= 1) return sid;
-  return `${sid}::${entryIndex}`;
-}
-
-/** Saved-patti-only extra lot rows (split bid), persisted in `extensionJson`. */
-interface ExtraBidLot {
-  id: string;
-  lotName: string;
-  commodityName: string;
-  qty: number;
-  weight: number;
-  ratePerBag: number;
-}
-
-function parseExtraBidLotsArray(raw: unknown): ExtraBidLot[] {
-  if (!Array.isArray(raw)) return [];
-  const out: ExtraBidLot[] = [];
-  for (const x of raw) {
-    if (!x || typeof x !== 'object') continue;
-    const o = x as Record<string, unknown>;
-    const id = String(o.id ?? '').trim();
-    if (!id) continue;
-    const qty = Math.max(0, Math.round(Number(o.qty) || 0));
-    const weight = Number(o.weight);
-    const ratePerBag = Number(o.ratePerBag);
-    if (!Number.isFinite(weight) || !Number.isFinite(ratePerBag)) continue;
-    out.push({
-      id,
-      lotName: String(o.lotName ?? '').trim(),
-      commodityName: String(o.commodityName ?? '').trim(),
-      qty,
-      weight: Math.max(0, weight),
-      ratePerBag: Math.max(0, ratePerBag),
-    });
-  }
-  return out;
-}
-
-function settlementLotFromExtraBid(e: ExtraBidLot): SettlementLot {
-  return {
-    lotId: e.id,
-    lotName: e.lotName,
-    commodityName: e.commodityName,
-    arrivalBagCount: 0,
-    billingWeightKg: null,
-    entries: [
-      {
-        bidNumber: 0,
-        buyerMark: '',
-        buyerName: '',
-        rate: e.ratePerBag,
-        presetMargin: 0,
-        quantity: e.qty,
-        weight: e.weight,
-      },
-    ],
-  };
-}
-
-type SettlementSalesTableRow =
-  | { lot: SettlementLot; sid: string; isExtraBid: false; entryIndex: number }
-  | { lot: SettlementLot; sid: string; isExtraBid: true; extraBid: ExtraBidLot };
-
-const PATTI_EXTENSION_JSON_VERSION = 1 as const;
-
-type PattiExtensionJsonV1 = {
-  v: typeof PATTI_EXTENSION_JSON_VERSION;
-  removedLotIds?: string[];
-  lotOverrides?: Record<string, { weight?: number; ratePerBag?: number; qty?: number }>;
-  extraBidLots?: ExtraBidLot[];
-  /** Display order: `a:${lotStableId}` then `e:${extraId}`; omit when default (API lots then extras). */
-  salesRowOrder?: string[];
-  /** Persisted Sales report “Unregistered” print confirmation for this sub-patti. */
-  unregisteredPrintConfirmed?: boolean;
-};
-
-function buildPattiExtensionJsonForSeller(
-  sellerId: string,
-  removedLotsBySellerId: Record<string, string[]>,
-  lotSalesOverridesBySellerId: Record<string, Record<string, LotSalesOverride>>,
-  extraBidLotsBySellerId: Record<string, ExtraBidLot[]>,
-  unregisteredPrintConfirmed: boolean,
-  salesRowOrderBySellerId?: Record<string, SalesRowOrderKey[]>,
-  sellerForOrder?: SellerSettlement
-): string | undefined {
-  const removed = removedLotsBySellerId[sellerId] ?? [];
-  const ov = lotSalesOverridesBySellerId[sellerId] ?? {};
-  const slimOverrides: Record<string, { weight?: number; ratePerBag?: number; qty?: number }> = {};
-  for (const [lotSid, v] of Object.entries(ov)) {
-    if (!v) continue;
-    const entry: { weight?: number; ratePerBag?: number; qty?: number } = {};
-    if (v.weight !== undefined) entry.weight = v.weight;
-    if (v.ratePerBag !== undefined) entry.ratePerBag = v.ratePerBag;
-    if (v.qty !== undefined) entry.qty = v.qty;
-    if (Object.keys(entry).length > 0) slimOverrides[lotSid] = entry;
-  }
-  const extraBidLots = extraBidLotsBySellerId[sellerId] ?? [];
-  const storedOrder = salesRowOrderBySellerId?.[sellerId];
-  let persistOrder: SalesRowOrderKey[] | undefined;
-  if (storedOrder?.length && sellerForOrder) {
-    const removedSet = new Set(removed);
-    const def = buildDefaultSalesRowOrder(sellerForOrder, removedSet, extraBidLots);
-    if (JSON.stringify(storedOrder) !== JSON.stringify(def)) {
-      persistOrder = storedOrder;
-    }
-  }
-  if (
-    removed.length === 0 &&
-    Object.keys(slimOverrides).length === 0 &&
-    extraBidLots.length === 0 &&
-    !unregisteredPrintConfirmed &&
-    !persistOrder?.length
-  ) {
-    return undefined;
-  }
-  const payload: PattiExtensionJsonV1 = { v: PATTI_EXTENSION_JSON_VERSION };
-  if (removed.length > 0) payload.removedLotIds = [...removed];
-  if (Object.keys(slimOverrides).length > 0) payload.lotOverrides = slimOverrides;
-  if (extraBidLots.length > 0) payload.extraBidLots = extraBidLots.map(e => ({ ...e }));
-  if (persistOrder?.length) payload.salesRowOrder = [...persistOrder];
-  if (unregisteredPrintConfirmed) payload.unregisteredPrintConfirmed = true;
-  return JSON.stringify(payload);
-}
-
-function parsePattiExtensionJson(
-  extensionJson: string | null | undefined
-): {
-  removedLotIds: string[];
-  lotOverrides: Record<string, LotSalesOverride>;
-  extraBidLots: ExtraBidLot[];
-  salesRowOrder: SalesRowOrderKey[];
-  unregisteredPrintConfirmed: boolean;
-} | null {
-  if (extensionJson == null || !String(extensionJson).trim()) return null;
-  try {
-    const parsed = JSON.parse(extensionJson) as PattiExtensionJsonV1;
-    if (parsed.v !== PATTI_EXTENSION_JSON_VERSION) return null;
-    const removedLotIds = Array.isArray(parsed.removedLotIds) ? parsed.removedLotIds.map(String) : [];
-    const lotOverrides: Record<string, LotSalesOverride> = {};
-    if (parsed.lotOverrides && typeof parsed.lotOverrides === 'object') {
-      for (const [k, v] of Object.entries(parsed.lotOverrides)) {
-        if (!v || typeof v !== 'object') continue;
-        const o: LotSalesOverride = {};
-        if (typeof v.weight === 'number' && Number.isFinite(v.weight)) o.weight = v.weight;
-        if (typeof v.ratePerBag === 'number' && Number.isFinite(v.ratePerBag)) o.ratePerBag = v.ratePerBag;
-        if (typeof v.qty === 'number' && Number.isFinite(v.qty)) o.qty = v.qty;
-        if (hasLotSalesOverride(o)) lotOverrides[k] = o;
-      }
-    }
-    const extraBidLots = parseExtraBidLotsArray(parsed.extraBidLots);
-    const unregisteredPrintConfirmed = parsed.unregisteredPrintConfirmed === true;
-    const rawOrder = Array.isArray(parsed.salesRowOrder)
-      ? parsed.salesRowOrder.map(String).filter(Boolean)
-      : [];
-    return {
-      removedLotIds,
-      lotOverrides,
-      extraBidLots,
-      salesRowOrder: rawOrder as SalesRowOrderKey[],
-      unregisteredPrintConfirmed,
-    };
-  } catch {
-    return null;
-  }
-}
-
-/** Merge API lot totals with optional user overrides. Amount = (weight × rate per bag) / divisor. */
-function mergeLotDisplayRowLegacy(
-  lot: SettlementLot,
-  o: LotSalesOverride | undefined,
-  divisor: number,
-  settlementRateMode: 'original' | 'modified' = 'modified'
-) {
-  // dummy
-  const base = lotBaseSalesRow(lot, divisor, settlementRateMode);
-  if (!hasLotSalesOverride(o)) return base;
-  const qty =
-    o!.qty !== undefined && Number.isFinite(o!.qty) ? Math.max(0, Math.round(Number(o!.qty))) : base.qty;
-  const weight = o!.weight !== undefined ? o!.weight : base.weight;
-  const div = base.divisor;
-  const ratePerBag =
-    settlementRateMode === 'modified' && o!.ratePerBag !== undefined ? o!.ratePerBag : base.ratePerBag;
-  const amount = roundMoney2((weight * ratePerBag) / div);
-  const avg = qty > 0 ? weight / qty : 0;
-  return {
-    ...base,
-    qty,
-    weight,
-    avg,
-    ratePerBag,
-    amount,
-  };
-}
-
-function mergeLotDisplayRow(
-  lot: SettlementLot,
-  sid: string,
-  lotOv: Record<string, LotSalesOverride> | undefined,
-  divisor: number,
-  settlementRateMode: 'original' | 'modified' = 'modified'
-) {
-  const entries = lot.entries ?? [];
-  const div = divisor > 0 ? divisor : 50;
-  const itemLabel = String(lot.lotName || lot.commodityName || '—').trim() || '—';
-
-  if (entries.length === 0) {
-    return { ...mergeLotDisplayRowLegacy(lot, lotOv?.[sid], divisor, settlementRateMode), itemLabel };
-  }
-
-  if (entries.length > 1) {
-    let totalQty = 0;
-    let totalWeight = 0;
-    let totalAmount = 0;
-    let firstRate: number | undefined;
-    for (let i = 0; i < entries.length; i++) {
-      const row = mergeLotEntryDisplayRow(undefined as any, lot, i, lotOv, sid, divisor, settlementRateMode);
-      totalQty += row.qty;
-      totalWeight += row.weight;
-      totalAmount += row.amount;
-      if (firstRate === undefined) firstRate = row.ratePerBag;
-    }
-    const avg = totalQty > 0 ? totalWeight / totalQty : 0;
-    return {
-      itemLabel,
-      qty: totalQty,
-      weight: totalWeight,
-      avg,
-      ratePerBag: firstRate ?? 0,
-      amount: totalAmount,
-      divisor: div,
-    };
-  }
-
-  const row = mergeLotEntryDisplayRow(undefined as any, lot, 0, lotOv, sid, divisor, settlementRateMode);
-  return {
-    itemLabel,
-    qty: row.qty,
-    weight: row.weight,
-    avg: row.avg,
-    ratePerBag: row.ratePerBag,
-    amount: row.amount,
-    divisor: row.divisor,
-  };
-}
-
-/** Split merged lot quantity across bids in proportion to arrival quantities (matches weight distribution idea). */
-function distributeMergedQtyAcrossEntries(lot: SettlementLot, totalQty: number): number[] {
-  const entries = lot.entries ?? [];
-  const n = entries.length;
-  if (n === 0) return [];
-  const rounded = Math.max(0, Math.round(Number(totalQty) || 0));
-  if (rounded <= 0) return entries.map(() => 0);
-  const q0 = entries.map(e => Math.max(0, Math.round(Number(e.quantity) || 0)));
-  const sum0 = q0.reduce((a, b) => a + b, 0);
-  if (sum0 <= 0) {
-    const base = Math.floor(rounded / n);
-    let rem = rounded - base * n;
-    return entries.map((_, i) => base + (i < rem ? 1 : 0));
-  }
-  const raw = q0.map(q => (q / sum0) * rounded);
-  const fl = raw.map(x => Math.floor(x));
-  let rem = rounded - fl.reduce((a, b) => a + b, 0);
-  const ord = raw.map((x, i) => ({ i, r: x - fl[i] })).sort((a, b) => b.r - a.r);
-  const out = [...fl];
-  for (let k = 0; k < rem && k < ord.length; k++) out[ord[k].i]++;
-  return out;
-}
-
-/**
- * One Sales Report row per buyer bid: qty / weight / rate are per-bid when a lot has multiple entries
- * (no automatic split of one lot-level weight across buyers).
- */
-function mergeLotEntryDisplayRow(
-  seller: SellerSettlement,
-  lot: SettlementLot,
-  entryIndex: number,
-  lotOv: Record<string, LotSalesOverride> | undefined,
-  sid: string,
-  divisor: number,
-  settlementRateMode: 'original' | 'modified' = 'modified'
-) {
-  const entries = lot.entries ?? [];
-  const n = entries.length;
-  const lotIdLabel = seller ? formatSettlementAuctionLotIdentifier(seller, lot) : '';
-
-  if (n === 0) {
-    const base = lotBaseSalesRow(lot, divisor, settlementRateMode);
-    return { ...base, itemLabel: lotIdLabel };
-  }
-
-  const e = entries[entryIndex];
-  if (!e) {
-    const base = lotBaseSalesRow(lot, divisor, settlementRateMode);
-    return { ...base, itemLabel: lotIdLabel };
-  }
-
-  const entryKey = lotSalesOverrideStorageKey(sid, entryIndex, n);
-  let o: LotSalesOverride | undefined = lotOv?.[entryKey];
-  // Older pattis stored merged edits only on `sid`; map those to the first bid when multiple buyers exist.
-  if (o === undefined && entryIndex === 0 && n > 1) {
-    o = lotOv?.[sid];
-  }
-
-  const baseQty = e.quantity ?? 0;
-  const baseWeight = e.weight ?? 0;
-  const baseRate = settlementEffectiveRatePerBag(e, settlementRateMode);
-
-  const qty = o?.qty !== undefined && Number.isFinite(o.qty) ? Math.max(0, Math.round(Number(o.qty))) : baseQty;
-  const weight = o?.weight !== undefined && Number.isFinite(o.weight) ? o.weight : baseWeight;
-  const ratePerBag =
-    settlementRateMode === 'modified' && o?.ratePerBag !== undefined && Number.isFinite(o.ratePerBag)
-      ? o.ratePerBag
-      : baseRate;
-
-  const div = divisor > 0 ? divisor : 50;
-  const amount = roundMoney2((weight * ratePerBag) / div);
-  const avg = qty > 0 ? weight / qty : 0;
-
-  return {
-    itemLabel: lotIdLabel,
-    qty,
-    weight,
-    avg,
-    ratePerBag,
-    amount,
-    divisor: div,
-  };
-}
-
-type MainPattiPrintHeader = {
-  sellerName: string;
-  sellerMobile: string;
-  sellerAddress: string;
-  vehicleNumber: string;
-} | null;
-
-/**
- * Main vehicle patti: two printable payloads (ALT O vs ALT M detail rows / gross & net only).
- * Freight, weighing merge, and every deduction line use the same loop that legacy single-page
- * `printPayload` used (scope sellers → `sellerExpensesById` → `deductionTotals` → `deductions`); that block is not altered here beyond feeding one shared `printBase`.
- */
-function buildMainVehiclePattiPrintPayloadPair(
-  pattiData: PattiData,
-  scopeSellers: SellerSettlement[],
-  removedLotsBySellerId: Record<string, string[]>,
-  lotSalesOverridesBySellerId: Record<string, Record<string, LotSalesOverride> | undefined>,
-  extraBidLotsBySellerId: Record<string, ExtraBidLot[]>,
-  getLotDivisor: (lot: SettlementLot) => number,
-  vehicleNetPayableFromPatti: number,
-  headerId: MainPattiPrintHeader,
-  displayMainSalesPattiNo: string,
-  firmInfo: PattiPrintData['firm'],
-  sellerExpensesById: Record<string, SellerExpenseFormState>,
-  isWeighingEnabledForSeller: (id: string) => boolean,
-  isWeighingMergedIntoFreight: (id: string) => boolean
-): { printPayloadOrig: PattiPrintData; printPayloadMod: PattiPrintData } {
-  const detailRowsMod = buildMainVehiclePattiDetailRows(
-    scopeSellers,
-    removedLotsBySellerId,
-    lotSalesOverridesBySellerId,
-    extraBidLotsBySellerId,
-    getLotDivisor,
-    'modified',
-  );
-  const detailRowsOrig = buildMainVehiclePattiDetailRows(
-    scopeSellers,
-    removedLotsBySellerId,
-    lotSalesOverridesBySellerId,
-    extraBidLotsBySellerId,
-    getLotDivisor,
-    'original',
-  );
-  const totalBags = detailRowsMod.reduce((s, r) => s + (Number(r.bags) || 0), 0);
-  const commodityNames = Array.from(
-    new Set(
-      scopeSellers.flatMap(s => [
-        ...s.lots.map(l => String(l.commodityName || '').trim()).filter(Boolean),
-        ...(extraBidLotsBySellerId[s.sellerId] ?? []).map(e => String(e.commodityName || '').trim()).filter(Boolean),
-      ])
-    )
-  );
-  const commodityName =
-    commodityNames.length === 1
-      ? commodityNames[0]
-      : (commodityNames.length > 1 ? 'Mixed Commodity' : 'Commodity');
-  const deductionTotals = {
-    freight: 0,
-    unloading: 0,
-    weighing: 0,
-    advance: 0,
-    gunnies: 0,
-    others: 0,
-  };
-  for (const seller of scopeSellers) {
-    const exp = sellerExpensesById[seller.sellerId] ?? defaultSellerExpenses();
-    const mergeIntoFreight = isWeighingMergedIntoFreight(seller.sellerId);
-    if (isWeighingEnabledForSeller(seller.sellerId)) {
-      if (mergeIntoFreight) {
-        deductionTotals.freight += (Number(exp.freight) || 0) + (Number(exp.weighman) || 0);
-      } else {
-        deductionTotals.freight += Number(exp.freight) || 0;
-        deductionTotals.weighing += Number(exp.weighman) || 0;
-      }
-    } else {
-      deductionTotals.freight += Number(exp.freight) || 0;
-    }
-    deductionTotals.unloading += Number(exp.unloading) || 0;
-    deductionTotals.advance += Number(exp.cashAdvance) || 0;
-    deductionTotals.gunnies += Number(exp.gunnies) || 0;
-    deductionTotals.others += Number(exp.others) || 0;
-  }
-  const deductions: PattiPrintData['deductions'] = [
-    { key: 'freight', label: 'Freight', amount: roundMoney2(deductionTotals.freight) },
-    { key: 'coolie', label: 'Unloading', amount: roundMoney2(deductionTotals.unloading) },
-    ...(deductionTotals.weighing > 0
-      ? [{ key: 'weighing', label: 'Weighing', amount: roundMoney2(deductionTotals.weighing) }]
-      : []),
-    { key: 'advance', label: 'Cash Advance', amount: roundMoney2(deductionTotals.advance) },
-    { key: 'gunnies', label: 'Gunnies', amount: roundMoney2(deductionTotals.gunnies) },
-    { key: 'others', label: 'Others', amount: roundMoney2(deductionTotals.others) },
-  ];
-  const primarySeller = scopeSellers[0];
-  const totalDeductions = roundMoney2(deductions.reduce((s, d) => s + d.amount, 0));
-  const grossMod = roundMoney2(detailRowsMod.reduce((s, r) => s + (Number(r.amount) || 0), 0));
-  const grossOrig = roundMoney2(detailRowsOrig.reduce((s, r) => s + (Number(r.amount) || 0), 0));
-  const netMod = roundMoney2(vehicleNetPayableFromPatti);
-  const netOrig = roundMoney2(grossOrig - totalDeductions);
-  const printBase: PattiPrintData = {
-    ...pattiData,
-    sellerName: headerId?.sellerName || pattiData.sellerName || primarySeller.sellerName,
-    sellerMobile: headerId?.sellerMobile || '',
-    sellerAddress: headerId?.sellerAddress || '',
-    vehicleNumber: headerId?.vehicleNumber || '',
-    pattiNoDisplay: mainPattiNumberForDisplay(displayMainSalesPattiNo, pattiData.pattiId),
-    commodityName,
-    totalBags,
-    deductions,
-    totalDeductions,
-    firm: firmInfo,
-  };
-  return {
-    printPayloadOrig: {
-      ...printBase,
-      detailRows: detailRowsOrig,
-      grossAmount: grossOrig,
-      rateClusters: [],
-      netPayable: netOrig,
-    },
-    printPayloadMod: {
-      ...printBase,
-      detailRows: detailRowsMod,
-      grossAmount: grossMod,
-      rateClusters: pattiData.rateClusters,
-      netPayable: netMod,
-    },
-  };
-}
-
-/** All sellers on the vehicle: detail rows for main patti print (per rate mode). */
-function buildMainVehiclePattiDetailRows(
-  scopeSellers: SellerSettlement[],
-  removedLotsBySellerId: Record<string, string[]>,
-  lotSalesOverridesBySellerId: Record<string, Record<string, LotSalesOverride> | undefined>,
-  extraBidLotsBySellerId: Record<string, ExtraBidLot[]>,
-  getLotDivisor: (lot: SettlementLot) => number,
-  mode: 'original' | 'modified'
-): { mark: string; bags: number; weight: number; rate: number; amount: number }[] {
-  return scopeSellers.flatMap(seller => {
-    const removedSet = new Set(removedLotsBySellerId[seller.sellerId] ?? []);
-    const lotOverrides = lotSalesOverridesBySellerId[seller.sellerId];
-    const fromApi = seller.lots.flatMap((lot, lotIndex) => {
-      const sid = lotStableId(lot, lotIndex);
-      if (removedSet.has(sid)) return [];
-      const row = mergeLotDisplayRow(lot, sid, lotOverrides, getLotDivisor(lot), mode);
-      return [
-        {
-          mark: (seller.sellerMark || '-').trim() || '-',
-          bags: Number(row.qty) || 0,
-          weight: Number(row.weight) || 0,
-          rate: Number(row.ratePerBag) || 0,
-          amount: Number(row.amount) || 0,
-        },
-      ];
-    });
-    const extras = extraBidLotsBySellerId[seller.sellerId] ?? [];
-    const fromExtra = extras.map(e => {
-      const lot = settlementLotFromExtraBid(e);
-      const row = mergeLotDisplayRow(lot, '', undefined, getLotDivisor(lot), mode);
-      return {
-        mark: (seller.sellerMark || '-').trim() || '-',
-        bags: Number(row.qty) || 0,
-        weight: Number(row.weight) || 0,
-        rate: Number(row.ratePerBag) || 0,
-        amount: Number(row.amount) || 0,
-      };
-    });
-    return [...fromApi, ...fromExtra];
-  });
-}
-
-/** Stable row id for delete/hide when `lotId` is missing from API. */
-function lotStableId(lot: SettlementLot, index: number): string {
-  if (lot.lotId && String(lot.lotId).trim()) return String(lot.lotId).trim();
-  return `__idx_${index}_${encodeURIComponent(lot.lotName || '')}_${encodeURIComponent(lot.commodityName || '')}`;
-}
-
-type SalesRowOrderKey = string;
-
-function salesRowKeyApi(sid: string): SalesRowOrderKey {
-  return `a:${sid}`;
-}
-
-function salesRowKeyExtra(id: string): SalesRowOrderKey {
-  return `e:${id}`;
-}
-
-function parseSalesRowOrderKey(k: string): { type: 'api'; sid: string } | { type: 'extra'; id: string } | null {
-  if (k.startsWith('a:')) return { type: 'api', sid: k.slice(2) };
-  if (k.startsWith('e:')) return { type: 'extra', id: k.slice(2) };
-  return null;
-}
-
-function newExtraBidLotId(): string {
-  return typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
-    ? crypto.randomUUID()
-    : `eb_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
-}
-
-function buildDefaultSalesRowOrder(
-  seller: SellerSettlement,
-  removedSet: Set<string>,
-  extraLots: ExtraBidLot[]
-): SalesRowOrderKey[] {
-  const keys: SalesRowOrderKey[] = [];
-  for (let i = 0; i < (seller.lots ?? []).length; i++) {
-    const lot = seller.lots![i];
-    const sid = lotStableId(lot, i);
-    if (removedSet.has(sid)) continue;
-    keys.push(salesRowKeyApi(sid));
-  }
-  for (const e of extraLots) keys.push(salesRowKeyExtra(e.id));
-  return keys;
-}
-
-function sanitizeSalesRowOrder(
-  order: SalesRowOrderKey[] | undefined,
-  seller: SellerSettlement,
-  removedSet: Set<string>,
-  extraLots: ExtraBidLot[]
-): SalesRowOrderKey[] {
-  const fallback = buildDefaultSalesRowOrder(seller, removedSet, extraLots);
-  const validApi = new Set(
-    (seller.lots ?? [])
-      .map((lot, i) => lotStableId(lot, i))
-      .filter(sid => !removedSet.has(sid))
-  );
-  const validExtra = new Set(extraLots.map(e => e.id));
-  if (!order?.length) return fallback;
-  const seen = new Set<SalesRowOrderKey>();
-  const out: SalesRowOrderKey[] = [];
-  for (const k of order) {
-    const p = parseSalesRowOrderKey(k);
-    if (!p) continue;
-    if (p.type === 'api' && validApi.has(p.sid) && !seen.has(k)) {
-      seen.add(k);
-      out.push(k);
-    }
-    if (p.type === 'extra' && validExtra.has(p.id) && !seen.has(k)) {
-      seen.add(k);
-      out.push(k);
-    }
-  }
-  for (const k of fallback) {
-    if (!seen.has(k)) out.push(k);
-  }
-  return out;
-}
-
-/** Cancel payload for inline split transaction (revert to single row). */
-type SplitCancelRestore =
-  | {
-      kind: 'api_plus_extra';
-      apiSid: string;
-      prevApiOverride: LotSalesOverride;
-      newExtraId: string;
-    }
-  | {
-      kind: 'extra_pair';
-      firstExtraId: string;
-      newExtraId: string;
-      originalExtra: ExtraBidLot;
-    };
-
-/** Active split edit: two rows, fixed totals until Save or Cancel. */
-type SplitGroupSnapshot = {
-  splitGroupId: string;
-  sellerId: string;
-  rowKeyA: SalesRowOrderKey;
-  rowKeyB: SalesRowOrderKey;
-  totalQty: number;
-  totalWeight: number;
-  isEditing: boolean;
-  cancelRestore: SplitCancelRestore;
-};
-
-function splitGroupHasRowKey(g: SplitGroupSnapshot, k: SalesRowOrderKey): boolean {
-  return g.rowKeyA === k || g.rowKeyB === k;
-}
-
-function getSalesRowKeyForTableRow(isExtraBid: boolean, sid: string): SalesRowOrderKey {
-  return isExtraBid ? salesRowKeyExtra(sid) : salesRowKeyApi(sid);
-}
-
-function addSlabChargesForLotWeight(
-  lot: SettlementLot,
-  actualW: number,
-  nameToId: Map<string, number>,
-  configById: Map<number, FullCommodityConfigDto>
-): { unloading: number; weighing: number } {
-  let unloading = 0;
-  let weighing = 0;
-  const cname = (lot.commodityName || '').trim();
-  if (!cname) return { unloading, weighing };
-  const cid = nameToId.get(cname.toLowerCase());
-  if (cid == null) return { unloading, weighing };
-  const full = configById.get(cid);
-  if (!full?.config) return { unloading, weighing };
-
-  const slabs = [...(full.hamaliSlabs ?? [])].sort((a, b) => a.thresholdWeight - b.thresholdWeight);
-  const slab = slabs[0];
-  if (slab && slab.thresholdWeight > 0) {
-    unloading += computeSlabChargeTotal(actualW, slab.fixedRate, slab.thresholdWeight);
-  }
-
-  const cfg = full.config;
-  const wTh = cfg.weighingThreshold ?? 0;
-  const wCh = cfg.weighingCharge ?? 0;
-  if (wTh > 0) {
-    weighing += computeSlabChargeTotal(actualW, wCh, wTh);
-  }
-  return { unloading, weighing };
-}
-
-/** Lot-level unloading (hamali slab) + weighing (commodity threshold/charge) using Sales report weights. */
-function sumLotSlabChargesForSeller(
-  seller: SellerSettlement,
-  extraBidLots: ExtraBidLot[],
-  removed: Set<string>,
-  lotOv: Record<string, LotSalesOverride>,
-  nameToId: Map<string, number>,
-  configById: Map<number, FullCommodityConfigDto>,
-  getDivisor: (lot: SettlementLot) => number
-): { unloading: number; weighing: number } {
-  let unloading = 0;
-  let weighing = 0;
-  seller.lots.forEach((lot, i) => {
-    const sid = lotStableId(lot, i);
-    if (removed.has(sid)) return;
-    const merged = mergeLotDisplayRow(lot, sid, lotOv, getDivisor(lot));
-    const actualW = merged.weight;
-    const add = addSlabChargesForLotWeight(lot, actualW, nameToId, configById);
-    unloading += add.unloading;
-    weighing += add.weighing;
-  });
-  for (const e of extraBidLots) {
-    const lot = settlementLotFromExtraBid(e);
-    const merged = mergeLotDisplayRow(lot, '', undefined, getDivisor(lot));
-    const add = addSlabChargesForLotWeight(lot, merged.weight, nameToId, configById);
-    unloading += add.unloading;
-    weighing += add.weighing;
-  }
-  return { unloading, weighing };
-}
-
-/**
- * Recompute commodity weighing slab total for a patti row (extensionJson + seller lots).
- * Used when hydrating legacy saves that merged weighing into `freight` with no `weighing` deduction line.
- */
-function inferWeighmanSlabHintForPattiHydration(
-  p: PattiDTO,
-  sellers: SellerSettlement[],
-  commodityList: Commodity[],
-  fullCommodityConfigs: FullCommodityConfigDto[],
-  getLotDivisor: (lot: SettlementLot) => number
-): number | undefined {
-  const sidKey = String(p.sellerId ?? '').trim();
-  if (!sidKey) return undefined;
-  const sellerModel =
-    sellers.find(s => s.sellerId === sidKey) ??
-    ({
-      sellerId: sidKey,
-      sellerName: (p.sellerName ?? '').trim(),
-      sellerMark: '',
-      vehicleNumber: '',
-      lots: [],
-    } as SellerSettlement);
-  const parsed = parsePattiExtensionJson(p.extensionJson);
-  const removed = new Set(parsed?.removedLotIds ?? []);
-  const lotOv = parsed?.lotOverrides ?? {};
-  const extraLots = parsed?.extraBidLots ?? [];
-  if ((sellerModel.lots?.length ?? 0) === 0 && extraLots.length === 0) return undefined;
-  const nameToId = new Map<string, number>();
-  for (const c of commodityList) {
-    const name = String(c.commodity_name ?? '').trim().toLowerCase();
-    const id = Number(c.commodity_id);
-    if (name && Number.isFinite(id)) nameToId.set(name, id);
-  }
-  const configById = new Map(fullCommodityConfigs.map(c => [c.commodityId, c]));
-  const { weighing } = sumLotSlabChargesForSeller(
-    sellerModel,
-    extraLots,
-    removed,
-    lotOv,
-    nameToId,
-    configById,
-    getLotDivisor
-  );
-  const w = roundMoney2(weighing);
-  return w > 0 ? w : undefined;
-}
-
-/** Per-seller slab sums + qty/weight for vehicle; shared by Quick Adjustment modal and expense auto-pull. */
-function buildSellerSlabChargeBaseForPattiSellers(
-  arrivalSellersForPatti: SellerSettlement[],
-  removedLotsBySellerId: Record<string, string[]>,
-  lotSalesOverridesBySellerId: Record<string, Record<string, LotSalesOverride>>,
-  extraBidLotsBySellerId: Record<string, ExtraBidLot[]>,
-  nameToId: Map<string, number>,
-  configById: Map<number, FullCommodityConfigDto>,
-  getDivisor: (lot: SettlementLot) => number
-): Array<{
-  sellerId: string;
-  sellerName: string;
-  quantity: number;
-  unloading: number;
-  weighing: number;
-  actualWeight: number;
-}> {
-  return arrivalSellersForPatti.map(s => {
-    const removed = new Set(removedLotsBySellerId[s.sellerId] ?? []);
-    const lotOv = lotSalesOverridesBySellerId[s.sellerId] ?? {};
-    const extras = extraBidLotsBySellerId[s.sellerId] ?? [];
-    const { unloading, weighing } = sumLotSlabChargesForSeller(
-      s,
-      extras,
-      removed,
-      lotOv,
-      nameToId,
-      configById,
-      getDivisor
-    );
-    const actualWeight =
-      s.lots.reduce((sum, lot, i) => {
-        const sid = lotStableId(lot, i);
-        if (removed.has(sid)) return sum;
-        const merged = mergeLotDisplayRow(lot, sid, lotOv, getDivisor(lot));
-        return sum + (Number(merged.weight) || 0);
-      }, 0) +
-      extras.reduce((sum, e) => {
-        const lot = settlementLotFromExtraBid(e);
-        const merged = mergeLotDisplayRow(lot, '', undefined, getDivisor(lot));
-        return sum + (Number(merged.weight) || 0);
-      }, 0);
-    const qty = Math.max(
-      0,
-      Math.round(
-        s.lots.reduce((sum, lot, i) => {
-          const sid = lotStableId(lot, i);
-          if (removed.has(sid)) return sum;
-          const merged = mergeLotDisplayRow(lot, sid, lotOv, getDivisor(lot));
-          return sum + (Number(merged.qty) || 0);
-        }, 0) +
-          extras.reduce((sum, e) => {
-            const lot = settlementLotFromExtraBid(e);
-            const merged = mergeLotDisplayRow(lot, '', undefined, getDivisor(lot));
-            return sum + (Number(merged.qty) || 0);
-          }, 0)
-      )
-    );
-    return {
-      sellerId: s.sellerId,
-      sellerName: s.sellerName || 'Seller',
-      quantity: qty,
-      unloading,
-      weighing,
-      actualWeight,
-    };
-  });
-}
-
-function buildRateClustersFromSellerLots(
-  seller: SellerSettlement,
-  removedIds: Set<string>,
-  lotOverrides?: Record<string, LotSalesOverride>,
-  getDivisor?: (lot: SettlementLot) => number,
-  extraBidLots?: ExtraBidLot[],
-  settlementRateMode: 'original' | 'modified' = 'modified'
-): RateCluster[] {
-  const divFn = getDivisor ?? (() => 50);
-  const rateMap = new Map<number, RateCluster>();
-  const pushRow = (row: ReturnType<typeof mergeLotDisplayRow>) => {
-    const ratePerBag = row.ratePerBag;
-    const qty = row.qty;
-    const weight = row.weight;
-    const amount = row.amount;
-    const existing = rateMap.get(ratePerBag);
-    if (existing) {
-      existing.totalQuantity += qty;
-      existing.totalWeight += weight;
-      existing.amount += amount;
-    } else {
-      rateMap.set(ratePerBag, {
-        rate: ratePerBag,
-        totalQuantity: qty,
-        totalWeight: weight,
-        amount,
-      });
-    }
-  };
-  seller.lots.forEach((lot, i) => {
-    const sid = lotStableId(lot, i);
-    if (removedIds.has(sid)) return;
-    const ov = lotOverrides?.[sid];
-    pushRow(mergeLotDisplayRow(lot, sid, lotOverrides, divFn(lot), settlementRateMode));
-  });
-  for (const e of extraBidLots ?? []) {
-    const lot = settlementLotFromExtraBid(e);
-    pushRow(mergeLotDisplayRow(lot, '', undefined, divFn(lot), settlementRateMode));
-  }
-  return Array.from(rateMap.values()).sort((a, b) => b.rate - a.rate);
-}
-
-function defaultSellerExpenses(): SellerExpenseFormState {
-  return { freight: 0, unloading: 0, weighman: 0, cashAdvance: 0, gunnies: 0, others: 0 };
-}
-
-/** Quick Adjustment: amounts from expense card; quantities/names from slab base rows. */
-function rowsFromExpenseCardAndSlabQuantities(
-  sellerComputedBase: Array<{ sellerId: string; sellerName: string; quantity: number }>,
-  sellerExpensesById: Record<string, SellerExpenseFormState>
-): VehicleExpenseRow[] {
-  return sellerComputedBase.map(s => {
-    const exp = sellerExpensesById[s.sellerId] ?? defaultSellerExpenses();
-    return {
-      id: `ve_${s.sellerId}`,
-      sellerId: s.sellerId,
-      sellerName: s.sellerName,
-      quantity: s.quantity,
-      freight: roundMoney2(exp.freight),
-      unloading: roundMoney2(exp.unloading),
-      weighing: roundMoney2(exp.weighman),
-      gunnies: roundMoney2(exp.gunnies),
-    };
-  });
-}
-
-/** Fresh slab + bag distribution only (no DB hydrate, no expense-card freight/unloading/weighing). Gunnies kept per seller from `gunniesBySellerId`. */
-function buildVehicleExpenseRowsComputedFromSlabs(
-  sellerComputedBase: Array<{
-    sellerId: string;
-    sellerName: string;
-    quantity: number;
-    unloading: number;
-    weighing: number;
-    actualWeight: number;
-  }>,
-  freightTotal: number,
-  equalShareFreight: number,
-  gunniesBySellerId: Record<string, number>
-): VehicleExpenseRow[] {
-  const nSellers = sellerComputedBase.length;
-  const totalActualWeightOnSettlement = sellerComputedBase.reduce((sum, s) => sum + s.actualWeight, 0);
-  const perKgFreight = totalActualWeightOnSettlement > 0 ? freightTotal / totalActualWeightOnSettlement : 0;
-  const unloadingTotal = sellerComputedBase.reduce((sum, s) => sum + (Number(s.unloading) || 0), 0);
-  const weighingTotal = sellerComputedBase.reduce((sum, s) => sum + (Number(s.weighing) || 0), 0);
-  const totalQtyOnSettlement = sellerComputedBase.reduce((sum, s) => sum + (Number(s.quantity) || 0), 0);
-  const perBagUnloading = totalQtyOnSettlement > 0 ? unloadingTotal / totalQtyOnSettlement : 0;
-  const perBagWeighing = totalQtyOnSettlement > 0 ? weighingTotal / totalQtyOnSettlement : 0;
-  const equalShareUnloading = nSellers > 0 ? unloadingTotal / nSellers : 0;
-  const equalShareWeighing = nSellers > 0 ? weighingTotal / nSellers : 0;
-
-  return sellerComputedBase.map(s => {
-    const freight = roundMoney2(
-      perKgFreight > 0 ? perKgFreight * s.actualWeight : equalShareFreight
-    );
-    const unloading = roundMoney2(
-      perBagUnloading > 0
-        ? perBagUnloading * s.quantity
-        : equalShareUnloading > 0
-          ? equalShareUnloading
-          : s.unloading
-    );
-    const weighing = roundMoney2(
-      perBagWeighing > 0
-        ? perBagWeighing * s.quantity
-        : equalShareWeighing > 0
-          ? equalShareWeighing
-          : s.weighing
-    );
-    return {
-      id: `ve_${s.sellerId}`,
-      sellerId: s.sellerId,
-      sellerName: s.sellerName,
-      quantity: s.quantity,
-      freight,
-      unloading,
-      weighing,
-      gunnies: roundMoney2(gunniesBySellerId[s.sellerId] ?? 0),
-    };
-  });
-}
-
-function vehicleExpenseOriginalsFromRows(rows: VehicleExpenseRow[]): Record<string, VehicleExpenseFieldValues> {
-  return rows.reduce<Record<string, VehicleExpenseFieldValues>>((acc, row) => {
-    acc[row.id] = {
-      freight: row.freight,
-      unloading: row.unloading,
-      weighing: row.weighing,
-      gunnies: row.gunnies,
-    };
-    return acc;
-  }, {});
-}
-
-function moneyNearEqual(a: number, b: number): boolean {
-  return Math.abs(roundMoney2(a) - roundMoney2(b)) < 0.005;
-}
-
-/** Main vehicle patti number for print (e.g. "16"), not seller sub-card "16-2". */
-function mainPattiNumberForDisplay(displayMainFromMemo: string, pattiId: string): string {
-  const d = String(displayMainFromMemo || '').trim();
-  if (d) return d;
-  const raw = String(pattiId || '').trim();
-  const m = raw.match(/^(.*)-\d+$/);
-  return (m ? m[1] : raw) || '-';
-}
-
-function buildSellerSubPattiPrintData(
-  seller: SellerSettlement,
-  displayName: string,
-  expenses: SellerExpenseFormState,
-  removedIds: Set<string>,
-  pattiId: string,
-  createdAt: string,
-  lotOverrides?: Record<string, LotSalesOverride>,
-  getDivisor?: (lot: SettlementLot) => number,
-  weighingEnabled = true,
-  mergeWeighingIntoFreight = true,
-  sellerMobile = '',
-  sellerPattiNoForPrint = '',
-  extraBidLots: ExtraBidLot[] = [],
-  settlementRateMode: 'original' | 'modified' = 'modified'
-): PattiPrintData {
-  const divisorFn = getDivisor ?? (() => 50);
-  const lotRowsFromApi = seller.lots.flatMap((lot, lotIndex) => {
-    const sid = lotStableId(lot, lotIndex);
-    if (removedIds.has(sid)) return [];
-    const ov = lotOverrides?.[sid];
-    const row = mergeLotDisplayRow(lot, sid, lotOverrides, divisorFn(lot), settlementRateMode);
-    return [{
-      mark: (seller.sellerMark || '-').trim() || '-',
-      bags: Number(row.qty) || 0,
-      weight: Number(row.weight) || 0,
-      rate: Number(row.ratePerBag) || 0,
-      amount: Number(row.amount) || 0,
-    }];
-  });
-  const lotRowsFromExtra = extraBidLots.map(e => {
-    const lot = settlementLotFromExtraBid(e);
-    const row = mergeLotDisplayRow(lot, '', undefined, divisorFn(lot), settlementRateMode);
-    return {
-      mark: (seller.sellerMark || '-').trim() || '-',
-      bags: Number(row.qty) || 0,
-      weight: Number(row.weight) || 0,
-      rate: Number(row.ratePerBag) || 0,
-      amount: Number(row.amount) || 0,
-    };
-  });
-  const lotRows = [...lotRowsFromApi, ...lotRowsFromExtra];
-
-  const rateClusters = buildRateClustersFromSellerLots(
-    seller,
-    removedIds,
-    lotOverrides,
-    getDivisor,
-    extraBidLots,
-    settlementRateMode
-  );
-  const grossAmount = lotRows.reduce((s, r) => s + r.amount, 0);
-  const merged = weighingEnabled && mergeWeighingIntoFreight;
-  let freightAmount = expenses.freight;
-  let weighingAmount = 0;
-  if (weighingEnabled) {
-    if (merged) {
-      freightAmount += expenses.weighman;
-    } else {
-      weighingAmount = expenses.weighman;
-    }
-  }
-
-  const deductions = [
-    {
-      key: 'freight',
-      label: merged ? 'Freight Amount (incl. weighing)' : 'Freight Amount',
-      amount: freightAmount,
-      autoPulled: false,
-    },
-    { key: 'unloading', label: 'Unloading Charges', amount: expenses.unloading, autoPulled: false },
-    { key: 'advance', label: 'Cash Advance', amount: expenses.cashAdvance, autoPulled: false },
-    { key: 'gunnies', label: 'Gunnies', amount: expenses.gunnies, autoPulled: false },
-    { key: 'others', label: 'Others', amount: expenses.others, autoPulled: false },
-  ];
-  if (weighingEnabled && !merged) {
-    deductions.splice(2, 0, { key: 'weighing', label: 'Weighing Charges', amount: weighingAmount, autoPulled: false });
-  }
-
-  const totalDeductions = deductions.reduce((s, d) => s + d.amount, 0);
-  const subLabel = pattiId ? `${pattiId} · Sub` : 'Sub-patti';
-  const displayNo = String(sellerPattiNoForPrint || '').trim();
-  const commodityNames = Array.from(
-    new Set([
-      ...seller.lots.map(l => String(l.commodityName || '').trim()).filter(Boolean),
-      ...extraBidLots.map(e => String(e.commodityName || '').trim()).filter(Boolean),
-    ]),
-  );
-  const commodityName = commodityNames.length === 1
-    ? commodityNames[0]
-    : (commodityNames.length > 1 ? 'Mixed Commodity' : 'Commodity');
-  const totalBags = lotRows.reduce((s, r) => s + r.bags, 0);
-
-  return {
-    pattiId: subLabel,
-    pattiNoDisplay: displayNo || undefined,
-    sellerName: displayName,
-    sellerMobile,
-    sellerAddress: seller.fromLocation || '',
-    vehicleNumber: seller.vehicleNumber || '',
-    commodityName,
-    totalBags,
-    detailRows: lotRows,
-    rateClusters,
-    grossAmount,
-    deductions,
-    totalDeductions,
-    netPayable: grossAmount - totalDeductions,
-    createdAt,
-    useAverageWeight: false,
-  };
-}
-
-function defaultSellerForm(seller: SellerSettlement): SellerRegFormState {
-  const linked = seller.contactId != null && String(seller.contactId).trim() !== '';
-  return {
-    registrationChosen: false,
-    registered: false,
-    contactId: linked ? String(seller.contactId) : null,
-    replacementSellerId: null,
-    mark: seller.sellerMark || '',
-    name: seller.sellerName || '',
-    mobile: (seller.sellerPhone ?? '').trim(),
-    contactSearchQuery: '',
-    addAndChangeSeller: false,
-    allowRegisteredEdit: false,
-    unregisteredPrintConfirmed: false,
-  };
-}
+import { InlineCalcTip } from './settlement/InlineCalcTip';
+import { SettlementSavedPattiVehicleCard } from './settlement/SettlementSavedPattiVehicleCard';
+import { SettlementMobileVirtualStack } from './settlement/SettlementVirtualStack';
+import {
+  DESKTOP_SIDEBAR_LIKE_GRADIENT_BG,
+  DESKTOP_SIDEBAR_LIKE_SHINE,
+  EMPTY_SELLER_ARRIVAL_TALLY,
+  SALES_REPORT_SELLER_CARD_STYLES,
+  SETTLEMENT_EDIT_HEADER_PARTICLES,
+  SETTLEMENT_LIST_HEADER_PARTICLES,
+  SETTLEMENT_LOTS_TABLE_HEADER_GRADIENT,
+  SETTLEMENT_SAVED_PATTI_LAYOUT_STORAGE_KEY,
+  SETTLEMENT_VIRTUAL_MIN_ROWS,
+  VEHICLE_NUMBER_MAX,
+  VEHICLE_NUMBER_MIN,
+  arrOutlineMd,
+  arrOutlineSm,
+  arrOutlineTall,
+  arrSolidMd,
+  arrSolidSm,
+  arrSolidTall,
+  settlementExpenseDerivedInputAffordanceClass,
+  settlementExpenseInputClass,
+  settlementExpenseToggleBtnClass,
+  settlementReadOnlyCellClass,
+  settlementToggleTabBtn,
+  settlementToggleTabBtnOnHero,
+  tabHint,
+} from './settlement/settlementConstants';
+import {
+  areDeductionItemsEqual,
+  areRateClustersEqual,
+  bagsFromArrivalSeller,
+  buildDeductionItemsFromSellerExpenses,
+  buildDefaultSalesRowOrder,
+  buildPattiExtensionJsonForSeller,
+  buildRateClustersFromSellerLots,
+  buildSellerSlabChargeBaseForPattiSellers,
+  buildVehicleExpenseRowsComputedFromSlabs,
+  clampMoney,
+  clearSessionOriginalSnapshotsForSellerIds,
+  computeSlabChargeTotal,
+  deductionsToSellerExpenseForm,
+  defaultSellerExpenses,
+  defaultSellerForm,
+  distributeMergedQtyAcrossEntries,
+  findArrivalSellerForSettlement,
+  firstArrivalSellerLabel,
+  formatArrivalSellerListLabel,
+  formatMoney2Display,
+  formatOptionalInt,
+  formatOptionalKg,
+  formatRupeeInr,
+  getSalesRowKeyForTableRow,
+  grossAmountFromOriginalPayloadRecord,
+  hasLotSalesOverride,
+  hydrateSessionOriginalSnapshotFromDto,
+  inferWeighmanSlabHintForPattiHydration,
+  isAbortError,
+  isFrozenPatti,
+  isSettlementSellerPrintAllowed,
+  isSettlementSellerPrintRegistered,
+  isVehicleNumberValid,
+  lotBaseSalesRow,
+  lotSalesOverrideStorageKey,
+  lotStableId,
+  mainPattiNumberForDisplay,
+  mapPattiDTOToPattiData,
+  mergeLotEntryDisplayRow,
+  mergeLotDisplayRow,
+  moneyNearEqual,
+  newExtraBidLotId,
+  normalizeVehicleKey,
+  parseCompoundBaseFromPattiId,
+  parseCompoundSeqFromPattiId,
+  parsePattiExtensionJson,
+  parseSalesRowOrderKey,
+  pattiDtoFromOriginalSnapshotPayload,
+  pickFirstArrivalSeller,
+  readOriginalGrossForSellerId,
+  roundMoney2,
+  salesRowKeyApi,
+  salesRowKeyExtra,
+  sanitizeSalesRowOrder,
+  arrivalVehicleGroupSegment,
+  rowsFromExpenseCardAndSlabQuantities,
+  sellersForSettlementArrivalScope,
+  settlementEffectiveRatePerBag,
+  settlementLotFromExtraBid,
+  settlementPattiListGroupKey,
+  settlementSellerPrintGateMessage,
+  splitGroupHasRowKey,
+  sumPattiClusterQty,
+  sumPattiClusterWeight,
+  tallyFromPattiDtoClusters,
+  tallySellerArrival,
+  totalArrivalBagsForSeller,
+  totalBagsForSeller,
+  totalBagsFromPattiRateClusters,
+  totalBillingNetWeightForSeller,
+  totalPadEstimateWeightForSeller,
+  totalSellerExpenses,
+  uniqueArrivalSellerCount,
+  vehicleArrivalNetBillableKgForSeller,
+  vehicleExpenseOriginalsFromRows,
+} from './settlement/settlementCalculations';
+import {
+  buildMainVehiclePattiPrintPayloadPair,
+  buildSellerSubPattiPrintData,
+  buildSettlementPattiPagesForConfiguredCopies,
+} from './settlement/settlementPrintModel';
+import type {
+  AddVoucherRowState,
+  ArrivalSummaryRow,
+  ExtraBidLot,
+  InProgressSettlementDraft,
+  LotSalesOverride,
+  PattiData,
+  SalesRowOrderKey,
+  SavedArrivalSummaryRow,
+  SellerArrivalTally,
+  SellerExpenseFormState,
+  SellerRegFormState,
+  SellerSettlement,
+  SettlementLot,
+  SettlementSalesTableRow,
+  SplitCancelRestore,
+  SplitGroupSnapshot,
+  VehicleExpenseField,
+  VehicleExpenseFieldValues,
+  VehicleExpenseRow,
+} from './settlement/settlementTypes';
 
 function useDebouncedValue<T>(value: T, delayMs: number): T {
   const [debounced, setDebounced] = useState(value);
@@ -2265,63 +203,6 @@ function useDebouncedValue<T>(value: T, delayMs: number): T {
     return () => clearTimeout(t);
   }, [value, delayMs]);
   return debounced;
-}
-
-function isAbortError(e: unknown): boolean {
-  return (
-    (typeof DOMException !== 'undefined' && e instanceof DOMException && e.name === 'AbortError') ||
-    (e instanceof Error && e.name === 'AbortError')
-  );
-}
-
-const SETTLEMENT_VIRTUAL_MIN_ROWS = 48;
-
-/** Long mobile card stacks: measured row heights inside bounded scroll (Sales Pad–style). */
-function SettlementMobileVirtualStack({
-  count,
-  estimateItemSize,
-  getItemKey,
-  containerClassName,
-  children,
-}: {
-  count: number;
-  estimateItemSize: number;
-  getItemKey: (index: number) => string | number;
-  containerClassName?: string;
-  children: (index: number) => ReactNode;
-}) {
-  const parentRef = useRef<HTMLDivElement | null>(null);
-  const virtualizer = useVirtualizer({
-    count,
-    getScrollElement: () => parentRef.current,
-    estimateSize: () => estimateItemSize,
-    overscan: 8,
-    measureElement,
-    getItemKey,
-  });
-  return (
-    <div
-      ref={parentRef}
-      className={cn(
-        'max-h-[min(72vh,720px)] overflow-y-auto overscroll-contain [-webkit-overflow-scrolling:touch]',
-        containerClassName,
-      )}
-    >
-      <div className="relative w-full" style={{ height: virtualizer.getTotalSize() }}>
-        {virtualizer.getVirtualItems().map(vi => (
-          <div
-            key={vi.key}
-            data-index={vi.index}
-            ref={virtualizer.measureElement}
-            className="absolute left-0 top-0 w-full pb-3"
-            style={{ transform: `translateY(${vi.start}px)` }}
-          >
-            {children(vi.index)}
-          </div>
-        ))}
-      </div>
-    </div>
-  );
 }
 
 const SettlementPage = () => {
@@ -3042,6 +923,14 @@ const SettlementPage = () => {
     };
   }, [selectedSeller, pattiData, loadInProgressPattis]);
 
+  const sellerArrivalTallyById = useMemo(() => {
+    const map = new Map<string, SellerArrivalTally>();
+    for (const seller of sellers) {
+      map.set(String(seller.sellerId), tallySellerArrival(seller));
+    }
+    return map;
+  }, [sellers]);
+
   /** One row per arrival: group in-progress DB rows that share vehicle + from + date so multi-seller saves stay together. */
   const inProgressPattiDrafts = useMemo((): InProgressSettlementDraft[] => {
     const sellerById = new Map(sellers.map(s => [String(s.sellerId), s]));
@@ -3101,9 +990,10 @@ const SettlementPage = () => {
         for (const sid of sellerIds) {
           const s = sellerById.get(sid);
           if (s) {
-            lots += getSellerLots(s);
-            bids += getSellerBids(s);
-            weighed += getSellerWeighed(s);
+            const tally = sellerArrivalTallyById.get(sid) ?? tallySellerArrival(s);
+            lots += tally.lots;
+            bids += tally.bids;
+            weighed += tally.weighed;
           }
         }
       }
@@ -3132,7 +1022,7 @@ const SettlementPage = () => {
     }
     rows.sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
     return rows;
-  }, [inProgressPattiDtos, sellers]);
+  }, [inProgressPattiDtos, sellers, sellerArrivalTallyById]);
 
   // Generate Patti when seller is selected (new patti; clear edit id).
   // Overrides: pass when toggling to avoid stale closure (React state updates are async).
@@ -4033,6 +1923,8 @@ const SettlementPage = () => {
     sellerSequenceNumber?: number;
     /** When true, caller owns patti save busy locking (e.g. Save Main Patti batch). */
     skipBusyGuard?: boolean;
+    /** Batch callers reload arrival-summary lists once after all seller saves finish. */
+    suppressListReload?: boolean;
     inProgress?: boolean;
   };
 
@@ -4151,8 +2043,10 @@ const SettlementPage = () => {
               if (!silent) toast.success(payload.inProgress ? `Sales Patti ${updated.pattiId} saved in progress.` : `Sales Patti ${updated.pattiId} ${actionWord}.`);
               if (showPrintAfterSave) setShowPrint(true);
               setPattiSaveHighlightSellerIds(prev => prev.filter(x => x !== sid));
-              void loadSavedPattis();
-              void loadInProgressPattis();
+              if (!options?.suppressListReload) {
+                void loadSavedPattis();
+                void loadInProgressPattis();
+              }
               resyncBaselineAfterSaveRef.current = true;
               setArrivalSummaryTab(payload.inProgress ? 'in-progress-patti' : 'saved-patti');
               if (!payload.inProgress) setSettlementFormMode('saved');
@@ -4186,8 +2080,10 @@ const SettlementPage = () => {
             }
             if (showPrintAfterSave) setShowPrint(true);
             setPattiSaveHighlightSellerIds(prev => prev.filter(x => x !== sid));
-            void loadSavedPattis();
-            void loadInProgressPattis();
+            if (!options?.suppressListReload) {
+              void loadSavedPattis();
+              void loadInProgressPattis();
+            }
             resyncBaselineAfterSaveRef.current = true;
             setArrivalSummaryTab(payload.inProgress ? 'in-progress-patti' : 'saved-patti');
             if (!payload.inProgress) setSettlementFormMode('saved');
@@ -4239,12 +2135,14 @@ const SettlementPage = () => {
           silent: true,
           showPrintAfterSave: false,
           skipBusyGuard: true,
+          suppressListReload: true,
         });
         if (!ok) {
           throw new Error(`Could not save Patti for ${seller.sellerName || seller.sellerId} before freezing.`);
         }
       }
       const refreshed = await loadSavedPattis();
+      void loadInProgressPattis();
       const sellerIds = scopeSellers.map(s => s.sellerId);
       const ids = resolvePattiIdsForSellerIds(sellerIds, refreshed);
       if (ids.length === 0) {
@@ -4252,7 +2150,7 @@ const SettlementPage = () => {
       }
       await freezePrintedPattisForSellers(sellerIds, refreshed);
     },
-    [freezePrintedPattisForSellers, loadSavedPattis, resolvePattiIdsForSellerIds, savePattiForSeller]
+    [freezePrintedPattisForSellers, loadInProgressPattis, loadSavedPattis, resolvePattiIdsForSellerIds, savePattiForSeller]
   );
 
   const savePatti = async (): Promise<boolean> => {
@@ -4300,6 +2198,7 @@ const SettlementPage = () => {
           silent: true,
           showPrintAfterSave: false,
           skipBusyGuard: true,
+          suppressListReload: true,
           pattiBaseNumber: needsCreate ? sharedPattiBaseNumber ?? undefined : undefined,
           sellerSequenceNumber: needsCreate ? sellerSequenceNumber : undefined,
         });
@@ -4316,6 +2215,7 @@ const SettlementPage = () => {
       setSettlementFormMode('saved');
       setPattiSaveHighlightSellerIds([]);
       resyncBaselineAfterSaveRef.current = true;
+      void loadSavedPattis();
       void loadInProgressPattis();
       return true;
     } finally {
@@ -4358,6 +2258,7 @@ const SettlementPage = () => {
           silent: true,
           showPrintAfterSave: false,
           skipBusyGuard: true,
+          suppressListReload: true,
           inProgress: true,
         });
         if (!ok) failures.push(seller.sellerName || seller.sellerId);
@@ -4370,6 +2271,7 @@ const SettlementPage = () => {
       toast.success('Settlement progress saved.');
       /** Per-seller save sets `resyncBaselineAfterSaveRef`; one explicit sync avoids repeated dirty/baseline churn before navigation. */
       resyncBaselineAfterSaveRef.current = false;
+      void loadSavedPattis();
       void loadInProgressPattis();
       requestAnimationFrame(() => {
         settlementDirtyBaselineRef.current = settlementWorkspaceSnapshotRef.current;
@@ -4386,6 +2288,7 @@ const SettlementPage = () => {
     selectedArrivalSellerIds,
     selectedSeller,
     sellers,
+    loadSavedPattis,
     loadInProgressPattis,
     getSellerValidationError,
   ]);
@@ -4518,18 +2421,6 @@ const SettlementPage = () => {
     return () => window.removeEventListener('keydown', onKey);
   }, [selectedSeller, pattiData, showPrint]);
 
-  function getSellerLots(seller: SellerSettlement): number {
-    return seller.lots.reduce((s, l) => s + l.entries.reduce((s2, e) => s2 + e.quantity, 0), 0);
-  }
-
-  function getSellerBids(seller: SellerSettlement): number {
-    return seller.lots.reduce((s, l) => s + l.entries.length, 0);
-  }
-
-  function getSellerWeighed(seller: SellerSettlement): number {
-    return seller.lots.reduce((s, l) => s + l.entries.reduce((s2, e) => s2 + (e.weight > 0 ? e.quantity : 0), 0), 0);
-  }
-
   const filteredSellers = useMemo(() => {
     if (!searchQuery) return sellers;
     const q = searchQuery.toLowerCase();
@@ -4631,9 +2522,7 @@ const SettlementPage = () => {
       const dateLabel = dateObj && !Number.isNaN(dateObj.getTime()) ? dateObj.toLocaleDateString() : '-';
       const key = [arrivalVehicleGroupSegment(v, seller), from.toLowerCase(), dateRaw].join('|');
       const existing = groups.get(key);
-      const lots = getSellerLots(seller);
-      const bids = getSellerBids(seller);
-      const weighed = getSellerWeighed(seller);
+      const { lots, bids, weighed } = sellerArrivalTallyById.get(String(seller.sellerId)) ?? tallySellerArrival(seller);
       if (!existing) {
         groups.set(key, {
           key,
@@ -4666,7 +2555,7 @@ const SettlementPage = () => {
         serialNo: first.sellerSerialNo ?? row.serialNo,
       };
     });
-  }, [sellersEligibleForNewPatti]);
+  }, [sellersEligibleForNewPatti, sellerArrivalTallyById]);
 
   const savedPattiArrivalRows = useMemo<SavedArrivalSummaryRow[]>(() => {
     const groups = new Map<string, SavedArrivalSummaryRow & { _fallbackName?: string }>();
@@ -4682,9 +2571,8 @@ const SettlementPage = () => {
       const seller = sid ? sellerById.get(sid) : undefined;
       const key = settlementPattiListGroupKey(p, seller);
       const existing = groups.get(key);
-      const lots = seller ? getSellerLots(seller) : 0;
-      const bids = seller ? getSellerBids(seller) : 0;
-      const weighed = seller ? getSellerWeighed(seller) : 0;
+      const { lots, bids, weighed } =
+        seller ? sellerArrivalTallyById.get(sid) ?? tallySellerArrival(seller) : EMPTY_SELLER_ARRIVAL_TALLY;
       const entryBags = Math.max(totalBagsFromPattiRateClusters(p), lots);
       if (!existing) {
         groups.set(key, {
@@ -4726,7 +2614,7 @@ const SettlementPage = () => {
         serialNo: first?.sellerSerialNo ?? rest.serialNo,
       };
     });
-  }, [filteredSavedPattis, sellers]);
+  }, [filteredSavedPattis, sellers, sellerArrivalTallyById]);
 
   /** Vehicle-level summary for the patti form (first row unchanged; this drives the second card). */
   const vehicleFormDetails = useMemo(() => {
@@ -5232,7 +3120,7 @@ const SettlementPage = () => {
     const total = deds.reduce((s, d) => s + d.amount, 0);
     setPattiData(prev => {
       if (!prev) return null;
-      if (Math.abs(prev.totalDeductions - total) < 1e-9 && JSON.stringify(prev.deductions) === JSON.stringify(deds)) {
+      if (Math.abs(prev.totalDeductions - total) < 1e-9 && areDeductionItemsEqual(prev.deductions, deds)) {
         return prev;
       }
       return { ...prev, deductions: deds, totalDeductions: total, netPayable: prev.grossAmount - total };
@@ -5262,7 +3150,7 @@ const SettlementPage = () => {
       const clusters = buildRateClustersFromSellerLots(selectedSeller, removed, ov, getLotDivisor, extras);
       const gross = clusters.reduce((s, c) => s + c.amount, 0);
       const sameGross = Math.abs(prev.grossAmount - gross) < 0.01;
-      const sameClusters = JSON.stringify(prev.rateClusters) === JSON.stringify(clusters);
+      const sameClusters = areRateClustersEqual(prev.rateClusters, clusters);
       if (sameGross && sameClusters) return prev;
       return { ...prev, rateClusters: clusters, grossAmount: gross, netPayable: gross - prev.totalDeductions };
     });
@@ -7129,11 +5017,11 @@ const SettlementPage = () => {
           <div className="absolute inset-0 bg-[radial-gradient(circle_at_30%_20%,rgba(255,255,255,0.18)_0%,transparent_50%)]" />
           <div className="absolute inset-0 bg-[radial-gradient(circle_at_80%_80%,rgba(34,211,238,0.2)_0%,transparent_42%)]" />
           <div className="absolute inset-0 overflow-hidden pointer-events-none">
-            {[...Array(6)].map((_, i) => (
+            {SETTLEMENT_EDIT_HEADER_PARTICLES.map((particle, i) => (
               <motion.div key={i} className="absolute w-1.5 h-1.5 bg-white/40 rounded-full"
-                style={{ left: `${10 + Math.random() * 80}%`, top: `${10 + Math.random() * 80}%` }}
+                style={{ left: particle.left, top: particle.top }}
                 animate={{ y: [-10, 10], opacity: [0.2, 0.6, 0.2] }}
-                transition={{ duration: 2 + Math.random() * 2, repeat: Infinity, delay: Math.random() * 2 }}
+                transition={{ duration: particle.duration, repeat: Infinity, delay: particle.delay }}
               />
             ))}
           </div>
@@ -9780,11 +7668,11 @@ const SettlementPage = () => {
         <div className="absolute inset-0 bg-[radial-gradient(circle_at_30%_20%,rgba(255,255,255,0.18)_0%,transparent_50%)]" />
         <div className="absolute inset-0 bg-[radial-gradient(circle_at_80%_80%,rgba(34,211,238,0.2)_0%,transparent_42%)]" />
         <div className="absolute inset-0 overflow-hidden pointer-events-none">
-          {[...Array(6)].map((_, i) => (
+          {SETTLEMENT_LIST_HEADER_PARTICLES.map((particle, i) => (
             <motion.div key={i} className="absolute w-1.5 h-1.5 bg-white/40 rounded-full"
-              style={{ left: `${10 + Math.random() * 80}%`, top: `${10 + Math.random() * 80}%` }}
+              style={{ left: particle.left, top: particle.top }}
               animate={{ y: [-10, 10], opacity: [0.2, 0.6, 0.2] }}
-              transition={{ duration: 2 + Math.random() * 2, repeat: Infinity, delay: Math.random() * 2 }}
+              transition={{ duration: particle.duration, repeat: Infinity, delay: particle.delay }}
             />
           ))}
         </div>

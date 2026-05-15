@@ -93,6 +93,10 @@ const AUCTION_LABEL_COLLATOR = new Intl.Collator(undefined, { sensitivity: 'base
 const AUCTION_SESSION_CACHE_TTL_MS = 45_000;
 const AUCTION_PERF_STORAGE_KEY = 'merco:auctionPerf';
 
+/** Hide native number spinners (Chrome/Safari/Firefox) while keeping `type="number"`. */
+const numberInputNoSpinnerClass =
+  '[appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none';
+
 function isAbortError(e: unknown): boolean {
   return (
     (typeof DOMException !== 'undefined' && e instanceof DOMException && e.name === 'AbortError') ||
@@ -1852,6 +1856,7 @@ const AuctionEntriesGrid = memo(function AuctionEntriesGrid({
                                 placeholder="0"
                                 className={cn(
                                   'text-center',
+                                  numberInputNoSpinnerClass,
                                   isDesktop
                                     ? 'h-8 flex-1 rounded-lg text-xs'
                                     : 'h-11 min-h-11 w-full min-w-0 flex-1 rounded-md border-2 border-input px-2 py-0 text-sm leading-tight focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-0'
@@ -1958,6 +1963,7 @@ const AuctionDesktopBidControls = memo(function AuctionDesktopBidControls({
             placeholder="0"
             className={cn(
               'h-14 w-full max-w-[8.75rem] min-w-[7rem] shrink-0 rounded-xl px-2 text-center font-bold text-lg bg-muted/20 border-2 border-primary/25 focus-visible:ring-0 focus-visible:ring-offset-0',
+              numberInputNoSpinnerClass,
               activeNumpadField === 'rate' && 'ring-2 ring-primary border-primary/55'
             )}
           />
@@ -1976,6 +1982,7 @@ const AuctionDesktopBidControls = memo(function AuctionDesktopBidControls({
             placeholder="0"
             className={cn(
               'h-14 w-full max-w-[8.75rem] min-w-[7rem] shrink-0 rounded-xl px-2 text-center font-bold text-lg bg-muted/20 border-2 border-primary/25 focus-visible:ring-0 focus-visible:ring-offset-0',
+              numberInputNoSpinnerClass,
               activeNumpadField === 'qty' && 'ring-2 ring-primary border-primary/55'
             )}
           />
@@ -2107,6 +2114,7 @@ const AuctionMobileBidTopRow = memo(function AuctionMobileBidTopRow({
           aria-label="Bid rate in rupees"
           className={cn(
             'h-14 w-full rounded-md border-2 border-primary/45 bg-muted/25 text-center font-bold leading-none focus-visible:ring-0 focus-visible:ring-offset-0',
+            numberInputNoSpinnerClass,
             isMdViewport ? 'min-w-[7rem] max-w-[9.75rem] shrink-0 px-2 text-[1.07em]' : 'min-w-0 max-w-full shrink px-1 text-[0.95em]',
             activeNumpadField === 'rate' && 'border-primary ring-2 ring-primary'
           )}
@@ -2163,6 +2171,7 @@ const AuctionMobileBidTopRow = memo(function AuctionMobileBidTopRow({
             aria-label={`Quantity in bags, ${remaining} bags remaining in lot`}
             className={cn(
               'col-start-1 row-start-2 rounded-md border-2 border-primary/45 bg-muted/25 text-center font-bold leading-none focus-visible:ring-0 focus-visible:ring-offset-0',
+              numberInputNoSpinnerClass,
               isMdViewport ? 'h-14 w-full min-w-[7rem] max-w-[9.75rem] shrink-0 justify-self-center px-2 text-[1.07em]' : 'h-14 w-full min-w-0 justify-self-stretch px-1 text-[0.95em]',
               activeNumpadField === 'qty' && 'border-primary ring-2 ring-primary'
             )}

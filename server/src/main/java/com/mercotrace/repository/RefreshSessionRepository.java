@@ -9,4 +9,6 @@ import org.springframework.stereotype.Repository;
 @Repository
 public interface RefreshSessionRepository extends JpaRepository<RefreshSession, Long> {
     Optional<RefreshSession> findOneByTokenHashAndRevokedAtIsNullAndExpiresAtAfter(String tokenHash, Instant now);
+
+    Optional<RefreshSession> findOneByTokenHashAndExpiresAtAfter(String tokenHash, Instant now);
 }

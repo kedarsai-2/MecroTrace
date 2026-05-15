@@ -38,6 +38,9 @@ public class AuthRefreshSessionService {
     @Value("${application.security.cookie.secure:true}")
     private boolean cookieSecure;
 
+    @Value("${application.security.refresh-token-rotation-grace-seconds:15}")
+    private long refreshTokenRotationGraceSeconds;
+
     public AuthRefreshSessionService(RefreshSessionRepository refreshSessionRepository) {
         this.refreshSessionRepository = refreshSessionRepository;
     }
@@ -71,11 +74,14 @@ public class AuthRefreshSessionService {
     }
 
     public IssuedRefreshSession rotate(String rawToken, String expectedTokenType) {
-        RefreshSession current = findActive(rawToken, expectedTokenType);
+        RefreshSession current = findRotatable(rawToken, expectedTokenType);
         Instant now = Instant.now();
-        current.setLastUsedAt(now);
-        current.setRevokedAt(now);
-        refreshSessionRepository.save(current);
+        if (current.getRevokedAt() == null) {
+            // Mark rotation distinctly from explicit logout: rotation has lastUsedAt == revokedAt.
+            current.setLastUsedAt(now);
+            current.setRevokedAt(now);
+            refreshSessionRepository.save(current);
+        }
 
         return issue(
             current.getTokenType(),
@@ -93,9 +99,8 @@ public class AuthRefreshSessionService {
         refreshSessionRepository
             .findOneByTokenHashAndRevokedAtIsNullAndExpiresAtAfter(hash(rawToken), Instant.now())
             .ifPresent(session -> {
-                Instant now = Instant.now();
-                session.setLastUsedAt(now);
-                session.setRevokedAt(now);
+                session.setLastUsedAt(null);
+                session.setRevokedAt(Instant.now());
                 refreshSessionRepository.save(session);
             });
     }
@@ -143,17 +148,32 @@ public class AuthRefreshSessionService {
         return refreshValidityInSeconds;
     }
 
-    private RefreshSession findActive(String rawToken, String expectedTokenType) {
+    private RefreshSession findRotatable(String rawToken, String expectedTokenType) {
         if (rawToken == null || rawToken.isBlank()) {
             throw new InvalidRefreshTokenException();
         }
+        Instant now = Instant.now();
         RefreshSession session = refreshSessionRepository
-            .findOneByTokenHashAndRevokedAtIsNullAndExpiresAtAfter(hash(rawToken), Instant.now())
+            .findOneByTokenHashAndExpiresAtAfter(hash(rawToken), now)
             .orElseThrow(InvalidRefreshTokenException::new);
         if (!expectedTokenType.equals(session.getTokenType())) {
             throw new InvalidRefreshTokenException();
         }
+        if (session.getRevokedAt() != null && !isWithinRotationGrace(session, now)) {
+            throw new InvalidRefreshTokenException();
+        }
         return session;
+    }
+
+    private boolean isWithinRotationGrace(RefreshSession session, Instant now) {
+        Instant revokedAt = session.getRevokedAt();
+        Instant lastUsedAt = session.getLastUsedAt();
+        return (
+            refreshTokenRotationGraceSeconds > 0 &&
+            revokedAt != null &&
+            revokedAt.equals(lastUsedAt) &&
+            !now.isAfter(revokedAt.plus(refreshTokenRotationGraceSeconds, ChronoUnit.SECONDS))
+        );
     }
 
     private ResponseCookie buildRefreshCookie(String rawToken) {

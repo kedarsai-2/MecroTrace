@@ -121,7 +121,8 @@ application:
     # Run Liquibase synchronously so all tables exist before the app accepts requests
     async-start: false
   security:
-    access-token-validity-in-seconds: 1800
+    access-token-validity-in-seconds: 86400
+    refresh-token-rotation-grace-seconds: 15
     cookie:
       # In local dev we do not use HTTPS, so the ACCESS_TOKEN cookie
       # cannot be marked Secure or the browser will ignore it. This flag
