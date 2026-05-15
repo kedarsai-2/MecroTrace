@@ -7,6 +7,7 @@ const NOMINATIM_URL = 'https://nominatim.openstreetmap.org/search';
 const USER_AGENT = 'Merco-Arrival-Origin/1.0';
 const GOOGLE_MAPS_URL = 'https://maps.googleapis.com/maps/api/js';
 const GOOGLE_MAPS_SCRIPT_ID = 'merco-google-maps-places';
+const GOOGLE_MAPS_CALLBACK_NAME = '__mercoGoogleMapsPlacesLoaded';
 const GOOGLE_MAPS_API_KEY = String(
   import.meta.env.VITE_GOOGLE_MAPS_API_KEY ??
   import.meta.env.VITE_GOOGLE_PLACES_API_KEY ??
@@ -42,26 +43,37 @@ interface GoogleAutocompletePrediction {
   place_id?: string;
 }
 
-interface GoogleAutocompleteResponse {
-  predictions?: GoogleAutocompletePrediction[];
+interface GoogleAutocompleteText {
+  text?: string;
 }
 
-interface GoogleAutocompletionRequest {
+interface GooglePlacePrediction {
+  placeId?: string;
+  text?: GoogleAutocompleteText;
+  mainText?: GoogleAutocompleteText;
+  secondaryText?: GoogleAutocompleteText;
+}
+
+interface GoogleAutocompleteSuggestion {
+  placePrediction?: GooglePlacePrediction;
+}
+
+interface GoogleAutocompleteSuggestionResponse {
+  suggestions?: GoogleAutocompleteSuggestion[];
+}
+
+interface GoogleAutocompleteRequest {
   input: string;
-  componentRestrictions?: { country: string | string[] };
+  includedRegionCodes?: string[];
   language?: string;
-  region?: string;
 }
 
-interface GoogleAutocompleteService {
-  getPlacePredictions(
-    request: GoogleAutocompletionRequest,
-    callback?: (predictions: GoogleAutocompletePrediction[] | null, status: string) => void,
-  ): Promise<GoogleAutocompleteResponse> | void;
+interface GoogleAutocompleteSuggestionApi {
+  fetchAutocompleteSuggestions(request: GoogleAutocompleteRequest): Promise<GoogleAutocompleteSuggestionResponse>;
 }
 
 interface GooglePlacesLibrary {
-  AutocompleteService: new () => GoogleAutocompleteService;
+  AutocompleteSuggestion?: GoogleAutocompleteSuggestionApi;
 }
 
 interface GoogleMapsApi {
@@ -73,10 +85,11 @@ interface GoogleMapsWindow extends Window {
   google?: {
     maps?: GoogleMapsApi;
   };
+  [GOOGLE_MAPS_CALLBACK_NAME]?: () => void;
 }
 
 let googleMapsScriptPromise: Promise<GoogleMapsApi> | null = null;
-let googleAutocompleteServicePromise: Promise<GoogleAutocompleteService> | null = null;
+let googleAutocompleteSuggestionPromise: Promise<GoogleAutocompleteSuggestionApi> | null = null;
 
 function getGoogleMapsApi(): GoogleMapsApi | undefined {
   return (window as GoogleMapsWindow).google?.maps;
@@ -88,17 +101,19 @@ function loadGoogleMapsPlaces(apiKey: string): Promise<GoogleMapsApi> {
   }
 
   const loadedApi = getGoogleMapsApi();
-  if (loadedApi?.places?.AutocompleteService || loadedApi?.importLibrary) {
+  if (loadedApi?.places?.AutocompleteSuggestion || loadedApi?.importLibrary) {
     return Promise.resolve(loadedApi);
   }
 
   if (googleMapsScriptPromise) return googleMapsScriptPromise;
 
   googleMapsScriptPromise = new Promise<GoogleMapsApi>((resolve, reject) => {
+    const mapsWindow = window as GoogleMapsWindow;
     const finish = () => {
       const api = getGoogleMapsApi();
       if (api) resolve(api);
       else reject(new Error('Google Maps API loaded without maps namespace'));
+      delete mapsWindow[GOOGLE_MAPS_CALLBACK_NAME];
     };
     const existingScript = document.getElementById(GOOGLE_MAPS_SCRIPT_ID) as HTMLScriptElement | null;
 
@@ -118,15 +133,19 @@ function loadGoogleMapsPlaces(apiKey: string): Promise<GoogleMapsApi> {
     const fail = (script: HTMLScriptElement) => {
       script.dataset.failed = 'true';
       script.remove();
+      delete mapsWindow[GOOGLE_MAPS_CALLBACK_NAME];
       reject(new Error('Google Maps API failed to load'));
     };
 
+    mapsWindow[GOOGLE_MAPS_CALLBACK_NAME] = finish;
     const params = new URLSearchParams({
       key: apiKey,
       v: 'weekly',
       libraries: 'places',
       language: 'en',
       region: 'IN',
+      loading: 'async',
+      callback: GOOGLE_MAPS_CALLBACK_NAME,
     });
     const script = document.createElement('script');
     script.id = GOOGLE_MAPS_SCRIPT_ID;
@@ -135,7 +154,6 @@ function loadGoogleMapsPlaces(apiKey: string): Promise<GoogleMapsApi> {
     script.defer = true;
     script.addEventListener('load', () => {
       script.dataset.loaded = 'true';
-      finish();
     }, { once: true });
     script.addEventListener('error', () => fail(script), { once: true });
     document.head.appendChild(script);
@@ -147,24 +165,24 @@ function loadGoogleMapsPlaces(apiKey: string): Promise<GoogleMapsApi> {
   return googleMapsScriptPromise;
 }
 
-async function getGoogleAutocompleteService(): Promise<GoogleAutocompleteService> {
-  if (googleAutocompleteServicePromise) return googleAutocompleteServicePromise;
+async function getGoogleAutocompleteSuggestion(): Promise<GoogleAutocompleteSuggestionApi> {
+  if (googleAutocompleteSuggestionPromise) return googleAutocompleteSuggestionPromise;
 
-  googleAutocompleteServicePromise = (async () => {
+  googleAutocompleteSuggestionPromise = (async () => {
     const api = await loadGoogleMapsPlaces(GOOGLE_MAPS_API_KEY);
     if (api.importLibrary) {
       const places = await api.importLibrary('places');
-      if (places?.AutocompleteService) return new places.AutocompleteService();
+      if (places?.AutocompleteSuggestion) return places.AutocompleteSuggestion;
     }
-    const AutocompleteService = api.places?.AutocompleteService;
-    if (AutocompleteService) return new AutocompleteService();
-    throw new Error('Google Places Autocomplete is unavailable');
+    const autocompleteSuggestion = api.places?.AutocompleteSuggestion;
+    if (autocompleteSuggestion) return autocompleteSuggestion;
+    throw new Error('Google Places Autocomplete suggestions are unavailable');
   })().catch((error) => {
-    googleAutocompleteServicePromise = null;
+    googleAutocompleteSuggestionPromise = null;
     throw error;
   });
 
-  return googleAutocompleteServicePromise;
+  return googleAutocompleteSuggestionPromise;
 }
 
 function mapGooglePrediction(prediction: GoogleAutocompletePrediction, index: number): LocationSuggestion {
@@ -173,6 +191,23 @@ function mapGooglePrediction(prediction: GoogleAutocompletePrediction, index: nu
     displayName: prediction.description,
     provider: 'google',
   };
+}
+
+function mapGoogleSuggestion(suggestion: GoogleAutocompleteSuggestion, index: number): LocationSuggestion | null {
+  const prediction = suggestion.placePrediction;
+  const displayName =
+    prediction?.text?.text ||
+    [prediction?.mainText?.text, prediction?.secondaryText?.text].filter(Boolean).join(', ');
+
+  if (!displayName) return null;
+
+  return mapGooglePrediction(
+    {
+      description: displayName,
+      place_id: prediction?.placeId,
+    },
+    index,
+  );
 }
 
 function mapNominatimResult(result: NominatimResult, index: number): LocationSuggestion {
@@ -184,45 +219,17 @@ function mapNominatimResult(result: NominatimResult, index: number): LocationSug
 }
 
 async function fetchGoogleSuggestions(query: string): Promise<LocationSuggestion[]> {
-  const service = await getGoogleAutocompleteService();
-  const request: GoogleAutocompletionRequest = {
+  const autocompleteSuggestion = await getGoogleAutocompleteSuggestion();
+  const request: GoogleAutocompleteRequest = {
     input: query,
-    componentRestrictions: { country: 'in' },
+    includedRegionCodes: ['in'],
     language: 'en',
-    region: 'in',
   };
 
-  const predictions = await new Promise<GoogleAutocompletePrediction[]>((resolve, reject) => {
-    let settled = false;
-    const resolveOnce = (value: GoogleAutocompletePrediction[]) => {
-      if (settled) return;
-      settled = true;
-      resolve(value);
-    };
-    const rejectOnce = (error: unknown) => {
-      if (settled) return;
-      settled = true;
-      reject(error);
-    };
-
-    const maybePromise = service.getPlacePredictions(request, (items, status) => {
-      if (status === 'OK') {
-        resolveOnce(items ?? []);
-      } else if (status === 'ZERO_RESULTS') {
-        resolveOnce([]);
-      } else {
-        rejectOnce(new Error(`Google Places Autocomplete failed: ${status}`));
-      }
-    });
-
-    if (maybePromise && typeof maybePromise.then === 'function') {
-      maybePromise
-        .then(response => resolveOnce(response.predictions ?? []))
-        .catch(rejectOnce);
-    }
-  });
-
-  return predictions.map(mapGooglePrediction);
+  const response = await autocompleteSuggestion.fetchAutocompleteSuggestions(request);
+  return (response.suggestions ?? [])
+    .map(mapGoogleSuggestion)
+    .filter((suggestion): suggestion is LocationSuggestion => Boolean(suggestion));
 }
 
 async function fetchNominatimSuggestions(query: string, signal: AbortSignal): Promise<LocationSuggestion[]> {
@@ -278,6 +285,7 @@ export default function LocationSearchInput({
 }: LocationSearchInputProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
+  const dropdownRef = useRef<HTMLDivElement>(null);
   const [query, setQuery] = useState(value);
   const [suggestions, setSuggestions] = useState<LocationSuggestion[]>([]);
   const [open, setOpen] = useState(false);
@@ -380,6 +388,7 @@ export default function LocationSearchInput({
   const showUseTypedRow =
     searchFinished && !loading && query.trim().length >= MIN_QUERY_LEN && suggestions.length === 0;
   const showGoogleAttribution = suggestions.some(s => s.provider === 'google');
+  const showOpenStreetMapAttribution = suggestions.some(s => s.provider === 'openstreetmap');
 
   const handleFocus = () => {
     if (suggestions.length > 0 || showUseTypedRow) {
@@ -391,11 +400,16 @@ export default function LocationSearchInput({
   // Close dropdown on scroll or resize so it doesn't stay stuck on screen (fixed position doesn't follow input)
   useEffect(() => {
     if (!open) return;
+    const handleDocumentScroll = (event: Event) => {
+      const target = event.target;
+      if (target instanceof Node && dropdownRef.current?.contains(target)) return;
+      setOpen(false);
+    };
     const close = () => setOpen(false);
-    document.addEventListener('scroll', close, true);
+    document.addEventListener('scroll', handleDocumentScroll, true);
     window.addEventListener('resize', close);
     return () => {
-      document.removeEventListener('scroll', close, true);
+      document.removeEventListener('scroll', handleDocumentScroll, true);
       window.removeEventListener('resize', close);
     };
   }, [open]);
@@ -436,46 +450,54 @@ export default function LocationSearchInput({
 
       {open && (suggestions.length > 0 || showUseTypedRow) && createPortal(
         <div
+          ref={dropdownRef}
           role="listbox"
-          className="fixed z-[9999] bg-card border border-border/50 rounded-xl shadow-2xl max-h-52 overflow-y-auto py-1"
+          className="fixed z-[9999] bg-card border border-border/50 rounded-xl shadow-2xl overflow-hidden"
           style={{
             top: dropdownPos.top,
             left: dropdownPos.left,
             width: Math.max(dropdownPos.width, 280),
           }}
         >
-          {suggestions.map((s) => (
-            <button
-              key={s.id}
-              type="button"
-              role="option"
-              onMouseDown={e => { e.preventDefault(); handleSelect(s.displayName); }}
-              className="w-full px-3 py-2.5 text-left text-sm hover:bg-muted/50 transition-colors border-b border-border/20 last:border-0 flex items-center gap-2"
-            >
-              <MapPin className="w-4 h-4 text-muted-foreground flex-shrink-0" />
-              <span className="text-foreground">{s.displayName}</span>
-            </button>
-          ))}
+          <div className="max-h-52 overflow-y-auto py-1 overscroll-contain">
+            {suggestions.map((s) => (
+              <button
+                key={s.id}
+                type="button"
+                role="option"
+                onMouseDown={e => { e.preventDefault(); handleSelect(s.displayName); }}
+                className="w-full px-3 py-2.5 text-left text-sm hover:bg-muted/50 transition-colors border-b border-border/20 last:border-0 flex items-center gap-2"
+              >
+                <MapPin className="w-4 h-4 text-muted-foreground flex-shrink-0" />
+                <span className="text-foreground">{s.displayName}</span>
+              </button>
+            ))}
+            {showUseTypedRow && (
+              <button
+                type="button"
+                role="option"
+                onMouseDown={e => {
+                  e.preventDefault();
+                  handleSelect(query.trim());
+                }}
+                className="w-full px-3 py-2.5 text-left text-sm hover:bg-muted/50 transition-colors flex items-center gap-2 border-t border-border/20"
+              >
+                <MapPin className="w-4 h-4 text-muted-foreground flex-shrink-0" />
+                <span className="text-foreground">
+                  Use typed text: <span className="font-medium">{query.trim()}</span>
+                </span>
+              </button>
+            )}
+          </div>
           {showGoogleAttribution && (
-            <div className="px-3 py-1.5 text-right text-[10px] font-medium text-muted-foreground border-t border-border/20">
+            <div className="bg-card px-3 py-1.5 text-right text-[10px] font-medium text-muted-foreground border-t border-border/20">
               Powered by Google
             </div>
           )}
-          {showUseTypedRow && (
-            <button
-              type="button"
-              role="option"
-              onMouseDown={e => {
-                e.preventDefault();
-                handleSelect(query.trim());
-              }}
-              className="w-full px-3 py-2.5 text-left text-sm hover:bg-muted/50 transition-colors flex items-center gap-2 border-t border-border/20"
-            >
-              <MapPin className="w-4 h-4 text-muted-foreground flex-shrink-0" />
-              <span className="text-foreground">
-                Use typed text: <span className="font-medium">{query.trim()}</span>
-              </span>
-            </button>
+          {showOpenStreetMapAttribution && (
+            <div className="bg-card px-3 py-1.5 text-right text-[10px] font-medium text-muted-foreground border-t border-border/20">
+              Powered by OpenStreetMap
+            </div>
           )}
         </div>,
         document.body

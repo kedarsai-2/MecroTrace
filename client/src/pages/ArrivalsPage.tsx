@@ -161,6 +161,7 @@ interface LotEntry {
   commodity_name: string;
   broker_tag: string;
   variant: string;
+  delete_blockers?: string[];
 }
 
 interface SellerEntry {
@@ -172,6 +173,29 @@ interface SellerEntry {
   seller_mark: string;
   lots: LotEntry[];
 }
+
+type SerializedLotSnapshot = {
+  lot_id: string;
+  lot_name: string;
+  lot_serial_number: number | null;
+  quantity: number;
+  commodity_name: string;
+  broker_tag: string;
+  variant: string;
+  delete_blockers: string[];
+};
+
+type SerializedSellerSnapshot = {
+  seller_vehicle_id: string;
+  contact_id: string;
+  seller_serial_number: number | null;
+  seller_name: string;
+  seller_phone: string;
+  seller_mark: string;
+  lots: SerializedLotSnapshot[];
+};
+
+const LINKED_LOT_QUANTITY_INCREASE_BLOCKERS = new Set(['AUCTION', 'AUCTION_SELF_SALE', 'SELF_SALE_CLOSURE']);
 
 /**
  * REQ-ARR-005: Lot SL no + same vehicle/seller bag ratio as desktop "SL. NO" column.
@@ -1033,6 +1057,7 @@ const ArrivalsPage = () => {
   const submitArrivalInFlightRef = useRef(false);
   const [isSubmittingArrival, setIsSubmittingArrival] = useState(false);
   const editBaselineSnapshotRef = useRef<string | null>(null);
+  const [editLinkedBlockers, setEditLinkedBlockers] = useState<string[]>([]);
   type PendingDelete =
     | { kind: 'arrival'; vehicleId: number | string; label: string }
     | { kind: 'seller'; idx: number; label: string }
@@ -1359,7 +1384,7 @@ const ArrivalsPage = () => {
   // the exact internal tab/step via `step` alone.
   const isLotsFlow = isArrivalPanelOpen;
 
-  const serializeSellersForDirty = useCallback((list: SellerEntry[]) => {
+  const serializeSellersForDirty = useCallback((list: SellerEntry[]): SerializedSellerSnapshot[] => {
     return list.map((s) => ({
       seller_vehicle_id: s.seller_vehicle_id,
       contact_id: s.contact_id,
@@ -1375,11 +1400,13 @@ const ArrivalsPage = () => {
         commodity_name: l.commodity_name,
         broker_tag: l.broker_tag,
         variant: l.variant,
+        delete_blockers: l.delete_blockers ?? [],
       })),
     }));
   }, []);
 
   const populateEditFormFromDetail = useCallback((detail: ArrivalFullDetail) => {
+    setEditLinkedBlockers(detail?.deleteBlockers ?? []);
     setVehicleNumber(detail?.vehicleNumber ?? '');
     setVehicleMarkAlias(sanitizeVehicleMarkAliasInput(detail?.vehicleMarkAlias ?? ''));
     setLoadedWeight(detail?.loadedWeight != null ? String(detail.loadedWeight) : '');
@@ -1413,6 +1440,7 @@ const ArrivalsPage = () => {
         commodity_name: l?.commodityName ?? '',
         broker_tag: l?.brokerTag ?? '',
         variant: l?.variant ?? '',
+        delete_blockers: l?.deleteBlockers ?? [],
       })),
     }));
     setSellers(mappedSellers);
@@ -1627,8 +1655,88 @@ const ArrivalsPage = () => {
 
   const formatArrivalEditBlockedMessage = useCallback((blockers: string[]) => {
     const linked = formatArrivalDeletionBlockerCodes(blockers);
+    if (blockers.length > 0 && blockers.every(blocker => LINKED_LOT_QUANTITY_INCREASE_BLOCKERS.has(blocker))) {
+      return `Seller or lot details cannot be changed because this arrival is already linked in: ${linked}. You can increase existing lot bags or add new lots; otherwise edit only vehicle, weight, freight, broker, narration, and location fields, or remove/adjust those linked records first.`;
+    }
     return `Seller or lot details cannot be changed because this arrival is already linked in: ${linked}. Edit only vehicle, weight, freight, broker, narration, and location fields, or remove/adjust those linked records first.`;
   }, []);
+
+  const formatLinkedLotQuantityDecreaseMessage = useCallback((blockers: string[]) => {
+    const linked = formatArrivalDeletionBlockerCodes(blockers);
+    return `Lot quantity cannot be decreased because this arrival is already linked in: ${linked}. Increase the quantity to add remaining bags for auction, or remove/adjust those linked records first.`;
+  }, []);
+
+  const formatLinkedLotDetailBlockedMessage = useCallback((blockers: string[]) => {
+    const linked = formatArrivalDeletionBlockerCodes(blockers);
+    return `Lot details cannot be changed because this arrival is already linked in: ${linked}. Only increasing bag quantity is allowed for this lot.`;
+  }, []);
+
+  const formatLinkedLotDeleteBlockedMessage = useCallback((blockers: string[]) => {
+    const linked = formatArrivalDeletionBlockerCodes(blockers);
+    return `This lot cannot be deleted because this arrival is already linked in: ${linked}. Remove or adjust those linked records first.`;
+  }, []);
+
+  const findEditBaselineLot = useCallback((lotId?: string | null): SerializedLotSnapshot | null => {
+    if (editingVehicleId == null || editLinkedBlockers.length === 0 || !lotId || !editBaselineSnapshotRef.current) {
+      return null;
+    }
+    try {
+      const baseline = JSON.parse(editBaselineSnapshotRef.current) as { sellers?: SerializedSellerSnapshot[] };
+      for (const seller of baseline.sellers ?? []) {
+        const match = seller.lots.find(lot => String(lot.lot_id) === String(lotId));
+        if (match) return match;
+      }
+    } catch {
+      return null;
+    }
+    return null;
+  }, [editingVehicleId, editLinkedBlockers.length]);
+
+  const canIncreaseLinkedLotQuantity = useCallback((blockers: string[]) => {
+    return blockers.length > 0 && blockers.every(blocker => LINKED_LOT_QUANTITY_INCREASE_BLOCKERS.has(blocker));
+  }, []);
+
+  const isExistingLinkedEditLot = useCallback((lot?: LotEntry | null) => {
+    return (findEditBaselineLot(lot?.lot_id)?.delete_blockers?.length ?? 0) > 0;
+  }, [findEditBaselineLot]);
+
+  const validateLinkedExistingLotUpdate = useCallback((
+    editingLotId: string | undefined,
+    next: Pick<LotEntry, 'lot_name' | 'quantity' | 'commodity_name' | 'variant'>
+  ) => {
+    const baseline = findEditBaselineLot(editingLotId);
+    const blockers = baseline?.delete_blockers ?? [];
+    if (!baseline || blockers.length === 0) return true;
+
+    const normalize = (value?: string | null) => (value ?? '').trim();
+    const detailsChanged =
+      normalize(baseline.lot_name) !== normalize(next.lot_name) ||
+      normalize(baseline.commodity_name) !== normalize(next.commodity_name) ||
+      normalize(baseline.variant) !== normalize(next.variant);
+
+    if (detailsChanged) {
+      toast.error(formatLinkedLotDetailBlockedMessage(blockers));
+      return false;
+    }
+
+    if (next.quantity < baseline.quantity) {
+      toast.error(formatLinkedLotQuantityDecreaseMessage(blockers));
+      return false;
+    }
+
+    if (next.quantity > baseline.quantity && !canIncreaseLinkedLotQuantity(blockers)) {
+      toast.error(formatArrivalEditBlockedMessage(blockers));
+      return false;
+    }
+
+    return true;
+  }, [
+    canIncreaseLinkedLotQuantity,
+    findEditBaselineLot,
+    formatArrivalEditBlockedMessage,
+    formatLinkedLotDetailBlockedMessage,
+    formatLinkedLotQuantityDecreaseMessage,
+  ]);
 
   const handlePartialSave = useCallback(async (): Promise<boolean> => {
     try {
@@ -2494,6 +2602,7 @@ const ArrivalsPage = () => {
             commodity_name: commodities[0]?.commodity_name || '',
             broker_tag: '',
             variant: '',
+            delete_blockers: [],
           }],
         };
       });
@@ -2528,11 +2637,17 @@ const ArrivalsPage = () => {
 
     // Edit mode: update existing lot
     if (addLotForm.editingLotId !== undefined && addLotForm.editingLotIdx !== undefined) {
-      updateLot(sellerIdx, addLotForm.editingLotIdx, {
+      const nextLot = {
         lot_name: trimmedName,
         quantity: bagsNum,
         commodity_name: addLotForm.commodityName,
         variant: addLotForm.variant,
+      };
+      if (!validateLinkedExistingLotUpdate(addLotForm.editingLotId, nextLot)) {
+        return;
+      }
+      updateLot(sellerIdx, addLotForm.editingLotIdx, {
+        ...nextLot,
       });
       toast.success(`Lot "${trimmedName}" updated successfully`);
       setAddLotForm({
@@ -2561,6 +2676,7 @@ const ArrivalsPage = () => {
             commodity_name: addLotForm.commodityName,
             broker_tag: '',
             variant: addLotForm.variant,
+            delete_blockers: [],
           }],
         };
       });
@@ -2724,10 +2840,24 @@ const ArrivalsPage = () => {
   };
 
   const removeLot = (sellerIdx: number, lotIdx: number) => {
+    const lot = sellers[sellerIdx]?.lots[lotIdx];
+    if (isExistingLinkedEditLot(lot)) {
+      toast.error(formatLinkedLotDeleteBlockedMessage(findEditBaselineLot(lot?.lot_id)?.delete_blockers ?? editLinkedBlockers));
+      return;
+    }
     setSellers(prev => prev.map((s, i) => {
       if (i !== sellerIdx) return s;
       return { ...s, lots: s.lots.filter((_, li) => li !== lotIdx) };
     }));
+  };
+
+  const requestDeleteLot = (sellerIdx: number, lotIdx: number) => {
+    const lot = sellers[sellerIdx]?.lots[lotIdx];
+    if (isExistingLinkedEditLot(lot)) {
+      toast.error(formatLinkedLotDeleteBlockedMessage(findEditBaselineLot(lot?.lot_id)?.delete_blockers ?? editLinkedBlockers));
+      return;
+    }
+    setPendingDelete({ kind: "lot", sellerIdx, lotIdx, label: lot?.lot_name || "Lot " + (lotIdx + 1) });
   };
 
   // REQ-ARR-013: Outlier validation (uses commodity config from API)
@@ -2834,6 +2964,7 @@ const ArrivalsPage = () => {
     setIsMultiSeller(true);
     setEditingVehicleId(null);
     editBaselineSnapshotRef.current = null;
+    setEditLinkedBlockers([]);
     // Clear keyboard trigger tracking when form is reset
     sellerKeyboardTriggeredRef.current.clear();
   };
@@ -2878,9 +3009,6 @@ const ArrivalsPage = () => {
 
   const handleEditArrival = async (a: Pick<ArrivalSummary, 'vehicleId'>) => {
     const key = String(a.vehicleId);
-    const cachedDetail = sameArrivalVehicleId(expandedDetail?.vehicleId, a.vehicleId)
-      ? expandedDetail
-      : arrivalFullDetailCacheRef.current.get(key);
 
     void loadArrivalFormReferenceData();
     setActiveSellerSearch(null);
@@ -2889,15 +3017,10 @@ const ArrivalsPage = () => {
     setVehicleMarkAliasApiError(null);
     setEditingVehicleId(a.vehicleId);
     editBaselineSnapshotRef.current = null;
+    setEditLinkedBlockers([]);
     setShowAdd(true);
     setExpandedDetail(null);
     if (isDesktop) setDesktopTab('new-arrival');
-
-    if (cachedDetail) {
-      setEditLoading(false);
-      populateEditFormFromDetail(cachedDetail);
-      return;
-    }
 
     setEditLoading(true);
     try {
@@ -2954,20 +3077,26 @@ const ArrivalsPage = () => {
         partially_completed: false,
         sellers: sellersChanged && sellers.length > 0 ? sellers.map(s => {
           const hasContactId = s.contact_id !== '' && !Number.isNaN(Number(s.contact_id));
+          const sellerVehicleId = Number(s.seller_vehicle_id);
           return {
+            seller_vehicle_id: Number.isFinite(sellerVehicleId) && sellerVehicleId > 0 ? sellerVehicleId : undefined,
             contact_id: hasContactId ? Number(s.contact_id) : null,
             seller_serial_number: s.seller_serial_number ?? undefined,
             seller_name: s.seller_name,
             seller_phone: s.seller_phone,
             seller_mark: s.seller_mark || undefined,
-            lots: s.lots.map(l => ({
-              lot_name: l.lot_name,
-              lot_serial_number: l.lot_serial_number ?? undefined,
-              quantity: l.quantity,
-              commodity_name: l.commodity_name,
-              broker_tag: l.broker_tag || undefined,
-              variant: l.variant || undefined,
-            })),
+            lots: s.lots.map(l => {
+              const lotId = Number(l.lot_id);
+              return {
+                lot_id: Number.isFinite(lotId) && lotId > 0 ? lotId : undefined,
+                lot_name: l.lot_name,
+                lot_serial_number: l.lot_serial_number ?? undefined,
+                quantity: l.quantity,
+                commodity_name: l.commodity_name,
+                broker_tag: l.broker_tag || undefined,
+                variant: l.variant || undefined,
+              };
+            }),
           };
         }) : undefined,
       });
@@ -4035,7 +4164,7 @@ const ArrivalsPage = () => {
                                                       type="button"
                                                       onClick={(e) => {
                                                         e.stopPropagation();
-                                                        setPendingDelete({ kind: "lot", sellerIdx: si, lotIdx: li, label: lot.lot_name || "Lot " + (li + 1) });
+                                                        requestDeleteLot(si, li);
                                                       }}
                                                       className="w-9 h-9 sm:w-8 sm:h-8 rounded-md flex items-center justify-center text-red-400 hover:bg-red-50 dark:hover:bg-red-950/20 transition-colors flex-shrink-0"
                                                       aria-label="Delete lot"
@@ -5214,12 +5343,7 @@ const ArrivalsPage = () => {
                                                                 type="button"
                                                                 onClick={e => {
                                                                   e.stopPropagation();
-                                                                  setPendingDelete({
-                                                                    kind: "lot",
-                                                                    sellerIdx: si,
-                                                                    lotIdx: li,
-                                                                    label: lot.lot_name || "Lot " + (li + 1),
-                                                                  });
+                                                                  requestDeleteLot(si, li);
                                                                 }}
                                                                 className="flex h-10 w-10 items-center justify-center rounded-lg text-red-400 transition-colors hover:bg-red-50 dark:hover:bg-red-950/20"
                                                                 aria-label="Delete lot"

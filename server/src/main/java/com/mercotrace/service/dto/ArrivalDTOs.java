@@ -722,6 +722,8 @@ public final class ArrivalDTOs {
         private int bagCount;
         private String brokerTag;
         private String variant;
+        /** Non-empty when this specific lot has downstream references; enum names (e.g. {@code AUCTION}). */
+        private List<String> deleteBlockers = List.of();
 
         public Long getId() { return id; }
         public void setId(Long id) { this.id = id; }
@@ -737,6 +739,8 @@ public final class ArrivalDTOs {
         public void setBrokerTag(String brokerTag) { this.brokerTag = brokerTag; }
         public String getVariant() { return variant; }
         public void setVariant(String variant) { this.variant = variant; }
+        public List<String> getDeleteBlockers() { return deleteBlockers; }
+        public void setDeleteBlockers(List<String> deleteBlockers) { this.deleteBlockers = deleteBlockers; }
     }
 
     /** Seller with full lots for arrival expand (includes contactId/sellerPhone for edit form prefill). */
