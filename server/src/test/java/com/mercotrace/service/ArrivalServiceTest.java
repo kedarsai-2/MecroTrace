@@ -310,6 +310,23 @@ class ArrivalServiceTest {
         verify(lotRepository, never()).save(lot);
     }
 
+    @Test
+    void updateArrivalAllowsDeletingUnlinkedLotWhenAnotherLotHasAuction() {
+        Vehicle vehicle = linkedArrivalVehicle();
+        SellerInVehicle seller = linkedArrivalSeller();
+        Lot auctionedLot = linkedArrivalLot(10);
+        Lot availableLot = availableArrivalLot(5);
+        stubArrivalForUpdate(vehicle, seller, List.of(auctionedLot, availableLot));
+        when(lotRepository.findAllBySellerVehicleIdIn(List.of(20L))).thenReturn(List.of(auctionedLot, availableLot), List.of(auctionedLot));
+
+        ArrivalUpdateDTO update = linkedArrivalUpdate(10);
+
+        var summary = arrivalService.updateArrival(10L, update);
+
+        verify(lotRepository).delete(availableLot);
+        assertThat(summary.getTotalBags()).isEqualTo(10);
+    }
+
     private Vehicle linkedArrivalVehicle() {
         Vehicle vehicle = new Vehicle();
         vehicle.setId(10L);
@@ -341,7 +358,23 @@ class ArrivalServiceTest {
         return lot;
     }
 
+    private Lot availableArrivalLot(int bagCount) {
+        Lot lot = new Lot();
+        lot.setId(31L);
+        lot.setSellerVehicleId(20L);
+        lot.setCommodityId(40L);
+        lot.setLotName("Lot B");
+        lot.setBagCount(bagCount);
+        lot.setSellerSerialNo(1);
+        lot.setLotSerialNo(2);
+        return lot;
+    }
+
     private void stubLinkedArrivalForUpdate(Vehicle vehicle, SellerInVehicle seller, Lot lot) {
+        stubArrivalForUpdate(vehicle, seller, List.of(lot));
+    }
+
+    private void stubArrivalForUpdate(Vehicle vehicle, SellerInVehicle seller, List<Lot> lots) {
         Commodity commodity = new Commodity();
         commodity.setId(40L);
         commodity.setCommodityName("Chilli");
@@ -353,9 +386,15 @@ class ArrivalServiceTest {
         when(vehicleRepository.findById(10L)).thenReturn(Optional.of(vehicle));
         when(vehicleRepository.save(any(Vehicle.class))).thenAnswer(invocation -> invocation.getArgument(0));
         when(sellerInVehicleRepository.findAllByVehicleId(10L)).thenReturn(List.of(seller));
-        when(lotRepository.findAllBySellerVehicleIdIn(List.of(20L))).thenReturn(List.of(lot));
-        when(lotRepository.findAllById(List.of(30L))).thenReturn(List.of(lot));
-        when(auctionRepository.findAllByLotIdIn(List.of(30L))).thenReturn(List.of(new Auction()));
+        when(lotRepository.findAllBySellerVehicleIdIn(List.of(20L))).thenReturn(lots);
+        when(lotRepository.findAllById(anyList())).thenAnswer(invocation -> {
+            List<Long> ids = invocation.getArgument(0);
+            return lots.stream().filter(lot -> ids.contains(lot.getId())).toList();
+        });
+        when(auctionEntryRepository.existsByAuctionLotIdIn(anyList())).thenAnswer(invocation -> {
+            List<Long> ids = invocation.getArgument(0);
+            return ids.contains(30L);
+        });
         when(commodityRepository.findOneByTraderIdAndCommodityNameIgnoreCase(1L, "Chilli")).thenReturn(Optional.of(commodity));
         when(dailySerialRepository.findOneByTraderIdAndSerialDateForUpdate(eq(1L), any())).thenReturn(Optional.of(dailySerial));
         when(lotRepository.findMaxLotSerialNoByTraderId(1L)).thenReturn(Optional.of(1));

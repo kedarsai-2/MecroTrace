@@ -26,6 +26,13 @@ public interface AuctionEntryRepository extends JpaRepository<AuctionEntry, Long
 
     Optional<AuctionEntry> findFirstByBidNumber(Integer bidNumber);
 
+    @Query(
+        "SELECT CASE WHEN COUNT(e) > 0 THEN true ELSE false END " +
+            "FROM AuctionEntry e JOIN Auction a ON e.auctionId = a.id " +
+            "WHERE a.lotId IN :lotIds"
+    )
+    boolean existsByAuctionLotIdIn(@Param("lotIds") Collection<Long> lotIds);
+
     Page<AuctionEntry> findAllByCreatedAtBetween(Instant from, Instant to, Pageable pageable);
 
     /**

@@ -145,6 +145,8 @@ export interface ArrivalLotFullDetail {
   bagCount: number;
   brokerTag?: string | null;
   variant?: string | null;
+  /** Server-side reasons this specific lot is blocked from deletion/edit. */
+  deleteBlockers?: string[];
 }
 
 export interface ArrivalSellerFullDetail {

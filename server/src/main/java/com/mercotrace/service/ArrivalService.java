@@ -484,6 +484,14 @@ public class ArrivalService {
             .collect(Collectors.toMap(Contact::getId, c -> c.getMark() != null ? c.getMark() : ""));
         java.util.Map<Long, String> commodityNameById = commodities.stream()
             .collect(Collectors.toMap(Commodity::getId, c -> c.getCommodityName() != null ? c.getCommodityName() : ""));
+        Map<Long, List<String>> lotDeleteBlockersById = lots
+            .stream()
+            .collect(
+                Collectors.toMap(
+                    Lot::getId,
+                    lot -> collectLotDeletionBlockers(traderId, List.of(lot.getId())).stream().map(Enum::name).sorted().toList()
+                )
+            );
 
         ArrivalFullDetailDTO dto = new ArrivalFullDetailDTO();
         dto.setVehicleId(vehicle.getId());
@@ -546,6 +554,7 @@ public class ArrivalService {
                 lf.setBagCount(lot.getBagCount() != null ? lot.getBagCount() : 0);
                 lf.setBrokerTag(lot.getBrokerTag());
                 lf.setVariant(lot.getVariant());
+                lf.setDeleteBlockers(lotDeleteBlockersById.getOrDefault(lot.getId(), List.of()));
                 return lf;
             }).toList();
             sellerFull.setLots(lotFullList);
@@ -769,7 +778,11 @@ public class ArrivalService {
     ) {
         Map<Long, SellerInVehicle> sellersById = existingSellers.stream().collect(Collectors.toMap(SellerInVehicle::getId, s -> s));
         Map<Long, Lot> lotsById = existingLots.stream().collect(Collectors.toMap(Lot::getId, l -> l));
+        Map<Long, List<ArrivalDeletionBlocker>> blockersByLotId = existingLots
+            .stream()
+            .collect(Collectors.toMap(Lot::getId, lot -> collectLotDeletionBlockers(traderId, List.of(lot.getId()))));
         Set<Long> seenExistingLots = new HashSet<>();
+        Set<Long> removedExistingLotIds = new HashSet<>();
         Instant now = Instant.now();
         DailySerial dailySerial = getOrCreateGlobalSellerSerialForUpdate(traderId);
         int lotSerialPeak = currentLotSerialBaseForTrader(traderId, dailySerial);
@@ -801,7 +814,12 @@ public class ArrivalService {
                     if (existing == null || !Objects.equals(existing.getSellerVehicleId(), siv.getId())) {
                         throw new IllegalArgumentException("Lot does not belong to this arrival: " + lotDTO.getId());
                     }
-                    applyExistingLotAppendOnlyUpdate(traderId, existing, lotDTO, blockers);
+                    applyExistingLotAppendOnlyUpdate(
+                        traderId,
+                        existing,
+                        lotDTO,
+                        blockersByLotId.getOrDefault(existing.getId(), List.of())
+                    );
                     seenExistingLots.add(existing.getId());
                     continue;
                 }
@@ -820,7 +838,12 @@ public class ArrivalService {
         }
         for (Lot existingLot : existingLots) {
             if (!seenExistingLots.contains(existingLot.getId())) {
-                throwBlockedAppendOnly(blockers);
+                List<ArrivalDeletionBlocker> lotBlockers = blockersByLotId.getOrDefault(existingLot.getId(), List.of());
+                if (!lotBlockers.isEmpty()) {
+                    throwBlockedAppendOnly(lotBlockers);
+                }
+                lotRepository.delete(existingLot);
+                removedExistingLotIds.add(existingLot.getId());
             }
         }
 
@@ -830,7 +853,7 @@ public class ArrivalService {
         dailySerial.setSellerSerial(sellerSerialPeak);
         dailySerial.setLotSerial(lotSerialPeak);
         dailySerialRepository.save(dailySerial);
-        List<Lot> out = new ArrayList<>(existingLots);
+        List<Lot> out = existingLots.stream().filter(lot -> !removedExistingLotIds.contains(lot.getId())).collect(Collectors.toCollection(ArrayList::new));
         out.addAll(newLots);
         return out;
     }
@@ -1039,7 +1062,7 @@ public class ArrivalService {
         if (salesBillLineItemRepository.existsForTraderLotsDeletionScope(traderId, lotIdStrs, lotIds)) {
             out.add(ArrivalDeletionBlocker.BILLING);
         }
-        if (!auctionRepository.findAllByLotIdIn(lotIds).isEmpty()) {
+        if (auctionEntryRepository.existsByAuctionLotIdIn(lotIds)) {
             out.add(ArrivalDeletionBlocker.AUCTION);
         }
         if (auctionSelfSaleUnitRepository.existsByLotIdIn(lotIds)) {

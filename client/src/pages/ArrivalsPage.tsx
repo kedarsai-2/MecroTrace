@@ -161,6 +161,7 @@ interface LotEntry {
   commodity_name: string;
   broker_tag: string;
   variant: string;
+  delete_blockers?: string[];
 }
 
 interface SellerEntry {
@@ -181,6 +182,7 @@ type SerializedLotSnapshot = {
   commodity_name: string;
   broker_tag: string;
   variant: string;
+  delete_blockers: string[];
 };
 
 type SerializedSellerSnapshot = {
@@ -1398,6 +1400,7 @@ const ArrivalsPage = () => {
         commodity_name: l.commodity_name,
         broker_tag: l.broker_tag,
         variant: l.variant,
+        delete_blockers: l.delete_blockers ?? [],
       })),
     }));
   }, []);
@@ -1437,6 +1440,7 @@ const ArrivalsPage = () => {
         commodity_name: l?.commodityName ?? '',
         broker_tag: l?.brokerTag ?? '',
         variant: l?.variant ?? '',
+        delete_blockers: l?.deleteBlockers ?? [],
       })),
     }));
     setSellers(mappedSellers);
@@ -1693,7 +1697,7 @@ const ArrivalsPage = () => {
   }, []);
 
   const isExistingLinkedEditLot = useCallback((lot?: LotEntry | null) => {
-    return findEditBaselineLot(lot?.lot_id) != null;
+    return (findEditBaselineLot(lot?.lot_id)?.delete_blockers?.length ?? 0) > 0;
   }, [findEditBaselineLot]);
 
   const validateLinkedExistingLotUpdate = useCallback((
@@ -1701,7 +1705,8 @@ const ArrivalsPage = () => {
     next: Pick<LotEntry, 'lot_name' | 'quantity' | 'commodity_name' | 'variant'>
   ) => {
     const baseline = findEditBaselineLot(editingLotId);
-    if (!baseline) return true;
+    const blockers = baseline?.delete_blockers ?? [];
+    if (!baseline || blockers.length === 0) return true;
 
     const normalize = (value?: string | null) => (value ?? '').trim();
     const detailsChanged =
@@ -1710,24 +1715,23 @@ const ArrivalsPage = () => {
       normalize(baseline.variant) !== normalize(next.variant);
 
     if (detailsChanged) {
-      toast.error(formatLinkedLotDetailBlockedMessage(editLinkedBlockers));
+      toast.error(formatLinkedLotDetailBlockedMessage(blockers));
       return false;
     }
 
     if (next.quantity < baseline.quantity) {
-      toast.error(formatLinkedLotQuantityDecreaseMessage(editLinkedBlockers));
+      toast.error(formatLinkedLotQuantityDecreaseMessage(blockers));
       return false;
     }
 
-    if (next.quantity > baseline.quantity && !canIncreaseLinkedLotQuantity(editLinkedBlockers)) {
-      toast.error(formatArrivalEditBlockedMessage(editLinkedBlockers));
+    if (next.quantity > baseline.quantity && !canIncreaseLinkedLotQuantity(blockers)) {
+      toast.error(formatArrivalEditBlockedMessage(blockers));
       return false;
     }
 
     return true;
   }, [
     canIncreaseLinkedLotQuantity,
-    editLinkedBlockers,
     findEditBaselineLot,
     formatArrivalEditBlockedMessage,
     formatLinkedLotDetailBlockedMessage,
@@ -2598,6 +2602,7 @@ const ArrivalsPage = () => {
             commodity_name: commodities[0]?.commodity_name || '',
             broker_tag: '',
             variant: '',
+            delete_blockers: [],
           }],
         };
       });
@@ -2671,6 +2676,7 @@ const ArrivalsPage = () => {
             commodity_name: addLotForm.commodityName,
             broker_tag: '',
             variant: addLotForm.variant,
+            delete_blockers: [],
           }],
         };
       });
@@ -2836,7 +2842,7 @@ const ArrivalsPage = () => {
   const removeLot = (sellerIdx: number, lotIdx: number) => {
     const lot = sellers[sellerIdx]?.lots[lotIdx];
     if (isExistingLinkedEditLot(lot)) {
-      toast.error(formatLinkedLotDeleteBlockedMessage(editLinkedBlockers));
+      toast.error(formatLinkedLotDeleteBlockedMessage(findEditBaselineLot(lot?.lot_id)?.delete_blockers ?? editLinkedBlockers));
       return;
     }
     setSellers(prev => prev.map((s, i) => {
@@ -2848,7 +2854,7 @@ const ArrivalsPage = () => {
   const requestDeleteLot = (sellerIdx: number, lotIdx: number) => {
     const lot = sellers[sellerIdx]?.lots[lotIdx];
     if (isExistingLinkedEditLot(lot)) {
-      toast.error(formatLinkedLotDeleteBlockedMessage(editLinkedBlockers));
+      toast.error(formatLinkedLotDeleteBlockedMessage(findEditBaselineLot(lot?.lot_id)?.delete_blockers ?? editLinkedBlockers));
       return;
     }
     setPendingDelete({ kind: "lot", sellerIdx, lotIdx, label: lot?.lot_name || "Lot " + (lotIdx + 1) });
@@ -3003,9 +3009,6 @@ const ArrivalsPage = () => {
 
   const handleEditArrival = async (a: Pick<ArrivalSummary, 'vehicleId'>) => {
     const key = String(a.vehicleId);
-    const cachedDetail = sameArrivalVehicleId(expandedDetail?.vehicleId, a.vehicleId)
-      ? expandedDetail
-      : arrivalFullDetailCacheRef.current.get(key);
 
     void loadArrivalFormReferenceData();
     setActiveSellerSearch(null);
@@ -3018,12 +3021,6 @@ const ArrivalsPage = () => {
     setShowAdd(true);
     setExpandedDetail(null);
     if (isDesktop) setDesktopTab('new-arrival');
-
-    if (cachedDetail) {
-      setEditLoading(false);
-      populateEditFormFromDetail(cachedDetail);
-      return;
-    }
 
     setEditLoading(true);
     try {
