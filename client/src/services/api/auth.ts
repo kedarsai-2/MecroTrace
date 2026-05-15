@@ -1,6 +1,6 @@
 import type { Trader, User } from '@/types/models';
 import { apiFetch, captureAuthTokenFromResponse, captureRefreshTokenFromResponse, refreshSessionForKind, REFRESH_TOKEN_HEADER } from './http';
-import { getTraderRefreshToken, setTraderRefreshToken } from './tokenStore';
+import { getTraderRefreshToken, setTraderRefreshToken, setTraderToken } from './tokenStore';
 
 /** Default message when we cannot show a specific validation message. */
 const REGISTRATION_FAILED = 'Registration failed. Please try again.';
