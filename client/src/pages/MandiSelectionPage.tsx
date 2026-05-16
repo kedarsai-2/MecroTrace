@@ -121,8 +121,8 @@ const MandiSelectionPage = () => {
       </header>
 
       <main className="relative z-10 min-h-0 flex-1 overflow-y-auto px-4 py-6 sm:px-6">
-        <div className="mx-auto flex min-h-full w-full max-w-5xl flex-col justify-center">
-          <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
+        <div className="mx-auto flex min-h-full w-full max-w-6xl flex-col justify-start pt-5 sm:pt-8 lg:pt-10">
+          <div className="mb-6 flex flex-wrap items-end justify-between gap-3">
             <div>
               <div className="mb-3 flex h-11 w-11 items-center justify-center rounded-lg border border-white/20 bg-white/15 text-white backdrop-blur-md">
                 <Building2 className="h-5 w-5" />
@@ -147,7 +147,7 @@ const MandiSelectionPage = () => {
               <Loader2 className="h-7 w-7 animate-spin text-white" />
             </div>
           ) : accounts.length > 0 ? (
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
               {accounts.map(account => {
                 const locationLabel = accountLocation(account);
                 const isSelecting = selectingTraderId === account.trader_id;
@@ -161,42 +161,42 @@ const MandiSelectionPage = () => {
                     onClick={() => void handleSelect(account)}
                     disabled={isBusy}
                     className={cn(
-                      'group min-h-32 rounded-lg border border-white/20 bg-white/95 p-4 text-left text-slate-950 shadow-xl transition',
-                      'hover:-translate-y-0.5 hover:bg-white hover:shadow-2xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white',
+                      'glass-card group min-h-44 rounded-2xl border border-white/30 bg-white/[0.18] p-5 text-left text-white shadow-2xl transition sm:min-h-48 sm:p-6',
+                      'hover:-translate-y-1 hover:bg-white/[0.24] hover:shadow-[0_24px_70px_rgba(31,41,91,0.35)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white',
                       'disabled:translate-y-0 disabled:cursor-wait disabled:opacity-70',
                     )}
                   >
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="flex min-w-0 items-start gap-3">
-                        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-blue-600/10 text-blue-700">
-                          <Store className="h-5 w-5" />
+                    <div className="flex items-start justify-between gap-4">
+                      <div className="flex min-w-0 items-start gap-4">
+                        <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-white/25 bg-white/20 text-white shadow-lg backdrop-blur-md sm:h-14 sm:w-14">
+                          <Store className="h-6 w-6" />
                         </div>
                         <div className="min-w-0">
-                          <p className="line-clamp-2 text-base font-bold leading-snug">{account.business_name}</p>
-                          <p className="mt-1 flex items-center gap-1.5 truncate text-sm text-slate-600">
-                            <User className="h-3.5 w-3.5 shrink-0" />
+                          <p className="line-clamp-2 text-xl font-bold leading-snug text-white sm:text-2xl">{account.business_name}</p>
+                          <p className="mt-2 flex items-center gap-1.5 truncate text-sm font-medium text-white/75">
+                            <User className="h-4 w-4 shrink-0" />
                             <span className="truncate">{account.owner_name || 'Owner'}</span>
                           </p>
                         </div>
                       </div>
                       {isSelecting ? (
-                        <Loader2 className="h-5 w-5 shrink-0 animate-spin text-blue-700" />
+                        <Loader2 className="h-6 w-6 shrink-0 animate-spin text-white" />
                       ) : (
-                        <CheckCircle2 className="h-5 w-5 shrink-0 text-emerald-600 opacity-80 transition group-hover:opacity-100" />
+                        <CheckCircle2 className="h-6 w-6 shrink-0 text-emerald-300 opacity-85 transition group-hover:opacity-100" />
                       )}
                     </div>
 
-                    <div className="mt-4 flex items-center justify-between gap-2">
+                    <div className="mt-7 flex items-center justify-between gap-3">
                       {locationLabel ? (
-                        <p className="flex min-w-0 items-center gap-1.5 truncate text-xs font-medium text-slate-500">
-                          <MapPin className="h-3.5 w-3.5 shrink-0" />
+                        <p className="flex min-w-0 items-center gap-2 truncate text-sm font-medium text-white/70">
+                          <MapPin className="h-4 w-4 shrink-0" />
                           <span className="truncate">{locationLabel}</span>
                         </p>
                       ) : (
                         <span />
                       )}
                       {isLastUsed && (
-                        <span className="shrink-0 rounded-md bg-blue-50 px-2 py-1 text-[11px] font-semibold text-blue-700">
+                        <span className="shrink-0 rounded-lg border border-white/20 bg-white/20 px-2.5 py-1.5 text-[11px] font-semibold text-white backdrop-blur-md">
                           Last used
                         </span>
                       )}
