@@ -46,6 +46,100 @@ function mapAuthPresetEnabled(raw: unknown): boolean {
   return raw !== false;
 }
 
+export type TraderAccountOption = {
+  trader_id: string;
+  business_name: string;
+  owner_name: string;
+  city?: string;
+  state?: string;
+  approval_status?: string;
+  active?: boolean;
+  primary_mapping?: boolean;
+};
+
+export type AccountSelectionResult = {
+  accountSelectionRequired: true;
+  user: User;
+  accounts: TraderAccountOption[];
+};
+
+export type AuthLoginResult = { trader: Trader; user: User } | AccountSelectionResult;
+
+function mapUserPayload(data: any): User {
+  return {
+    user_id: data.user.user_id,
+    trader_id: data.user.trader_id,
+    username: data.user.username,
+    is_active: data.user.is_active,
+    created_at: data.user.created_at ?? new Date().toISOString(),
+    name: data.user.name,
+    role: data.user.role,
+    authorities: data.user.authorities ?? [],
+  };
+}
+
+function mapTraderPayload(data: any): Trader {
+  return {
+    trader_id: data.trader.trader_id,
+    business_name: data.trader.business_name,
+    owner_name: data.trader.owner_name,
+    address: data.trader.address ?? '',
+    category: data.trader.category ?? '',
+    approval_status: data.trader.approval_status ?? 'PENDING',
+    bill_prefix: data.trader.bill_prefix ?? '',
+    created_at: data.trader.created_at ?? new Date().toISOString(),
+    updated_at: data.trader.updated_at ?? new Date().toISOString(),
+    mobile: data.trader.mobile,
+    email: data.trader.email,
+    city: data.trader.city,
+    state: data.trader.state,
+    pin_code: data.trader.pin_code,
+    gst_number: data.trader.gst_number,
+    rmc_apmc_code: data.trader.rmc_apmc_code,
+    shop_photos: data.trader.shop_photos ?? [],
+    preset_enabled: mapAuthPresetEnabled(data.trader?.preset_enabled),
+  };
+}
+
+function mapAccountOptions(raw: unknown): TraderAccountOption[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.map((item: any) => ({
+    trader_id: String(item.trader_id ?? ''),
+    business_name: item.business_name ?? '',
+    owner_name: item.owner_name ?? '',
+    city: item.city ?? undefined,
+    state: item.state ?? undefined,
+    approval_status: item.approval_status ?? undefined,
+    active: item.active,
+    primary_mapping: item.primary_mapping,
+  })).filter(item => item.trader_id);
+}
+
+async function persistTraderAuth(res: Response, data: any): Promise<void> {
+  const tokenFromBody = data?.token;
+  if (typeof tokenFromBody === 'string' && tokenFromBody.trim()) {
+    await setTraderToken(tokenFromBody.trim());
+  } else {
+    await captureAuthTokenFromResponse(res, 'trader');
+  }
+  await captureRefreshTokenFromResponse(res, 'trader', data?.refresh_token);
+}
+
+function mapAuthOrSelection(data: any): AuthLoginResult {
+  const user = mapUserPayload(data);
+  if (data?.account_selection_required === true) {
+    return {
+      accountSelectionRequired: true,
+      user,
+      accounts: mapAccountOptions(data.accounts),
+    };
+  }
+  return {
+    user,
+    trader: mapTraderPayload(data),
+  };
+}
+
 /**
  * Reads response body as text (body can only be read once).
  * Tries to parse as JSON; falls back to raw text for non-JSON responses.
@@ -194,7 +288,7 @@ export const authApi = {
     return { trader, user };
   },
 
-  async login(email: string, password: string): Promise<{ trader: Trader; user: User }> {
+  async login(email: string, password: string): Promise<AuthLoginResult> {
     const res = await apiFetch('/auth/login', {
       method: 'POST',
       body: JSON.stringify({ username: email, password, rememberMe: true }),
@@ -235,54 +329,8 @@ export const authApi = {
 
     const data = await res.json();
 
-    // New: persist token from response body (backend also sets httpOnly cookie).
-    const tokenFromBody = (data as any)?.token;
-    if (typeof tokenFromBody === 'string' && tokenFromBody.trim()) {
-      await setTraderToken(tokenFromBody.trim());
-    } else {
-      // Backward compatible: try extracting token from exposed Authorization header.
-      await captureAuthTokenFromResponse(res, 'trader');
-    }
-    await captureRefreshTokenFromResponse(res, 'trader', (data as any)?.refresh_token);
-
-    // Capture trader JWT for use in Authorization header (web + Capacitor).
-    // Kept for compatibility with builds where token is not included in body.
-    // (No-op when token is already stored above.)
-    // captureAuthTokenFromResponse(res, 'trader');
-
-    const user: User = {
-      user_id: data.user.user_id,
-      trader_id: data.user.trader_id,
-      username: data.user.username,
-      is_active: data.user.is_active,
-      created_at: data.user.created_at ?? new Date().toISOString(),
-      name: data.user.name,
-      role: data.user.role,
-      authorities: data.user.authorities ?? [],
-    };
-
-    const trader: Trader = {
-      trader_id: data.trader.trader_id,
-      business_name: data.trader.business_name,
-      owner_name: data.trader.owner_name,
-      address: data.trader.address ?? '',
-      category: data.trader.category ?? '',
-      approval_status: data.trader.approval_status ?? 'PENDING',
-      bill_prefix: data.trader.bill_prefix ?? '',
-      created_at: data.trader.created_at ?? new Date().toISOString(),
-      updated_at: data.trader.updated_at ?? new Date().toISOString(),
-      mobile: data.trader.mobile,
-      email: data.trader.email,
-      city: data.trader.city,
-      state: data.trader.state,
-      pin_code: data.trader.pin_code,
-      gst_number: data.trader.gst_number,
-      rmc_apmc_code: data.trader.rmc_apmc_code,
-      shop_photos: data.trader.shop_photos ?? [],
-      preset_enabled: mapAuthPresetEnabled(data.trader?.preset_enabled),
-    };
-
-    return { trader, user };
+    await persistTraderAuth(res, data);
+    return mapAuthOrSelection(data);
   },
 
   async getProfile(): Promise<{ trader: Trader; user: User } | null> {
@@ -394,7 +442,7 @@ export const authApi = {
     }
   },
 
-  async verifyOtp(mobile: string, otp: string): Promise<{ trader: Trader; user: User }> {
+  async verifyOtp(mobile: string, otp: string): Promise<AuthLoginResult> {
     const res = await apiFetch('/auth/otp/verify', {
       method: 'POST',
       body: JSON.stringify({ mobile, otp }),
@@ -427,50 +475,27 @@ export const authApi = {
 
     const data = await res.json();
 
-    // OTP login issues a JWT via auth pipeline.
-    // New: backend also returns the JWT in `data.token` (frontend stores it on Android).
-    const tokenFromBody = (data as any)?.token;
-    if (typeof tokenFromBody === 'string' && tokenFromBody.trim()) {
-      await setTraderToken(tokenFromBody.trim());
-    } else {
-      // Backward compatible fallback.
-      await captureAuthTokenFromResponse(res, 'trader');
+    await persistTraderAuth(res, data);
+    return mapAuthOrSelection(data);
+  },
+
+  async selectTrader(traderId: string): Promise<{ trader: Trader; user: User }> {
+    const res = await apiFetch('/auth/select-trader', {
+      method: 'POST',
+      body: JSON.stringify({ trader_id: traderId }),
+    });
+
+    if (!res.ok) {
+      throw new Error('Failed to select trader account');
     }
-    await captureRefreshTokenFromResponse(res, 'trader', (data as any)?.refresh_token);
 
-    const user: User = {
-      user_id: data.user.user_id,
-      trader_id: data.user.trader_id,
-      username: data.user.username,
-      is_active: data.user.is_active,
-      created_at: data.user.created_at ?? new Date().toISOString(),
-      name: data.user.name,
-      role: data.user.role,
-      authorities: data.user.authorities ?? [],
-    };
-
-    const trader: Trader = {
-      trader_id: data.trader.trader_id,
-      business_name: data.trader.business_name,
-      owner_name: data.trader.owner_name,
-      address: data.trader.address ?? '',
-      category: data.trader.category ?? '',
-      approval_status: data.trader.approval_status ?? 'PENDING',
-      bill_prefix: data.trader.bill_prefix ?? '',
-      created_at: data.trader.created_at ?? new Date().toISOString(),
-      updated_at: data.trader.updated_at ?? new Date().toISOString(),
-      mobile: data.trader.mobile,
-      email: data.trader.email,
-      city: data.trader.city,
-      state: data.trader.state,
-      pin_code: data.trader.pin_code,
-      gst_number: data.trader.gst_number,
-      rmc_apmc_code: data.trader.rmc_apmc_code,
-      shop_photos: data.trader.shop_photos ?? [],
-      preset_enabled: mapAuthPresetEnabled(data.trader?.preset_enabled),
-    };
-
-    return { trader, user };
+    const data = await res.json();
+    await persistTraderAuth(res, data);
+    const mapped = mapAuthOrSelection(data);
+    if ('accountSelectionRequired' in mapped) {
+      throw new Error('Please select a trader account');
+    }
+    return mapped;
   },
 
   async logout(): Promise<void> {

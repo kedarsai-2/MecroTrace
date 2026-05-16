@@ -3,6 +3,13 @@ export { commodityApi } from './commodities';
 export { contactApi } from './contacts';
 export { arrivalsApi } from './arrivals';
 export { traderApi } from './trader';
+export { multiTraderAccountsApi } from './multiTraderAccounts';
+export type {
+  MultiTraderAccountRequest,
+  MultiTraderAccountRequestCreate,
+  MultiTraderCurrentSummary,
+  MultiTraderRequestStatus,
+} from './multiTraderAccounts';
 export { vehicleApi } from './vehicles';
 export { categoryApi } from './categories';
 export { rbacApi, traderRbacApi } from './rbac';

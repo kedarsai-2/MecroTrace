@@ -1,9 +1,8 @@
 import type { CSSProperties } from 'react';
 import { useState } from 'react';
 import { Outlet, useLocation, useNavigate, Navigate } from 'react-router-dom';
-import { Moon, Sun, Bell, User, AlertCircle } from 'lucide-react';
+import { Moon, Sun, User, AlertCircle, Building2 } from 'lucide-react';
 import DesktopSidebar from '@/components/DesktopSidebar';
-import FontSizeControls from '@/components/FontSizeControls';
 import { useDesktopMode } from '@/hooks/use-desktop';
 import { useTheme } from '@/context/ThemeContext';
 import { useAuth } from '@/context/AuthContext';
@@ -135,11 +134,16 @@ const TraderLayout = () => {
             <h2 className="text-lg font-bold text-foreground">{pageTitle}</h2>
           </div>
           <div className="relative z-10 flex items-center gap-3">
-            <FontSizeControls />
-            <button aria-label="Notifications" className="w-9 h-9 rounded-xl glass flex items-center justify-center hover:bg-muted/50 transition-all relative border border-border/30">
-              <Bell className="w-4 h-4 text-muted-foreground" />
-              <div className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-gradient-to-r from-primary to-violet-500 shadow-sm shadow-primary/40" />
-            </button>
+            {isApproved && (
+              <button
+                type="button"
+                onClick={() => navigate('/mandi-selection')}
+                className="h-10 rounded-xl border border-white/25 bg-gradient-to-r from-[#4B7CF3] via-[#5B8CFF] to-[#7B61FF] px-4 text-sm font-semibold text-white shadow-lg shadow-primary/25 transition-all hover:-translate-y-0.5 hover:shadow-xl hover:shadow-primary/30 flex items-center gap-2"
+              >
+                <Building2 className="h-4 w-4 text-white" />
+                Select Mandi
+              </button>
+            )}
             <button onClick={toggleTheme} aria-label={isDark ? 'Switch to light mode' : 'Switch to dark mode'} className="w-9 h-9 rounded-xl glass flex items-center justify-center hover:bg-muted/50 transition-all border border-border/30">
               {isDark ? <Sun className="w-4 h-4 text-amber-400" /> : <Moon className="w-4 h-4 text-muted-foreground" />}
             </button>

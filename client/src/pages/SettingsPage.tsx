@@ -1,6 +1,6 @@
 import { motion } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
-import { Shield, Cog, ChevronRight, Sparkles, Sliders, Bluetooth, Printer } from 'lucide-react';
+import { Shield, Cog, ChevronRight, Sparkles, Sliders, Bluetooth, Printer, Building2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import BottomNav from '@/components/BottomNav';
 import { usePermissions } from '@/lib/permissions';
@@ -48,6 +48,16 @@ const settingsCards = [
     accent: 'from-violet-400/15 to-purple-500/10',
     iconBg: 'from-violet-500/20 to-purple-600/15',
   },
+  {
+    icon: Building2,
+    title: 'Multi Trader Acc Setup',
+    desc: 'Apply for and switch linked trader accounts',
+    path: '/settings/multi-trader-accounts',
+    gradient: 'from-cyan-500 to-blue-600',
+    glow: 'shadow-cyan-500/20',
+    accent: 'from-cyan-400/15 to-blue-500/10',
+    iconBg: 'from-cyan-500/20 to-blue-600/15',
+  },
 ];
 
 function isTraderOwnerRole(role: string | undefined): boolean {
@@ -69,6 +79,7 @@ const SettingsPage = () => {
 
   const canViewPresetSettings = can('Preset Settings', 'View');
   const canViewPrintSettings = can('Print Settings', 'View') || isTraderOwnerRole(user?.role);
+  const canViewMultiTraderSetup = isTraderOwnerRole(user?.role) && trader?.approval_status === 'APPROVED';
 
   const traderCanCustomizePresets = trader?.preset_enabled !== false;
 
@@ -76,6 +87,7 @@ const SettingsPage = () => {
     if (card.path === '/settings/rbac') return canManageRoles || canManageUsers;
     if (card.path === '/settings/preset-settings') return canViewPresetSettings && traderCanCustomizePresets;
     if (card.path === '/settings/print-settings') return canViewPrintSettings;
+    if (card.path === '/settings/multi-trader-accounts') return canViewMultiTraderSetup;
     return true;
   });
 

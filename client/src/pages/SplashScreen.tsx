@@ -17,7 +17,14 @@ const SplashScreen = () => {
   useEffect(() => {
     if (isDesktop) {
       if (!hasBootstrapped) return;
-      navigate(isAuthenticated && trader ? '/home' : '/login', { replace: true });
+      navigate(
+        isAuthenticated && trader
+          ? trader.approval_status === 'APPROVED'
+            ? '/mandi-selection'
+            : '/home'
+          : '/login',
+        { replace: true },
+      );
       return;
     }
     const contentTimer = setTimeout(() => setShowContent(true), 300);

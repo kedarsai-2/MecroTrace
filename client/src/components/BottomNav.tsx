@@ -1,9 +1,11 @@
 import { useNavigate, useLocation } from 'react-router-dom';
-import { Truck, Gavel, Receipt, Printer, User, Home } from 'lucide-react';
+import { Truck, Gavel, Receipt, Printer, User, Home, Building2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { usePermissions, getModuleKeyForRoute } from '@/lib/permissions';
+import { useAuth } from '@/context/AuthContext';
 const tabs = [
   { icon: Home, label: 'Home', path: '/home' },
+  { icon: Building2, label: 'Mandi', path: '/mandi-selection', approvedOnly: true },
   { icon: Truck, label: 'Arrivals', path: '/arrivals' },
   { icon: Gavel, label: 'Auctions / Sales', path: '/auctions' },
   { icon: Receipt, label: 'Billings', path: '/billing' },
@@ -15,11 +17,16 @@ const BottomNav = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const { canAccessModule } = usePermissions();
+  const { trader } = useAuth();
+  const isApproved = trader?.approval_status === 'APPROVED';
 
   return (
     <nav className="bottom-nav z-50 w-full max-w-[56rem] left-1/2 -translate-x-1/2 lg:hidden">
       <div className="flex items-center justify-around h-14 px-2 md:px-6">
         {tabs.map((tab) => {
+          if (tab.approvedOnly && !isApproved) {
+            return null;
+          }
           const moduleKey = getModuleKeyForRoute(tab.path);
           if (moduleKey && !canAccessModule(moduleKey)) {
             return null;

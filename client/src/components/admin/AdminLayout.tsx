@@ -32,6 +32,7 @@ type AdminNavItem = {
 
 const navItems: AdminNavItem[] = [
   { icon: Users, label: 'Traders', path: '/admin/traders', moduleKey: 'Traders' },
+  { icon: ShieldCheck, label: 'Multi Trader Approval', path: '/admin/multi-trader-accounts', moduleKey: 'Traders' },
   { icon: Store, label: 'Categories', path: '/admin/categories', moduleKey: 'Categories' },
   { icon: Package, label: 'Commodities', path: '/admin/commodities', moduleKey: 'Commodities' },
   { icon: BookUser, label: 'Global Contact', path: '/admin/contacts', moduleKey: 'Contacts' },

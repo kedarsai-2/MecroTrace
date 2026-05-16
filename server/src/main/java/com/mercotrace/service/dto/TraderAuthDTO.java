@@ -1,6 +1,7 @@
 package com.mercotrace.service.dto;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import java.util.List;
 import java.util.Set;
 
 /**
@@ -25,6 +26,15 @@ public class TraderAuthDTO {
     @JsonProperty("needs_login")
     private Boolean needsLogin;
 
+    @JsonProperty("account_selection_required")
+    private Boolean accountSelectionRequired;
+
+    @JsonProperty("accounts")
+    private List<TraderAccountOptionDTO> accounts;
+
+    @JsonProperty("selected_trader_id")
+    private String selectedTraderId;
+
     @JsonProperty("user")
     private UserPayload user;
 
@@ -37,6 +47,30 @@ public class TraderAuthDTO {
 
     public void setNeedsLogin(Boolean needsLogin) {
         this.needsLogin = needsLogin;
+    }
+
+    public Boolean getAccountSelectionRequired() {
+        return accountSelectionRequired;
+    }
+
+    public void setAccountSelectionRequired(Boolean accountSelectionRequired) {
+        this.accountSelectionRequired = accountSelectionRequired;
+    }
+
+    public List<TraderAccountOptionDTO> getAccounts() {
+        return accounts;
+    }
+
+    public void setAccounts(List<TraderAccountOptionDTO> accounts) {
+        this.accounts = accounts;
+    }
+
+    public String getSelectedTraderId() {
+        return selectedTraderId;
+    }
+
+    public void setSelectedTraderId(String selectedTraderId) {
+        this.selectedTraderId = selectedTraderId;
     }
 
     public String getToken() {

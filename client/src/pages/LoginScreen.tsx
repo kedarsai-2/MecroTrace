@@ -31,6 +31,15 @@ const PARTICLES = Array.from({ length: 10 }, (_, i) => ({
   delay: (i * 0.4) % 2,
 }));
 
+function errorMessage(error: unknown, fallback: string): string {
+  if (error instanceof Error && error.message) return error.message;
+  if (typeof error === 'object' && error !== null && 'message' in error) {
+    const message = (error as { message?: unknown }).message;
+    if (typeof message === 'string' && message.trim()) return message;
+  }
+  return fallback;
+}
+
 type LoginMode = 'phone' | 'email';
 type LoginAudience = 'trader' | 'contact';
 
@@ -83,7 +92,7 @@ const LoginScreen = () => {
 
   useEffect(() => {
     if (traderBootstrapped && traderAuthenticated && trader) {
-      navigate('/home', { replace: true });
+      navigate(trader.approval_status === 'APPROVED' ? '/mandi-selection' : '/home', { replace: true });
     }
   }, [navigate, trader, traderAuthenticated, traderBootstrapped]);
 
@@ -112,8 +121,8 @@ const LoginScreen = () => {
       setOtpSent(true);
       setOtpCooldown(30);
       toast.success('OTP sent', { description: 'Please check your phone for the 4-digit OTP.' });
-    } catch (e: any) {
-      toast.error(e?.message || 'Failed to send OTP. Please try again.');
+    } catch (e: unknown) {
+      toast.error(errorMessage(e, 'Failed to send OTP. Please try again.'));
     } finally {
       setIsSendingOtp(false);
     }
@@ -124,10 +133,14 @@ const LoginScreen = () => {
     clearError();
     if (audience === 'trader') {
       try {
-        await loginWithOtp(phone, otp);
+        const result = await loginWithOtp(phone, otp);
+        if ('accountSelectionRequired' in result) {
+          navigate('/mandi-selection', { replace: true, state: { accounts: result.accounts } });
+          return;
+        }
         navigate('/home', { replace: true });
-      } catch (e: any) {
-        toast.error(e?.message || 'Invalid or expired OTP.');
+      } catch (e: unknown) {
+        toast.error(errorMessage(e, 'Invalid or expired OTP.'));
       }
       return;
     }
@@ -144,10 +157,9 @@ const LoginScreen = () => {
       } else {
         toast.error('We could not complete sign-in. Please try again.');
       }
-    } catch (e: any) {
+    } catch (e: unknown) {
       toast.error(
-        e?.message ||
-          'The OTP you entered is invalid or has expired. Please request a new one.',
+        errorMessage(e, 'The OTP you entered is invalid or has expired. Please request a new one.'),
       );
     } finally {
       setIsVerifyingOtp(false);
@@ -194,14 +206,18 @@ const LoginScreen = () => {
     clearError();
     try {
       if (audience === 'trader') {
-        await login(email, password);
+        const result = await login(email, password);
+        if ('accountSelectionRequired' in result) {
+          navigate('/mandi-selection', { replace: true, state: { accounts: result.accounts } });
+          return;
+        }
         navigate('/home', { replace: true });
       } else {
         await contactLogin(email, password);
         navigate('/contact', { replace: true });
       }
-    } catch (e: any) {
-      const msg = e?.message || 'Login failed. Please try again.';
+    } catch (e: unknown) {
+      const msg = errorMessage(e, 'Login failed. Please try again.');
       toast.error(msg);
       // error is also set in respective context for inline display
     }

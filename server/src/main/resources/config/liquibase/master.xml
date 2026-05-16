@@ -120,4 +120,6 @@
     <include file="config/liquibase/changelog/20260504121000_refresh_session_authorities_text.xml" relativeToChangelogFile="false"/>
     <include file="config/liquibase/changelog/20260509120000_print_freeze_lock_fields.xml" relativeToChangelogFile="false"/>
     <include file="config/liquibase/changelog/20260511153000_sales_bill_summary_indexes.xml" relativeToChangelogFile="false"/>
+    <include file="config/liquibase/changelog/20260516120000_multi_trader_account_request.xml" relativeToChangelogFile="false"/>
+    <include file="config/liquibase/changelog/20260516133000_multi_trader_request_group_fields.xml" relativeToChangelogFile="false"/>
 </databaseChangeLog>

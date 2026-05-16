@@ -13,7 +13,8 @@ import org.springframework.stereotype.Repository;
 @Repository
 public interface TraderRepository extends JpaRepository<Trader, Long>, JpaSpecificationExecutor<Trader> {
 
-    Optional<Trader> findOneByMobile(String mobile);
+    @Query(value = "select * from trader where mobile = :mobile order by id asc limit 1", nativeQuery = true)
+    Optional<Trader> findOneByMobile(@Param("mobile") String mobile);
 
     /** Direct update to bypass L2 cache (avoids serialization mismatch after schema change). */
     @Modifying(clearAutomatically = true)

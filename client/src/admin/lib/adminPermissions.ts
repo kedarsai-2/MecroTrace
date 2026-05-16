@@ -146,6 +146,7 @@ export function hasAnyAdminModule(authorities: Set<string>): boolean {
 /** Route → single module key (1:1). Used for page guards and sidebar. */
 export function getAdminModuleKeyForRoute(pathname: string): AdminModuleKey | null {
   if (pathname === '/admin' || pathname === '/admin/') return 'Dashboard';
+  if (pathname.startsWith('/admin/multi-trader-accounts')) return 'Traders';
   if (pathname.startsWith('/admin/traders')) return 'Traders';
   if (pathname.startsWith('/admin/categories')) return 'Categories';
   if (pathname.startsWith('/admin/commodities')) return 'Commodities';
