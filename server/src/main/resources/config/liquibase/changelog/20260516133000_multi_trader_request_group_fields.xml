@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <changeSet id="20260516133000-1" author="codex">
+        <addColumn tableName="multi_trader_account_request">
+            <column name="request_group_id" type="varchar(64)"/>
+            <column name="request_group_index" type="integer"/>
+            <column name="request_group_size" type="integer"/>
+            <column name="shop_no" type="varchar(20)"/>
+            <column name="description" type="text"/>
+        </addColumn>
+
+        <sql>
+            update multi_trader_account_request
+            set request_group_id = concat('legacy-', id),
+                request_group_index = 1,
+                request_group_size = 1
+            where request_group_id is null;
+
+            create index idx_multi_trader_request_group
+                on multi_trader_account_request (request_group_id, request_group_index);
+            create index idx_multi_trader_request_group_status
+                on multi_trader_account_request (request_group_id, status);
+        </sql>
+    </changeSet>
+</databaseChangeLog>

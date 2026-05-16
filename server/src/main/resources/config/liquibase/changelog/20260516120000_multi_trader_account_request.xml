@@ -1,0 +1,104 @@
+<?xml version="1.0" encoding="utf-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <changeSet id="20260516120000-1" author="codex">
+        <createTable tableName="multi_trader_account_request">
+            <column name="id" type="bigint">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="requester_user_id" type="bigint">
+                <constraints nullable="false"/>
+            </column>
+            <column name="requester_trader_id" type="bigint">
+                <constraints nullable="false"/>
+            </column>
+            <column name="created_trader_id" type="bigint"/>
+            <column name="status" type="varchar(20)" defaultValue="PENDING">
+                <constraints nullable="false"/>
+            </column>
+            <column name="business_name" type="varchar(150)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="owner_name" type="varchar(150)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="address" type="text"/>
+            <column name="mobile" type="varchar(20)"/>
+            <column name="email" type="varchar(191)"/>
+            <column name="city" type="varchar(100)"/>
+            <column name="state" type="varchar(100)"/>
+            <column name="pin_code" type="varchar(20)"/>
+            <column name="category" type="varchar(100)"/>
+            <column name="gst_number" type="varchar(15)"/>
+            <column name="rmc_apmc_code" type="varchar(64)"/>
+            <column name="shop_photos" type="text"/>
+            <column name="bill_prefix" type="varchar(20)" defaultValue=""/>
+            <column name="decision_reason" type="text"/>
+            <column name="requested_at" type="${datetimeType}">
+                <constraints nullable="false"/>
+            </column>
+            <column name="decision_at" type="${datetimeType}"/>
+            <column name="decided_by_admin_user_id" type="bigint"/>
+            <column name="created_by" type="varchar(50)" defaultValue="system">
+                <constraints nullable="false"/>
+            </column>
+            <column name="created_date" type="${datetimeType}" defaultValueDate="${now}"/>
+            <column name="last_modified_by" type="varchar(50)"/>
+            <column name="last_modified_date" type="${datetimeType}"/>
+        </createTable>
+
+        <addForeignKeyConstraint
+            baseTableName="multi_trader_account_request"
+            baseColumnNames="requester_user_id"
+            constraintName="fk_multi_trader_request_requester_user"
+            referencedTableName="trader_user"
+            referencedColumnNames="id"/>
+
+        <addForeignKeyConstraint
+            baseTableName="multi_trader_account_request"
+            baseColumnNames="requester_trader_id"
+            constraintName="fk_multi_trader_request_requester_trader"
+            referencedTableName="trader"
+            referencedColumnNames="id"/>
+
+        <addForeignKeyConstraint
+            baseTableName="multi_trader_account_request"
+            baseColumnNames="created_trader_id"
+            constraintName="fk_multi_trader_request_created_trader"
+            referencedTableName="trader"
+            referencedColumnNames="id"/>
+
+        <addForeignKeyConstraint
+            baseTableName="multi_trader_account_request"
+            baseColumnNames="decided_by_admin_user_id"
+            constraintName="fk_multi_trader_request_decided_by_admin"
+            referencedTableName="admin_user"
+            referencedColumnNames="id"/>
+
+        <sql>
+            alter table multi_trader_account_request
+                add constraint chk_multi_trader_request_status
+                check (status in ('PENDING', 'APPROVED', 'REJECTED'));
+            alter table multi_trader_account_request
+                add constraint chk_multi_trader_request_created_trader_approved
+                check (created_trader_id is null or status = 'APPROVED');
+            alter table multi_trader_account_request
+                add constraint chk_multi_trader_request_pending_no_decision
+                check (status &lt;&gt; 'PENDING' or decision_at is null);
+            alter table multi_trader_account_request
+                add constraint chk_multi_trader_request_rejected_reason
+                check (status &lt;&gt; 'REJECTED' or (decision_reason is not null and length(trim(decision_reason)) &gt; 0));
+            create index idx_multi_trader_request_requester_user_status
+                on multi_trader_account_request (requester_user_id, status, requested_at desc);
+            create index idx_multi_trader_request_requester_trader
+                on multi_trader_account_request (requester_trader_id);
+            create index idx_multi_trader_request_status_requested
+                on multi_trader_account_request (status, requested_at desc);
+            create index idx_multi_trader_request_created_trader
+                on multi_trader_account_request (created_trader_id);
+        </sql>
+    </changeSet>
+</databaseChangeLog>

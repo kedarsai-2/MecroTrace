@@ -1,13 +1,15 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import type { AuthState, Trader, User } from '@/types/models';
 import { authApi } from '@/services/api';
+import type { AuthLoginResult } from '@/services/api/auth';
 import { setTraderToken } from '@/services/api/tokenStore';
 
 interface AuthContextType extends AuthState {
   /** True once initial auth check (getProfile) has completed. Used by ProtectedRoute to avoid redirecting before bootstrap. */
   hasBootstrapped: boolean;
-  login: (email: string, password: string) => Promise<void>;
-  loginWithOtp: (mobile: string, otp: string) => Promise<void>;
+  login: (email: string, password: string) => Promise<AuthLoginResult>;
+  loginWithOtp: (mobile: string, otp: string) => Promise<AuthLoginResult>;
+  selectTrader: (traderId: string) => Promise<{ user: User; trader: Trader }>;
   /** Returns { user, trader } so callers can e.g. upload photos post-register. */
   register: (data: any) => Promise<{ user: User; trader: Trader }>;
   refreshProfile: () => Promise<void>;
@@ -22,8 +24,9 @@ const AuthContext = createContext<AuthContextType>({
   user: null,
   trader: null,
   hasBootstrapped: false,
-  login: async () => {},
-  loginWithOtp: async () => {},
+  login: async () => ({ accountSelectionRequired: true, user: null as any, accounts: [] }),
+  loginWithOtp: async () => ({ accountSelectionRequired: true, user: null as any, accounts: [] }),
+  selectTrader: async () => ({ user: null as any, trader: null as any }),
   register: async () => ({ user: null as any, trader: null as any }),
   refreshProfile: async () => {},
   logout: async () => {},
@@ -102,11 +105,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setError(null);
     try {
       const result = await authApi.login(email, password);
-      setState({
-        isAuthenticated: true,
-        user: result.user,
-        trader: result.trader,
-      });
+      if (!('accountSelectionRequired' in result)) {
+        setState({
+          isAuthenticated: true,
+          user: result.user,
+          trader: result.trader,
+        });
+      }
+      return result;
     } catch (e: any) {
       setError(e.message || 'Login failed');
       throw e;
@@ -120,13 +126,35 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setError(null);
     try {
       const result = await authApi.verifyOtp(mobile, otp);
+      if (!('accountSelectionRequired' in result)) {
+        setState({
+          isAuthenticated: true,
+          user: result.user,
+          trader: result.trader,
+        });
+      }
+      return result;
+    } catch (e: any) {
+      setError(e.message || 'Login failed');
+      throw e;
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  const selectTrader = useCallback(async (traderId: string): Promise<{ user: User; trader: Trader }> => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      const result = await authApi.selectTrader(traderId);
       setState({
         isAuthenticated: true,
         user: result.user,
         trader: result.trader,
       });
+      return result;
     } catch (e: any) {
-      setError(e.message || 'Login failed');
+      setError(e.message || 'Account selection failed');
       throw e;
     } finally {
       setIsLoading(false);
@@ -193,7 +221,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const clearError = useCallback(() => setError(null), []);
 
   return (
-    <AuthContext.Provider value={{ ...state, hasBootstrapped, login, loginWithOtp, register, refreshProfile, logout, isLoading, error, clearError }}>
+    <AuthContext.Provider value={{ ...state, hasBootstrapped, login, loginWithOtp, selectTrader, register, refreshProfile, logout, isLoading, error, clearError }}>
       {children}
     </AuthContext.Provider>
   );

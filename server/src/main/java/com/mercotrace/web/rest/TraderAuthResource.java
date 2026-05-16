@@ -3,6 +3,7 @@ package com.mercotrace.web.rest;
 import com.mercotrace.domain.Authority;
 import com.mercotrace.domain.Trader;
 import com.mercotrace.domain.User;
+import com.mercotrace.domain.UserTrader;
 import com.mercotrace.domain.enumeration.ApprovalStatus;
 import com.mercotrace.repository.TraderRepository;
 import com.mercotrace.repository.UserRepository;
@@ -14,6 +15,8 @@ import com.mercotrace.service.AuthRefreshSessionService;
 import com.mercotrace.service.EmailAlreadyUsedException;
 import com.mercotrace.service.MailService;
 import com.mercotrace.service.OtpService;
+import com.mercotrace.service.MultiTraderAccountRequestService;
+import com.mercotrace.service.TraderAuthResponseFactory;
 import com.mercotrace.service.TraderOwnerAuthorityService;
 import com.mercotrace.service.TraderService;
 import com.mercotrace.service.UserService;
@@ -28,6 +31,7 @@ import com.mercotrace.web.rest.vm.ManagedUserVM;
 import com.mercotrace.web.rest.vm.TraderOtpRequestVM;
 import com.mercotrace.web.rest.vm.TraderOtpVerifyVM;
 import com.mercotrace.web.rest.vm.TraderRegisterVM;
+import com.mercotrace.web.rest.vm.MultiTraderAccountSwitchVM;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import java.util.HashSet;
@@ -83,6 +87,8 @@ public class TraderAuthResource {
     private final UserTraderRepository userTraderRepository;
     private final OtpService otpService;
     private final TraderOwnerAuthorityService traderOwnerAuthorityService;
+    private final MultiTraderAccountRequestService multiTraderAccountRequestService;
+    private final TraderAuthResponseFactory traderAuthResponseFactory;
     private final com.mercotrace.repository.ContactRepository contactRepository;
     private final com.mercotrace.admin.identity.AdminUserRepository adminUserRepository;
 
@@ -97,6 +103,8 @@ public class TraderAuthResource {
         UserTraderRepository userTraderRepository,
         OtpService otpService,
         TraderOwnerAuthorityService traderOwnerAuthorityService,
+        MultiTraderAccountRequestService multiTraderAccountRequestService,
+        TraderAuthResponseFactory traderAuthResponseFactory,
         com.mercotrace.repository.ContactRepository contactRepository,
         com.mercotrace.admin.identity.AdminUserRepository adminUserRepository
     ) {
@@ -110,6 +118,8 @@ public class TraderAuthResource {
         this.userTraderRepository = userTraderRepository;
         this.otpService = otpService;
         this.traderOwnerAuthorityService = traderOwnerAuthorityService;
+        this.multiTraderAccountRequestService = multiTraderAccountRequestService;
+        this.traderAuthResponseFactory = traderAuthResponseFactory;
         this.contactRepository = contactRepository;
         this.adminUserRepository = adminUserRepository;
     }
@@ -298,7 +308,7 @@ public class TraderAuthResource {
                 .ifPresent(user -> loginVM.setUsername(user.getLogin()));
         }
 
-        rejectIfPrimaryTraderRejectedForLogin(loginVM.getUsername());
+        rejectIfNoSelectableTraderAndPrimaryRejectedForLogin(loginVM.getUsername());
 
         // Long-lived trader session (JWT + cookie max-age); see jhipster.security.authentication.jwt token-validity-for-remember-me.
         loginVM.setRememberMe(true);
@@ -325,10 +335,16 @@ public class TraderAuthResource {
                 throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Admin accounts must log in via /admin/login");
             }
         }
-        account = upgradeTraderOwnerAuthoritiesIfNeeded(account);
+        LoginTraderSelection selection = resolveLoginTraderSelection(account);
+        if (selection.accountSelectionRequired()) {
+            TraderAuthDTO dto = buildAccountSelectionDto(account, selection.accounts());
+            dto.setToken(jwtResponse.getBody().getIdToken());
+            dto.setRefreshToken(jwtResponse.getHeaders().getFirst(AuthRefreshSessionService.REFRESH_TOKEN_HEADER));
+            return ResponseEntity.status(jwtResponse.getStatusCode()).headers(jwtResponse.getHeaders()).body(dto);
+        }
 
-        java.util.Optional<TraderDTO> traderOpt = resolveTraderForUser(account);
-        TraderDTO trader = traderOpt.orElse(null);
+        account = upgradeTraderOwnerAuthoritiesIfNeeded(account);
+        TraderDTO trader = selection.trader();
         if (trader == null && !isAdminAccount(account)) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Trader not configured");
         }
@@ -337,6 +353,13 @@ public class TraderAuthResource {
         }
         if (trader != null && !Boolean.TRUE.equals(trader.getActive())) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Trader account is inactive. Contact support.");
+        }
+        if (selection.freshSessionRequired() && account.getId() != null) {
+            User user = userRepository
+                .findById(account.getId())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Current user not found"));
+            TraderAuthResponseFactory.IssuedTraderAuth issued = traderAuthResponseFactory.issueTraderSession(user, trader);
+            return ResponseEntity.ok().headers(issued.headers()).body(issued.dto());
         }
         TraderAuthDTO dto = buildAuthDto(account, trader);
         // Persistable token: frontend stores it on Android and reuses it for /auth/me
@@ -374,6 +397,16 @@ public class TraderAuthResource {
         return buildAuthDto(account, trader);
     }
 
+    @PostMapping("/select-trader")
+    public ResponseEntity<TraderAuthDTO> selectTrader(@Valid @RequestBody MultiTraderAccountSwitchVM body) {
+        TraderDTO trader = multiTraderAccountRequestService.switchCurrentUserToTrader(body.getTraderId());
+        User user = userRepository
+            .findById(currentUserId())
+            .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Current user not found"));
+        TraderAuthResponseFactory.IssuedTraderAuth issued = traderAuthResponseFactory.issueTraderSession(user, trader);
+        return ResponseEntity.ok().headers(issued.headers()).body(issued.dto());
+    }
+
     /** PUT /auth/profile — Update user profile. */
     @PutMapping("/profile")
     public void updateProfile(@RequestBody com.mercotrace.service.dto.AdminUserDTO userDTO) {
@@ -396,8 +429,8 @@ public class TraderAuthResource {
         boolean hasTraderByMobile = traderRepository.findOneByMobile(mobile).isPresent();
         boolean hasTraderUserByMobile = userRepository
             .findOneByMobile(mobile)
-            .flatMap(user -> userTraderRepository.findFirstByUserIdAndPrimaryMappingTrueAndActiveTrue(user.getId()))
-            .isPresent();
+            .map(user -> userTraderRepository.existsByUserIdAndActiveTrue(user.getId()))
+            .orElse(false);
         if (!hasTraderByMobile && !hasTraderUserByMobile) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "No trader registered with this mobile");
         }
@@ -431,23 +464,16 @@ public class TraderAuthResource {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid OTP");
         }
 
-        // At this point, OTP is valid. Resolve trader and user by mobile.
-        User user = null;
-        Trader traderEntity = null;
+        // At this point, OTP is valid. Resolve the trader-facing user by mobile.
+        User user;
 
-        // Prefer a trader user whose mobile matches and has a primary trader mapping.
+        // Prefer a trader user whose mobile matches. Account selection is resolved after identity is known.
         java.util.Optional<User> userOpt = userRepository.findOneByMobile(mobile);
         if (userOpt.isPresent()) {
-            User candidate = userOpt.get();
-            traderEntity =
-                userTraderRepository
-                    .findFirstByUserIdAndPrimaryMappingTrueAndActiveTrue(candidate.getId())
-                    .map(com.mercotrace.domain.UserTrader::getTrader)
-                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Trader not configured"));
-            user = candidate;
+            user = userOpt.get();
         } else {
             // Fallback: treat the mobile as the trader's own registration number.
-            traderEntity =
+            Trader traderEntity =
                 traderRepository
                     .findOneByMobile(mobile)
                     .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "No trader registered with this mobile"));
@@ -455,15 +481,10 @@ public class TraderAuthResource {
             user = resolveOrCreateUserForTrader(traderEntity, mobile);
         }
 
-        TraderDTO trader = traderService
-            .findOne(traderEntity.getId())
-            .orElseThrow(() -> new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Trader not configured"));
-
-        if (trader.getApprovalStatus() == ApprovalStatus.REJECTED) {
-            throw new ResponseStatusException(HttpStatus.FORBIDDEN, TRADER_ACCOUNT_REJECTED_LOGIN_MESSAGE);
-        }
-        if (!Boolean.TRUE.equals(trader.getActive())) {
-            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Trader account is inactive. Contact support.");
+        LoginTraderSelection selection = resolveLoginTraderSelectionForUserId(user.getId());
+        TraderDTO trader = selection.trader();
+        if (!selection.accountSelectionRequired() && trader != null) {
+            traderOwnerAuthorityService.ensureTraderOwnerAuthorities(user);
         }
 
         // Load user with authorities to build a consistent security principal.
@@ -488,6 +509,22 @@ public class TraderAuthResource {
         authenticateController.addRefreshHeaders(httpHeaders, refreshSession.rawToken());
 
         AdminUserDTO account = accountResource.getAccount();
+
+        if (selection.accountSelectionRequired()) {
+            TraderAuthDTO dto = buildAccountSelectionDto(account, selection.accounts());
+            dto.setToken(jwt);
+            dto.setRefreshToken(refreshSession.rawToken());
+            return ResponseEntity.ok().headers(httpHeaders).body(dto);
+        }
+        if (trader == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Trader not configured");
+        }
+        if (trader.getApprovalStatus() == ApprovalStatus.REJECTED) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, TRADER_ACCOUNT_REJECTED_LOGIN_MESSAGE);
+        }
+        if (!Boolean.TRUE.equals(trader.getActive())) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Trader account is inactive. Contact support.");
+        }
 
         TraderAuthDTO dto = buildAuthDto(account, trader);
         // Persistable token for the same reason as /auth/login above.
@@ -536,27 +573,90 @@ public class TraderAuthResource {
             .orElse(account);
     }
 
-    /**
-     * Block password login before issuing a JWT when the user's primary trader was rejected by admin.
-     */
-    private void rejectIfPrimaryTraderRejectedForLogin(String login) {
+    private void rejectIfNoSelectableTraderAndPrimaryRejectedForLogin(String login) {
         if (login == null || login.isBlank()) {
             return;
         }
-        userRepository
-            .findOneByLogin(login)
-            .flatMap(user -> userTraderRepository.findFirstByUserIdAndPrimaryMappingTrueAndActiveTrue(user.getId()))
+        userRepository.findOneByLogin(login).ifPresent(user -> {
+            if (!multiTraderAccountRequestService.findActiveApprovedMappingsForUser(user.getId()).isEmpty()) {
+                return;
+            }
+            userTraderRepository
+                .findFirstByUserIdAndPrimaryMappingTrueAndActiveTrue(user.getId())
+                .flatMap(m -> traderService.findOne(m.getTrader().getId()))
+                .ifPresent(t -> {
+                    if (t.getApprovalStatus() == ApprovalStatus.REJECTED) {
+                        throw new ResponseStatusException(HttpStatus.FORBIDDEN, TRADER_ACCOUNT_REJECTED_LOGIN_MESSAGE);
+                    }
+                });
+        });
+    }
+
+    private LoginTraderSelection resolveLoginTraderSelection(AdminUserDTO account) {
+        if (account == null || account.getId() == null) {
+            return new LoginTraderSelection(null, java.util.List.of(), false, false);
+        }
+        return resolveLoginTraderSelectionForUserId(account.getId());
+    }
+
+    private LoginTraderSelection resolveLoginTraderSelectionForUserId(Long userId) {
+        java.util.List<UserTrader> activeApproved = multiTraderAccountRequestService.findActiveApprovedMappingsForUser(userId);
+        if (activeApproved.size() == 1) {
+            UserTrader only = activeApproved.get(0);
+            Long traderId = only.getTrader().getId();
+            boolean freshSessionRequired = !only.isPrimaryMapping();
+            TraderDTO trader = multiTraderAccountRequestService.switchUserToTrader(userId, traderId);
+            return new LoginTraderSelection(trader, activeApproved.stream().map(multiTraderAccountRequestService::toAccountOption).toList(), false, freshSessionRequired);
+        }
+        if (activeApproved.size() > 1) {
+            java.util.Optional<UserTrader> primary = activeApproved.stream().filter(UserTrader::isPrimaryMapping).findFirst();
+            if (primary.isPresent()) {
+                TraderDTO trader = traderService
+                    .findOne(primary.get().getTrader().getId())
+                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Trader not configured"));
+                return new LoginTraderSelection(trader, activeApproved.stream().map(multiTraderAccountRequestService::toAccountOption).toList(), false, false);
+            }
+            return new LoginTraderSelection(null, activeApproved.stream().map(multiTraderAccountRequestService::toAccountOption).toList(), true, false);
+        }
+        TraderDTO trader = userTraderRepository
+            .findFirstByUserIdAndPrimaryMappingTrueAndActiveTrue(userId)
             .flatMap(m -> traderService.findOne(m.getTrader().getId()))
-            .ifPresent(t -> {
-                if (t.getApprovalStatus() == ApprovalStatus.REJECTED) {
-                    throw new ResponseStatusException(HttpStatus.FORBIDDEN, TRADER_ACCOUNT_REJECTED_LOGIN_MESSAGE);
-                }
-            });
+            .orElse(null);
+        return new LoginTraderSelection(trader, java.util.List.of(), false, false);
+    }
+
+    private TraderAuthDTO buildAccountSelectionDto(AdminUserDTO account, java.util.List<com.mercotrace.service.dto.TraderAccountOptionDTO> accounts) {
+        TraderAuthDTO dto = buildAuthDto(account, null);
+        dto.setAccountSelectionRequired(true);
+        dto.setAccounts(accounts);
+        return dto;
+    }
+
+    private Long currentUserId() {
+        return SecurityUtils
+            .getCurrentUserId()
+            .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Current user not found"));
     }
 
     /** Block OTP request/flow for mobiles tied to a rejected trader. */
     private void assertOtpFlowAllowedForMobile(String mobile) {
         if (mobile == null || mobile.isBlank()) {
+            return;
+        }
+        Optional<User> userByMobile = userRepository.findOneByMobile(mobile);
+        if (userByMobile.isPresent()) {
+            User user = userByMobile.get();
+            if (!multiTraderAccountRequestService.findActiveApprovedMappingsForUser(user.getId()).isEmpty()) {
+                return;
+            }
+            userTraderRepository
+                .findFirstByUserIdAndPrimaryMappingTrueAndActiveTrue(user.getId())
+                .flatMap(m -> traderService.findOne(m.getTrader().getId()))
+                .ifPresent(t -> {
+                    if (t.getApprovalStatus() == ApprovalStatus.REJECTED) {
+                        throw new ResponseStatusException(HttpStatus.FORBIDDEN, TRADER_ACCOUNT_REJECTED_LOGIN_MESSAGE);
+                    }
+                });
             return;
         }
         traderRepository
@@ -566,18 +666,6 @@ public class TraderAuthResource {
                     throw new ResponseStatusException(HttpStatus.FORBIDDEN, TRADER_ACCOUNT_REJECTED_LOGIN_MESSAGE);
                 }
             });
-        userRepository
-            .findOneByMobile(mobile)
-            .ifPresent(user ->
-                userTraderRepository
-                    .findFirstByUserIdAndPrimaryMappingTrueAndActiveTrue(user.getId())
-                    .flatMap(m -> traderService.findOne(m.getTrader().getId()))
-                    .ifPresent(t -> {
-                        if (t.getApprovalStatus() == ApprovalStatus.REJECTED) {
-                            throw new ResponseStatusException(HttpStatus.FORBIDDEN, TRADER_ACCOUNT_REJECTED_LOGIN_MESSAGE);
-                        }
-                    })
-            );
     }
 
     private TraderAuthDTO buildAuthDto(AdminUserDTO account, TraderDTO trader) {
@@ -619,6 +707,7 @@ public class TraderAuthResource {
             TraderAuthDTO.TraderPayload traderPayload = new TraderAuthDTO.TraderPayload();
             if (trader.getId() != null) {
                 traderPayload.setTraderId(trader.getId().toString());
+                dto.setSelectedTraderId(trader.getId().toString());
             }
             traderPayload.setBusinessName(trader.getBusinessName());
             traderPayload.setOwnerName(trader.getOwnerName());
@@ -775,4 +864,11 @@ public class TraderAuthResource {
 
         return user;
     }
+
+    private record LoginTraderSelection(
+        TraderDTO trader,
+        java.util.List<com.mercotrace.service.dto.TraderAccountOptionDTO> accounts,
+        boolean accountSelectionRequired,
+        boolean freshSessionRequired
+    ) {}
 }

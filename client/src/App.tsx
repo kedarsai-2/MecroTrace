@@ -79,12 +79,14 @@ import UserManagementPage from "./pages/admin/settings/UserManagementPage";
 import RoleAllocationPage from "./pages/admin/settings/RoleAllocationPage";
 import RbacSettingsPage from "./pages/settings/RbacSettingsPage";
 import PresetSettingsPage from "./pages/settings/PresetSettingsPage";
+import MultiTraderAccountsPage from "./pages/settings/MultiTraderAccountsPage";
 
 // Admin (lazy — less frequent access)
 const AdminLayout = lazy(() => import("./components/admin/AdminLayout"));
 const AdminLoginPage = lazy(() => import("./pages/admin/AdminLoginPage"));
 const AdminDashboard = lazy(() => import("./pages/admin/AdminDashboard"));
 const AdminTradersPage = lazy(() => import("./pages/admin/AdminTradersPage"));
+const AdminMultiTraderAccountsPage = lazy(() => import("./pages/admin/AdminMultiTraderAccountsPage"));
 const AdminCategoriesPage = lazy(() => import("./pages/admin/AdminCategoriesPage"));
 const AdminCommoditiesPage = lazy(() => import("./pages/admin/AdminCommoditiesPage"));
 const AdminContactsPage = lazy(() => import("./pages/admin/AdminContactsPage"));
@@ -206,6 +208,7 @@ const router = createBrowserRouter(
         <Route path="/settings/print-settings" element={<PrintSettingsPage />} />
         <Route path="/settings/rbac" element={<RbacSettingsPage />} />
         <Route path="/settings/preset-settings" element={<PresetSettingsPage />} />
+        <Route path="/settings/multi-trader-accounts" element={<MultiTraderAccountsPage />} />
         <Route path="/settings/roles" element={<RoleManagementPage />} />
         <Route path="/settings/users" element={<UserManagementPage />} />
         <Route path="/settings/role-allocation" element={<RoleAllocationPage />} />
@@ -259,6 +262,7 @@ const router = createBrowserRouter(
       >
         <Route index element={<AdminDashboard />} />
         <Route path="traders" element={<AdminTradersPage />} />
+        <Route path="multi-trader-accounts" element={<AdminMultiTraderAccountsPage />} />
         <Route path="categories" element={<AdminCategoriesPage />} />
         <Route path="commodities" element={<AdminCommoditiesPage />} />
         <Route path="contacts" element={<AdminContactsPage />} />
