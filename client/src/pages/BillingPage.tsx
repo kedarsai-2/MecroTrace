@@ -4602,6 +4602,99 @@ const BillingPage = () => {
     setBill(recalcGrandTotal(normalizedVersion));
   }, [bill, fullConfigs, commodities, recalcGrandTotal]);
 
+  // ═══ BILLING HOME: TABS + LISTS ═══
+  const resetBillingCreateFlow = useCallback(async () => {
+    if (!(await billingTabConfirmIfDirtyRef.current())) return;
+    billOpenFromListRunIdRef.current += 1;
+    billOpenFromListPendingRef.current = 0;
+    openingBillFromListRef.current = false;
+    setOpeningBillFromList(false);
+    setSelectedBuyer(null);
+    setBill(null);
+    setBuyerBidMarkInput('');
+    setSelectedBuyerFromDropdown(null);
+    setShowBuyerSuggestions(false);
+    setSelectBidBuyer(null);
+    setSelectedBidKeys([]);
+    setSelectBidQtyByKey({});
+    setSelectBidQtyErrorByKey({});
+    setHasSavedOnce(false);
+    setSelectedPrintVersion('latest');
+    setEditLocked(false);
+    setBillingMainTab('create');
+  }, []);
+
+  const handleCreateNewBill = () => {
+    void resetBillingCreateFlow();
+  };
+
+  /** True while any bill is loaded (Get Bid / Select Bid → generate, or opened from In Progress / Saved), or while a list row is opening — avoids accidental mark edits / stray Get Bid & Select Bid during fetch. Cleared by Create New Bill. */
+  const buyerMarkSearchLocked = bill != null || openingBillFromList;
+  const buyerMarkSearchFieldTitle = openingBillFromList
+    ? 'Opening bill…'
+    : bill != null
+      ? 'Use “Create New Bill” to search another buyer or mark.'
+      : undefined;
+
+  const openBillFromList = (row: SalesBillSummaryDTO | SalesBillDTO) => {
+    void (async () => {
+      if (!(await billingTabConfirmIfDirtyRef.current())) return;
+      billOpenFromListPendingRef.current += 1;
+      const myRun = ++billOpenFromListRunIdRef.current;
+      openingBillFromListRef.current = true;
+      setOpeningBillFromList(true);
+      try {
+        setSelectedBuyerFromDropdown(null);
+        setSelectBidBuyer(null);
+        setSelectedBidKeys([]);
+        setSelectBidQtyByKey({});
+        setSelectBidQtyErrorByKey({});
+        const b = Array.isArray((row as SalesBillDTO).commodityGroups)
+          ? (row as SalesBillDTO)
+          : await billingApi.getById(row.billId);
+        if (billOpenFromListRunIdRef.current !== myRun) return;
+        const markOrName = (b.buyerMark || b.buyerName || '').trim();
+        setBuyerBidMarkInput(markOrName);
+        const normalized = recalcGrandTotal(normalizeBillFromApi(b, fullConfigs, commodities) as BillData);
+        const entriesFromBill = billDataToBuyerEntries(normalized);
+        const tokenAdvanceTotal = entriesFromBill.reduce((s, e) => s + (Number(e.tokenAdvance) || 0), 0);
+        const syncBuyer: BuyerPurchase = {
+          buyerMark: normalized.buyerMark,
+          buyerName: normalized.buyerName,
+          buyerContactId: normalized.buyerContactId ?? null,
+          entries: entriesFromBill,
+          tokenAdvanceTotal,
+        };
+        setSelectedBuyer(syncBuyer);
+        setBuyers(prev => {
+          const idx = prev.findIndex(x => billingBuyersSameIdentity(x, syncBuyer));
+          if (idx < 0) return [...prev, syncBuyer];
+          const next = [...prev];
+          next[idx] = { ...syncBuyer };
+          return next;
+        });
+        // Sync dirty baseline before setState so billHasUnsavedEditsSinceSave (useMemo) does not read
+        // the previous bill's baseline until a follow-up render (Print + Alt+P stayed disabled).
+        const dirtyId = String(normalized.billId ?? '');
+        billDirtyIdentityRef.current = dirtyId;
+        billDirtyBaselineRef.current = serializeBillForDirty(normalized);
+        setBill(normalized);
+        setHasSavedOnce(isBackendBillId(String(b.billId)));
+        setSelectedPrintVersion('latest');
+        setEditLocked(isNumberedSavedBill(normalized));
+        setBillingMainTab('create');
+      } finally {
+        billOpenFromListPendingRef.current = Math.max(0, billOpenFromListPendingRef.current - 1);
+        if (billOpenFromListPendingRef.current === 0) {
+          openingBillFromListRef.current = false;
+          setOpeningBillFromList(false);
+        }
+      }
+    })();
+  };
+
+  const tabHint = (code: string) => (isDesktop ? ` (${code})` : '');
+
   if (!canView) {
     return <ForbiddenPage moduleName="Billing" />;
   }
@@ -4711,99 +4804,6 @@ const BillingPage = () => {
       </div>
     );
   }
-
-  // ═══ BILLING HOME: TABS + LISTS ═══
-  const resetBillingCreateFlow = useCallback(async () => {
-    if (!(await billingTabConfirmIfDirtyRef.current())) return;
-    billOpenFromListRunIdRef.current += 1;
-    billOpenFromListPendingRef.current = 0;
-    openingBillFromListRef.current = false;
-    setOpeningBillFromList(false);
-    setSelectedBuyer(null);
-    setBill(null);
-    setBuyerBidMarkInput('');
-    setSelectedBuyerFromDropdown(null);
-    setShowBuyerSuggestions(false);
-    setSelectBidBuyer(null);
-    setSelectedBidKeys([]);
-    setSelectBidQtyByKey({});
-    setSelectBidQtyErrorByKey({});
-    setHasSavedOnce(false);
-    setSelectedPrintVersion('latest');
-    setEditLocked(false);
-    setBillingMainTab('create');
-  }, []);
-
-  const handleCreateNewBill = () => {
-    void resetBillingCreateFlow();
-  };
-
-  /** True while any bill is loaded (Get Bid / Select Bid → generate, or opened from In Progress / Saved), or while a list row is opening — avoids accidental mark edits / stray Get Bid & Select Bid during fetch. Cleared by Create New Bill. */
-  const buyerMarkSearchLocked = bill != null || openingBillFromList;
-  const buyerMarkSearchFieldTitle = openingBillFromList
-    ? 'Opening bill…'
-    : bill != null
-      ? 'Use “Create New Bill” to search another buyer or mark.'
-      : undefined;
-
-  const openBillFromList = (row: SalesBillSummaryDTO | SalesBillDTO) => {
-    void (async () => {
-      if (!(await billingTabConfirmIfDirtyRef.current())) return;
-      billOpenFromListPendingRef.current += 1;
-      const myRun = ++billOpenFromListRunIdRef.current;
-      openingBillFromListRef.current = true;
-      setOpeningBillFromList(true);
-      try {
-        setSelectedBuyerFromDropdown(null);
-        setSelectBidBuyer(null);
-        setSelectedBidKeys([]);
-        setSelectBidQtyByKey({});
-        setSelectBidQtyErrorByKey({});
-        const b = Array.isArray((row as SalesBillDTO).commodityGroups)
-          ? (row as SalesBillDTO)
-          : await billingApi.getById(row.billId);
-        if (billOpenFromListRunIdRef.current !== myRun) return;
-        const markOrName = (b.buyerMark || b.buyerName || '').trim();
-        setBuyerBidMarkInput(markOrName);
-        const normalized = recalcGrandTotal(normalizeBillFromApi(b, fullConfigs, commodities) as BillData);
-        const entriesFromBill = billDataToBuyerEntries(normalized);
-        const tokenAdvanceTotal = entriesFromBill.reduce((s, e) => s + (Number(e.tokenAdvance) || 0), 0);
-        const syncBuyer: BuyerPurchase = {
-          buyerMark: normalized.buyerMark,
-          buyerName: normalized.buyerName,
-          buyerContactId: normalized.buyerContactId ?? null,
-          entries: entriesFromBill,
-          tokenAdvanceTotal,
-        };
-        setSelectedBuyer(syncBuyer);
-        setBuyers(prev => {
-          const idx = prev.findIndex(x => billingBuyersSameIdentity(x, syncBuyer));
-          if (idx < 0) return [...prev, syncBuyer];
-          const next = [...prev];
-          next[idx] = { ...syncBuyer };
-          return next;
-        });
-        // Sync dirty baseline before setState so billHasUnsavedEditsSinceSave (useMemo) does not read
-        // the previous bill's baseline until a follow-up render (Print + Alt+P stayed disabled).
-        const dirtyId = String(normalized.billId ?? '');
-        billDirtyIdentityRef.current = dirtyId;
-        billDirtyBaselineRef.current = serializeBillForDirty(normalized);
-        setBill(normalized);
-        setHasSavedOnce(isBackendBillId(String(b.billId)));
-        setSelectedPrintVersion('latest');
-        setEditLocked(isNumberedSavedBill(normalized));
-        setBillingMainTab('create');
-      } finally {
-        billOpenFromListPendingRef.current = Math.max(0, billOpenFromListPendingRef.current - 1);
-        if (billOpenFromListPendingRef.current === 0) {
-          openingBillFromListRef.current = false;
-          setOpeningBillFromList(false);
-        }
-      }
-    })();
-  };
-
-  const tabHint = (code: string) => (isDesktop ? ` (${code})` : '');
 
   return (
     <div
