@@ -1,7 +1,7 @@
 import type { CSSProperties } from 'react';
 import { useState } from 'react';
 import { Outlet, useLocation, useNavigate, Navigate } from 'react-router-dom';
-import { Moon, Sun, Bell, User, AlertCircle } from 'lucide-react';
+import { Moon, Sun, Bell, User, AlertCircle, Building2 } from 'lucide-react';
 import DesktopSidebar from '@/components/DesktopSidebar';
 import FontSizeControls from '@/components/FontSizeControls';
 import { useDesktopMode } from '@/hooks/use-desktop';
@@ -146,6 +146,16 @@ const TraderLayout = () => {
             <h2 className="text-lg font-bold text-foreground">{pageTitle}</h2>
           </div>
           <div className="relative z-10 flex items-center gap-3">
+            {isApproved && (
+              <button
+                type="button"
+                onClick={() => navigate('/mandi-selection')}
+                className="h-9 rounded-xl glass border border-border/30 px-3 text-sm font-semibold text-foreground transition-all hover:bg-muted/50 flex items-center gap-2"
+              >
+                <Building2 className="h-4 w-4 text-primary" />
+                Select Mandi
+              </button>
+            )}
             <FontSizeControls />
             <button aria-label="Notifications" className="w-9 h-9 rounded-xl glass flex items-center justify-center hover:bg-muted/50 transition-all relative border border-border/30">
               <Bell className="w-4 h-4 text-muted-foreground" />

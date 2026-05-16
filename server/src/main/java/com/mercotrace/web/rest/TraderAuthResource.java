@@ -601,22 +601,13 @@ public class TraderAuthResource {
 
     private LoginTraderSelection resolveLoginTraderSelectionForUserId(Long userId) {
         java.util.List<UserTrader> activeApproved = multiTraderAccountRequestService.findActiveApprovedMappingsForUser(userId);
-        if (activeApproved.size() == 1) {
-            UserTrader only = activeApproved.get(0);
-            Long traderId = only.getTrader().getId();
-            boolean freshSessionRequired = !only.isPrimaryMapping();
-            TraderDTO trader = multiTraderAccountRequestService.switchUserToTrader(userId, traderId);
-            return new LoginTraderSelection(trader, activeApproved.stream().map(multiTraderAccountRequestService::toAccountOption).toList(), false, freshSessionRequired);
-        }
-        if (activeApproved.size() > 1) {
-            java.util.Optional<UserTrader> primary = activeApproved.stream().filter(UserTrader::isPrimaryMapping).findFirst();
-            if (primary.isPresent()) {
-                TraderDTO trader = traderService
-                    .findOne(primary.get().getTrader().getId())
-                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Trader not configured"));
-                return new LoginTraderSelection(trader, activeApproved.stream().map(multiTraderAccountRequestService::toAccountOption).toList(), false, false);
-            }
-            return new LoginTraderSelection(null, activeApproved.stream().map(multiTraderAccountRequestService::toAccountOption).toList(), true, false);
+        if (!activeApproved.isEmpty()) {
+            return new LoginTraderSelection(
+                null,
+                activeApproved.stream().map(multiTraderAccountRequestService::toAccountOption).toList(),
+                true,
+                false
+            );
         }
         TraderDTO trader = userTraderRepository
             .findFirstByUserIdAndPrimaryMappingTrueAndActiveTrue(userId)

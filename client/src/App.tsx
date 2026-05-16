@@ -31,6 +31,7 @@ import RouteAutofocus from "@/components/RouteAutofocus";
 import ClickToFocusNewFields from "@/components/ClickToFocusNewFields";
 import KeyboardAvoidance from "@/components/KeyboardAvoidance";
 import LoginScreen from "./pages/LoginScreen";
+import MandiSelectionPage from "./pages/MandiSelectionPage";
 import ContactPortalLoginPage from "./pages/ContactPortalLoginPage";
 import ContactPortalSignupPage from "./pages/ContactPortalSignupPage";
 import ContactPortalDashboardPage from "./pages/ContactPortalDashboardPage";
@@ -156,6 +157,7 @@ const router = createBrowserRouter(
       <Route path="/" element={<OnboardingScreen />} />
       <Route path="/onboarding" element={<OnboardingScreen />} />
       <Route path="/login" element={<LoginScreen />} />
+      <Route path="/mandi-selection" element={<MandiSelectionPage />} />
 
       {/* Legacy /portal/login & /portal/signup paths — redirect to unified /login */}
       <Route path="/portal/login" element={<Navigate to="/login" replace />} />

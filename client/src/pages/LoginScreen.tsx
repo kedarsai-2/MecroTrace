@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { scrollLoginFieldIntoView, useLoginScreenScrollAssist } from '@/hooks/useLoginScrollIntoView';
 import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { ArrowRight, CheckCircle2, Eye, EyeOff, Mail, Lock, Sun, Moon, Building2, Phone, KeyRound, LogIn, MapPin, UserPlus } from 'lucide-react';
+import { ArrowRight, Eye, EyeOff, Mail, Lock, Sun, Moon, Building2, Phone, KeyRound, LogIn, UserPlus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { MercotraceIcon } from '@/components/MercotraceLogo';
@@ -10,7 +10,6 @@ import { useTheme } from '@/context/ThemeContext';
 import { useAuth } from '@/context/AuthContext';
 import { useContactAuth } from '@/context/ContactAuthContext';
 import { authApi } from '@/services/api';
-import type { TraderAccountOption } from '@/services/api/auth';
 import { contactPortalAuthApi, type ContactOtpVerifyResult } from '@/services/api/contactPortalAuth';
 import { toast } from 'sonner';
 import {
@@ -31,6 +30,15 @@ const PARTICLES = Array.from({ length: 10 }, (_, i) => ({
   top: `${5 + (i * 13.7) % 85}%`,
   delay: (i * 0.4) % 2,
 }));
+
+function errorMessage(error: unknown, fallback: string): string {
+  if (error instanceof Error && error.message) return error.message;
+  if (typeof error === 'object' && error !== null && 'message' in error) {
+    const message = (error as { message?: unknown }).message;
+    if (typeof message === 'string' && message.trim()) return message;
+  }
+  return fallback;
+}
 
 type LoginMode = 'phone' | 'email';
 type LoginAudience = 'trader' | 'contact';
@@ -60,7 +68,6 @@ const LoginScreen = () => {
     isLoading: traderLoading,
     error: traderError,
     clearError: clearTraderError,
-    selectTrader,
   } = useAuth();
   const {
     login: contactLogin,
@@ -78,8 +85,6 @@ const LoginScreen = () => {
 
   const [guestDialogOpen, setGuestDialogOpen] = useState(false);
   const [guestResult, setGuestResult] = useState<ContactOtpVerifyResult | null>(null);
-  const [accountSelection, setAccountSelection] = useState<{ accounts: TraderAccountOption[] } | null>(null);
-  const [selectingTraderId, setSelectingTraderId] = useState<string | null>(null);
 
   const isLoading = audience === 'trader' ? traderLoading : contactLoading;
   const error = audience === 'trader' ? traderError : contactError;
@@ -87,7 +92,7 @@ const LoginScreen = () => {
 
   useEffect(() => {
     if (traderBootstrapped && traderAuthenticated && trader) {
-      navigate('/home', { replace: true });
+      navigate(trader.approval_status === 'APPROVED' ? '/mandi-selection' : '/home', { replace: true });
     }
   }, [navigate, trader, traderAuthenticated, traderBootstrapped]);
 
@@ -116,8 +121,8 @@ const LoginScreen = () => {
       setOtpSent(true);
       setOtpCooldown(30);
       toast.success('OTP sent', { description: 'Please check your phone for the 4-digit OTP.' });
-    } catch (e: any) {
-      toast.error(e?.message || 'Failed to send OTP. Please try again.');
+    } catch (e: unknown) {
+      toast.error(errorMessage(e, 'Failed to send OTP. Please try again.'));
     } finally {
       setIsSendingOtp(false);
     }
@@ -130,12 +135,12 @@ const LoginScreen = () => {
       try {
         const result = await loginWithOtp(phone, otp);
         if ('accountSelectionRequired' in result) {
-          setAccountSelection({ accounts: result.accounts });
+          navigate('/mandi-selection', { replace: true, state: { accounts: result.accounts } });
           return;
         }
         navigate('/home', { replace: true });
-      } catch (e: any) {
-        toast.error(e?.message || 'Invalid or expired OTP.');
+      } catch (e: unknown) {
+        toast.error(errorMessage(e, 'Invalid or expired OTP.'));
       }
       return;
     }
@@ -152,10 +157,9 @@ const LoginScreen = () => {
       } else {
         toast.error('We could not complete sign-in. Please try again.');
       }
-    } catch (e: any) {
+    } catch (e: unknown) {
       toast.error(
-        e?.message ||
-          'The OTP you entered is invalid or has expired. Please request a new one.',
+        errorMessage(e, 'The OTP you entered is invalid or has expired. Please request a new one.'),
       );
     } finally {
       setIsVerifyingOtp(false);
@@ -204,7 +208,7 @@ const LoginScreen = () => {
       if (audience === 'trader') {
         const result = await login(email, password);
         if ('accountSelectionRequired' in result) {
-          setAccountSelection({ accounts: result.accounts });
+          navigate('/mandi-selection', { replace: true, state: { accounts: result.accounts } });
           return;
         }
         navigate('/home', { replace: true });
@@ -212,80 +216,12 @@ const LoginScreen = () => {
         await contactLogin(email, password);
         navigate('/contact', { replace: true });
       }
-    } catch (e: any) {
-      const msg = e?.message || 'Login failed. Please try again.';
+    } catch (e: unknown) {
+      const msg = errorMessage(e, 'Login failed. Please try again.');
       toast.error(msg);
       // error is also set in respective context for inline display
     }
   };
-
-  const handleSelectTraderAccount = async (traderId: string) => {
-    setSelectingTraderId(traderId);
-    try {
-      await selectTrader(traderId);
-      setAccountSelection(null);
-      navigate('/home', { replace: true });
-    } catch (e: any) {
-      toast.error(e?.message || 'Failed to select trader account');
-    } finally {
-      setSelectingTraderId(null);
-    }
-  };
-
-  if (accountSelection) {
-    return (
-      <div className="fixed inset-0 z-0 flex flex-col overflow-hidden bg-slate-950">
-        <img src={loginBg} alt="" role="presentation" className="absolute inset-0 w-full h-full object-cover z-0" />
-        <div className="absolute inset-0 bg-slate-950/70 z-[1]" />
-        <main className="relative z-10 flex min-h-0 flex-1 items-center justify-center overflow-y-auto px-5 py-8">
-          <div className="w-full max-w-2xl rounded-2xl border border-white/20 bg-white/12 p-5 shadow-2xl backdrop-blur-xl sm:p-6">
-            <div className="mb-5 flex items-center gap-3">
-              <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-white/20 text-white">
-                <Building2 className="h-5 w-5" />
-              </div>
-              <div>
-                <h1 className="text-xl font-bold text-white">Select trader account</h1>
-                <p className="text-sm text-white/70">Choose the account you want to use for this session.</p>
-              </div>
-            </div>
-            <div className="grid gap-3 sm:grid-cols-2">
-              {accountSelection.accounts.map(account => {
-                const location = [account.city, account.state].filter(Boolean).join(', ');
-                const isSelecting = selectingTraderId === account.trader_id;
-                return (
-                  <button
-                    key={account.trader_id}
-                    type="button"
-                    onClick={() => void handleSelectTraderAccount(account.trader_id)}
-                    disabled={!!selectingTraderId}
-                    className="rounded-xl border border-white/20 bg-white/90 p-4 text-left text-blue-950 shadow-lg transition hover:bg-white disabled:opacity-70"
-                  >
-                    <div className="mb-3 flex items-start justify-between gap-3">
-                      <div>
-                        <p className="font-bold">{account.business_name}</p>
-                        <p className="text-sm text-blue-900/70">{account.owner_name}</p>
-                      </div>
-                      {isSelecting ? (
-                        <span className="h-5 w-5 animate-spin rounded-full border-2 border-blue-600 border-t-transparent" />
-                      ) : (
-                        <CheckCircle2 className="h-5 w-5 text-emerald-600" />
-                      )}
-                    </div>
-                    {location && (
-                      <p className="flex items-center gap-1.5 text-sm text-blue-900/70">
-                        <MapPin className="h-4 w-4" />
-                        {location}
-                      </p>
-                    )}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        </main>
-      </div>
-    );
-  }
 
   return (
     <div className="fixed inset-0 z-0 flex flex-col overflow-hidden bg-slate-950" role="presentation">
