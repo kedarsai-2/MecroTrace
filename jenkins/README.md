@@ -18,7 +18,9 @@ Integration tests (`*IT.java`, `@IntegrationTest`) are **not** run in Jenkins.
 | Java 21+ | `server/mvnw test` |
 | Node.js 20+ | `client/npm run test` |
 | `curl`, `zip` | OpenAPI HTML packaging (Swagger UI download) |
-| Node.js 20+ (`npx`) | OpenAPI → Postman collection conversion |
+| Node.js 20+ (`npx`) | OpenAPI → Postman collection conversion (required even if client tests are off) |
+
+**Jenkins Node.js tool (recommended):** Global Tool Configuration → NodeJS → name `nodejs20` (or set job/env `JENKINS_NODEJS_INSTALLATION` to your tool name). The OpenAPI stage prepends that `bin` to `PATH` before Postman export.
 | SonarQubeScanner | Only if **RUN_SONAR** is enabled (Global Tool name: `SonarQubeScanner`) |
 
 ## Jenkins setup

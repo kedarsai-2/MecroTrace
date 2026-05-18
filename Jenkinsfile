@@ -133,9 +133,29 @@ pipeline {
                 expression { params.GENERATE_OPENAPI_HTML }
             }
             steps {
-                sh 'bash jenkins/scripts/generate-openapi.sh .'
-                sh 'bash jenkins/scripts/generate-postman-collection.sh . "${SHORT_SHA}"'
-                sh 'bash jenkins/scripts/package-openapi-html.sh . "${SHORT_SHA}"'
+                script {
+                    // Postman export needs npx even when client unit tests are skipped.
+                    def nodeTool = env.JENKINS_NODEJS_INSTALLATION?.trim() ?: 'nodejs20'
+                    try {
+                        env.NODEJS_HOME = tool nodeTool
+                        env.PATH = "${env.NODEJS_HOME}/bin:${env.PATH}"
+                        echo "Using Jenkins Node.js tool: ${nodeTool} (${env.NODEJS_HOME})"
+                    } catch (ignored) {
+                        echo "Node.js tool '${nodeTool}' not configured — using node/npx from agent PATH"
+                    }
+                }
+                sh '''
+                    set -euo pipefail
+                    command -v java >/dev/null || { echo "java not found on PATH" >&2; exit 1; }
+                    command -v npx >/dev/null || {
+                      echo "npx not found — install Node.js 20+ or configure Jenkins Global Tool 'nodejs20' (set env JENKINS_NODEJS_INSTALLATION)" >&2
+                      exit 1
+                    }
+                    echo "node $(node --version) npx $(npx --version)"
+                    bash jenkins/scripts/generate-openapi.sh .
+                    bash jenkins/scripts/generate-postman-collection.sh . "${SHORT_SHA}"
+                    bash jenkins/scripts/package-openapi-html.sh . "${SHORT_SHA}"
+                '''
                 archiveArtifacts artifacts: 'server/mercotrace-openapi-*.zip', fingerprint: true, onlyIfSuccessful: true
                 archiveArtifacts artifacts: 'server/mercotrace-postman-*.json', fingerprint: true, onlyIfSuccessful: true
                 archiveArtifacts artifacts: 'server/target/swagger-html/**', fingerprint: true, onlyIfSuccessful: true
