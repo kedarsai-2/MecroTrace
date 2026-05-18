@@ -4,7 +4,7 @@ No Docker, no database, no Testcontainers in the default pipeline — **unit tes
 
 | Step | What runs |
 |------|-----------|
-| **Unit tests** | Server: Surefire (`-Punit-tests-ci`, excludes `@Tag("integration")`). Client: `npm run test` (Vitest). |
+| **Unit tests** | Server: Surefire + HTML report. Client: Vitest + HTML report. Zip: `mercotrace-unit-tests-<sha>.zip` |
 | **OpenAPI / Swagger** | HTML zip (`mercotrace-openapi-<sha>.zip`) + Postman collection (`mercotrace-postman-<sha>.json`) |
 | **JavaDoc** | HTML zip artifact (`mercotrace-javadoc-<sha>.zip`) |
 | **SonarQube** | Static analysis (optional) |
@@ -64,6 +64,14 @@ Uses Spring profiles `api-docs`, `openapi-ci`, `no-liquibase` (in-memory H2, Hib
 
 Typical export size: **~197 `/api` paths**, **~265 HTTP operations**, **~168 schemas** (matches REST controllers; not limited to a subset).
 
+## Download unit test HTML reports
+
+1. Build with **RUN_UNIT_TESTS** and at least one of **RUN_SERVER_UNIT_TESTS** / **RUN_CLIENT_UNIT_TESTS**.
+2. **Build Artifacts** → download `mercotrace-unit-tests-<sha>.zip`.
+3. Unzip → open `index.html` → links to **Server (Surefire)** and **Client (Vitest)** reports.
+
+If the [HTML Publisher](https://plugins.jenkins.io/htmlpublisher/) plugin is installed, reports also appear on the build page under **Server unit tests (HTML)** / **Client unit tests (HTML)**.
+
 ## Download JavaDoc HTML
 
 1. Build with **GENERATE_JAVADOC** enabled.
@@ -79,8 +87,11 @@ The archive documents **all main application packages** (REST, services, domain,
 cd server
 ./mvnw -Punit-tests-ci -Dmodernizer.skip=true test
 
-# Client unit tests
-cd client && npm ci && npm run test
+# Client unit tests (+ HTML report under client/target/vitest-report/)
+cd client && npm ci && CI=true npm run test
+
+# Package unit test HTML zip (after server and/or client tests)
+bash jenkins/scripts/package-unit-test-reports.sh . local
 
 # OpenAPI HTML + Postman (same as Jenkins)
 bash jenkins/scripts/generate-openapi.sh .

@@ -361,7 +361,8 @@
                 </executions>
                 <configuration>
                     <outputDirectory>${project.build.directory}/surefire-reports</outputDirectory>
-                    <outputName>surefire-report.html</outputName>
+                    <!-- Plugin appends .html; do not include the extension here -->
+                    <outputName>surefire-report</outputName>
                 </configuration>
             </plugin>
             <plugin>

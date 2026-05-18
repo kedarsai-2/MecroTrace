@@ -105,7 +105,55 @@ pipeline {
                     }
                     steps {
                         dir('client') {
-                            sh 'npm ci && npm run test'
+                            sh 'npm ci && CI=true npm run test'
+                        }
+                    }
+                    post {
+                        always {
+                            junit allowEmptyResults: true, testResults: 'client/target/vitest-junit.xml'
+                        }
+                    }
+                }
+            }
+            post {
+                always {
+                    script {
+                        if (params.RUN_UNIT_TESTS && (params.RUN_SERVER_UNIT_TESTS || params.RUN_CLIENT_UNIT_TESTS)) {
+                            sh 'bash jenkins/scripts/package-unit-test-reports.sh . "${SHORT_SHA}"'
+                            archiveArtifacts artifacts: 'server/mercotrace-unit-tests-*.zip', fingerprint: true, allowEmptyArchive: true
+                            archiveArtifacts artifacts: 'server/target/unit-test-html/**', fingerprint: true, allowEmptyArchive: true
+                            try {
+                                if (params.RUN_SERVER_UNIT_TESTS) {
+                                    def serverReport = 'server/target/surefire-reports/surefire-report.html'
+                                    if (!fileExists(serverReport)) {
+                                        serverReport = 'server/target/surefire-reports/surefire-report.html.html'
+                                    }
+                                    if (fileExists(serverReport)) {
+                                        publishHTML([
+                                            allowMissing: true,
+                                            alwaysLinkToLastBuild: true,
+                                            keepAll: true,
+                                            reportDir: 'server/target/surefire-reports',
+                                            reportFiles: serverReport.contains('.html.html') ? 'surefire-report.html.html' : 'surefire-report.html',
+                                            reportName: 'Server unit tests (HTML)',
+                                            useWrapperFileDirectly: true,
+                                        ])
+                                    }
+                                }
+                                if (params.RUN_CLIENT_UNIT_TESTS && fileExists('client/target/vitest-report/index.html')) {
+                                    publishHTML([
+                                        allowMissing: true,
+                                        alwaysLinkToLastBuild: true,
+                                        keepAll: true,
+                                        reportDir: 'client/target/vitest-report',
+                                        reportFiles: 'index.html',
+                                        reportName: 'Client unit tests (HTML)',
+                                        useWrapperFileDirectly: true,
+                                    ])
+                                }
+                            } catch (Throwable publishErr) {
+                                echo "HTML Publisher plugin not available (install it for in-Jenkins report links): ${publishErr.message}"
+                            }
                         }
                     }
                 }

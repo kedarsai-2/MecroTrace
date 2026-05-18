@@ -76,6 +76,7 @@ out/
 /mercotrace-javadoc-*.zip
 /mercotrace-openapi-*.zip
 /mercotrace-postman-*.json
+/mercotrace-unit-tests-*.zip
 
 ######################
 # Gradle
