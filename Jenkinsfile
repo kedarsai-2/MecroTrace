@@ -116,34 +116,32 @@ pipeline {
             when {
                 expression { params.PROD_PACKAGE }
             }
-            steps {
-                parallel {
-                    stage('Client build') {
-                        steps {
-                            dir('client') {
-                                script {
-                                    def viteApiUrl = env.VITE_API_URL?.trim() ?: 'http://localhost:8080'
-                                    try {
-                                        withCredentials([
-                                            string(credentialsId: 'uat-vite-api-url', variable: 'CRED_VITE_API_URL'),
-                                        ]) {
-                                            viteApiUrl = CRED_VITE_API_URL
-                                        }
-                                    } catch (ignored) {
-                                        echo "uat-vite-api-url not set, using ${viteApiUrl}"
+            parallel {
+                stage('Client build') {
+                    steps {
+                        dir('client') {
+                            script {
+                                def viteApiUrl = env.VITE_API_URL?.trim() ?: 'http://localhost:8080'
+                                try {
+                                    withCredentials([
+                                        string(credentialsId: 'uat-vite-api-url', variable: 'CRED_VITE_API_URL'),
+                                    ]) {
+                                        viteApiUrl = CRED_VITE_API_URL
                                     }
-                                    withEnv(["VITE_API_URL=${viteApiUrl}"]) {
-                                        sh 'npm ci && npm run build'
-                                    }
+                                } catch (ignored) {
+                                    echo "uat-vite-api-url not set, using ${viteApiUrl}"
+                                }
+                                withEnv(["VITE_API_URL=${viteApiUrl}"]) {
+                                    sh 'npm ci && npm run build'
                                 }
                             }
                         }
                     }
-                    stage('Server package') {
-                        steps {
-                            dir('server') {
-                                sh './mvnw -ntp -Pprod -DskipTests -Dmodernizer.skip=true package'
-                            }
+                }
+                stage('Server package') {
+                    steps {
+                        dir('server') {
+                            sh './mvnw -ntp -Pprod -DskipTests -Dmodernizer.skip=true package'
                         }
                     }
                 }
