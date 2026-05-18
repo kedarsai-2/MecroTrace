@@ -39,7 +39,7 @@ Add `SONAR_SCANNER_HOME` to the Jenkins agent environment if `sonar-scanner` is 
 
 | Field | Value |
 |-------|--------|
-| Name | `SonarScanner` (must match `Jenkinsfile` exactly) |
+| Name | `SonarQubeScanner` (must match `Jenkinsfile` exactly) |
 | Install automatically | ✓ e.g. SonarQube Scanner 8.0.1.6346 from Maven Central |
 
 **Credential** (Manage Jenkins → Credentials):

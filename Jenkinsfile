@@ -1,15 +1,11 @@
 // SonarQube static analysis — no Docker, no tests.
 //
-// Jenkins Global Tool Configuration → SonarQube Scanner → Name: SonarScanner
+// Jenkins Global Tool Configuration → SonarQube Scanner → Name: SonarQubeScanner
 // Jenkins credential: sonar-token (Secret text)
 // Optional env: SONAR_HOST_URL (default http://localhost:9000)
 
 pipeline {
     agent any
-
-    tools {
-        sonarScanner 'SonarScanner'
-    }
 
     parameters {
         booleanParam(
@@ -51,13 +47,16 @@ pipeline {
 
         stage('Check tools') {
             steps {
+                script {
+                    env.SONAR_RUNNER_HOME = tool 'SonarQubeScanner'
+                }
                 sh '''
                     set -e
                     echo "SONAR_HOST_URL=${SONAR_HOST_URL}"
                     echo "SONAR_RUNNER_HOME=${SONAR_RUNNER_HOME}"
                     java -version
                     test -x server/mvnw
-                    test -n "${SONAR_RUNNER_HOME}" || { echo "ERROR: SONAR_RUNNER_HOME not set — check Global Tool Configuration name is SonarScanner" >&2; exit 1; }
+                    test -n "${SONAR_RUNNER_HOME}" || { echo "ERROR: SONAR_RUNNER_HOME not set — Global Tool name must be SonarQubeScanner" >&2; exit 1; }
                     test -x "${SONAR_RUNNER_HOME}/bin/sonar-scanner" || { echo "ERROR: sonar-scanner missing under ${SONAR_RUNNER_HOME}/bin" >&2; exit 1; }
                     "${SONAR_RUNNER_HOME}/bin/sonar-scanner" -v
                 '''
@@ -196,7 +195,7 @@ pipeline {
             echo "Build ${SHORT_SHA} finished — SonarQube: ${SONAR_HOST_URL}"
         }
         failure {
-            echo 'Pipeline failed — check sonar-token, SONAR_HOST_URL, and Global Tool Configuration (SonarScanner).'
+            echo 'Pipeline failed — check sonar-token, SONAR_HOST_URL, and Global Tool Configuration (SonarQubeScanner).'
         }
     }
 }
