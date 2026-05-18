@@ -46,9 +46,11 @@ Create a **Pipeline** job → Script Path: `Jenkinsfile` → **Build Now**.
 
 1. Build with **GENERATE_OPENAPI_HTML** enabled.
 2. **Build Artifacts** → download `mercotrace-openapi-<sha>.zip`.
-3. Unzip → open `index.html` (bundled Swagger UI + `openapi.json`).
+3. Unzip → open `index.html` (bundled Swagger UI; see `openapi-summary.txt` for path/operation counts).
 
 Uses Spring profiles `api-docs`, `openapi-ci`, `no-liquibase` (in-memory H2, Hibernate `ddl-auto: create`, no Redis/PostgreSQL/Docker).
+
+Typical export size: **~197 `/api` paths**, **~265 HTTP operations**, **~168 schemas** (matches REST controllers; not limited to a subset).
 
 ## Download JavaDoc HTML
 

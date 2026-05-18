@@ -25,9 +25,36 @@ import json
 from pathlib import Path
 
 spec_path = Path("${OPENAPI_JSON}")
-out_js = Path("${HTML_DIR}") / "openapi-spec.js"
+html_dir = Path("${HTML_DIR}")
 spec = json.loads(spec_path.read_text(encoding="utf-8"))
-out_js.write_text("window.OPENAPI_SPEC = " + json.dumps(spec) + ";\n", encoding="utf-8")
+
+# Embed spec for offline Swagger UI (Blob URL avoids file:// schema resolver bugs).
+(html_dir / "openapi-spec.js").write_text(
+    "window.OPENAPI_SPEC = " + json.dumps(spec) + ";\n",
+    encoding="utf-8",
+)
+
+# Coverage summary for the zip artifact.
+HTTP = {"get", "post", "put", "patch", "delete", "head", "options"}
+paths = spec.get("paths", {})
+ops = sum(1 for methods in paths.values() for m in methods if m in HTTP)
+api_ops = sum(
+    1
+    for path, methods in paths.items()
+    if path.startswith("/api")
+    for m in methods
+    if m in HTTP
+)
+schemas = len(spec.get("components", {}).get("schemas", {}))
+summary = f"""MercoTrace OpenAPI export summary
+openapi version: {spec.get("openapi", "?")}
+paths (total): {len(paths)}
+operations (total): {ops}
+/api operations: {api_ops}
+component schemas: {schemas}
+"""
+(html_dir / "openapi-summary.txt").write_text(summary, encoding="utf-8")
+print(summary.strip())
 PY
 
 WORK_DIR="$(mktemp -d)"
@@ -53,10 +80,15 @@ cat > "${HTML_DIR}/index.html" <<'EOF'
   <script src="swagger-ui-standalone-preset.js" charset="UTF-8"></script>
   <script>
     window.onload = function () {
+      // Blob URL gives Swagger UI a real document base so #/components/schemas/* refs resolve.
+      const specUrl = URL.createObjectURL(
+        new Blob([JSON.stringify(window.OPENAPI_SPEC)], { type: 'application/json' })
+      );
       window.ui = SwaggerUIBundle({
-        spec: window.OPENAPI_SPEC,
+        url: specUrl,
         dom_id: '#swagger-ui',
         deepLinking: true,
+        validatorUrl: null,
         presets: [SwaggerUIBundle.presets.apis, SwaggerUIStandalonePreset],
         layout: 'StandaloneLayout',
       });
