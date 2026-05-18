@@ -1,0 +1,26 @@
+# Minimal Jenkins Configuration as Code.
+# Add deploy credentials in the UI (see jenkins/README.md) — do not commit real secrets.
+
+jenkins:
+  systemMessage: "MercoTrace CI — pipeline defined in repo Jenkinsfile"
+  numExecutors: 2
+  scmCheckoutRetryCount: 3
+
+unclassified:
+  location:
+    url: "http://localhost:8080/"
+
+credentials:
+  system:
+    domainCredentials:
+      - credentials:
+          - string:
+              scope: GLOBAL
+              id: "uat-vite-api-url"
+              description: "VITE_API_URL for UAT client production build"
+              secret: "${UAT_VITE_API_URL:-http://localhost:8080}"
+          - string:
+              scope: GLOBAL
+              id: "sonar-token"
+              description: "SonarQube user token (generate in SonarQube UI)"
+              secret: "${SONAR_TOKEN:-}"

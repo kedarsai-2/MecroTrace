@@ -1,0 +1,65 @@
+# Local Jenkins + SonarQube for MercoTrace CI.
+#
+#   cd jenkins && docker compose up -d
+#   open http://localhost:8080  (Jenkins)
+#   open http://localhost:9001  (SonarQube — default login admin / admin)
+#
+# Create a SonarQube token (My Account → Security → Tokens), then add Jenkins credential
+# id `sonar-token` (Secret text). Run pipeline with RUN_SONAR enabled.
+
+services:
+  jenkins:
+    build: .
+    image: mercotrace-jenkins:lts
+    container_name: mercotrace-jenkins
+    restart: unless-stopped
+    user: root
+    depends_on:
+      sonarqube:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+      - "50000:50000"
+    environment:
+      JAVA_OPTS: "-Djenkins.install.runSetupWizard=true"
+      SONAR_HOST_URL: "http://sonarqube:9000"
+      DOCKER_AGENT_ARGS: "--network=mercotrace-ci"
+    volumes:
+      - jenkins_home:/var/jenkins_home
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ../:/var/mercotrace-src:ro
+    networks:
+      - mercotrace-ci
+    group_add:
+      - "${DOCKER_GID:-999}"
+
+  sonarqube:
+    image: sonarqube:25.5.0.107428-community
+    container_name: mercotrace-sonarqube
+    restart: unless-stopped
+    environment:
+      SONAR_FORCEAUTHENTICATION: "false"
+    ports:
+      - "127.0.0.1:9001:9000"
+    volumes:
+      - sonarqube_data:/opt/sonarqube/data
+      - sonarqube_extensions:/opt/sonarqube/extensions
+      - sonarqube_logs:/opt/sonarqube/logs
+    networks:
+      - mercotrace-ci
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:9000/api/system/status | grep -q UP"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+
+networks:
+  mercotrace-ci:
+    name: mercotrace-ci
+
+volumes:
+  jenkins_home:
+  sonarqube_data:
+  sonarqube_extensions:
+  sonarqube_logs:
