@@ -5,7 +5,7 @@ No Docker, no database, no Testcontainers in the default pipeline — **unit tes
 | Step | What runs |
 |------|-----------|
 | **Unit tests** | Server: Surefire (`-Punit-tests-ci`, excludes `@Tag("integration")`). Client: `npm run test` (Vitest). |
-| **OpenAPI / Swagger** | HTML zip artifact (`mercotrace-openapi-<sha>.zip`) |
+| **OpenAPI / Swagger** | HTML zip (`mercotrace-openapi-<sha>.zip`) + Postman collection (`mercotrace-postman-<sha>.json`) |
 | **JavaDoc** | HTML zip artifact (`mercotrace-javadoc-<sha>.zip`) |
 | **SonarQube** | Static analysis (optional) |
 
@@ -18,6 +18,7 @@ Integration tests (`*IT.java`, `@IntegrationTest`) are **not** run in Jenkins.
 | Java 21+ | `server/mvnw test` |
 | Node.js 20+ | `client/npm run test` |
 | `curl`, `zip` | OpenAPI HTML packaging (Swagger UI download) |
+| Node.js 20+ (`npx`) | OpenAPI → Postman collection conversion |
 | SonarQubeScanner | Only if **RUN_SONAR** is enabled (Global Tool name: `SonarQubeScanner`) |
 
 ## Jenkins setup
@@ -35,7 +36,7 @@ Create a **Pipeline** job → Script Path: `Jenkinsfile` → **Build Now**.
 | `RUN_UNIT_TESTS` | ✓ | Master switch for unit tests |
 | `RUN_SERVER_UNIT_TESTS` | ✓ | Server Surefire only (no DB) |
 | `RUN_CLIENT_UNIT_TESTS` | ✓ | Client Vitest (no Docker) |
-| `GENERATE_OPENAPI_HTML` | ✓ | OpenAPI JSON + Swagger UI HTML zip |
+| `GENERATE_OPENAPI_HTML` | ✓ | OpenAPI JSON + Postman collection + Swagger UI HTML zip |
 | `GENERATE_JAVADOC` | ✓ | JavaDoc HTML zip |
 | `RUN_SONAR` | ✓ | SonarQube upload |
 | `SONAR_ONLY` | ✓ | Skip package / deploy |
@@ -47,6 +48,16 @@ Create a **Pipeline** job → Script Path: `Jenkinsfile` → **Build Now**.
 1. Build with **GENERATE_OPENAPI_HTML** enabled.
 2. **Build Artifacts** → download `mercotrace-openapi-<sha>.zip`.
 3. Unzip → open `index.html` (bundled Swagger UI; see `openapi-summary.txt` for path/operation counts).
+
+The same zip also contains `openapi.json` and `mercotrace.postman_collection.json` when the Postman step succeeds.
+
+## Download Postman collection
+
+1. Build with **GENERATE_OPENAPI_HTML** enabled.
+2. **Build Artifacts** → download `mercotrace-postman-<sha>.json`.
+3. In Postman: **Import** → select the file (Collection v2.1).
+
+The collection is generated from the same OpenAPI export as Swagger UI (`openapi-to-postmanv2`). Set collection variables / environment base URL to your server (e.g. UAT) after import.
 
 Uses Spring profiles `api-docs`, `openapi-ci`, `no-liquibase` (in-memory H2, Hibernate `ddl-auto: create`, no Redis/PostgreSQL/Docker).
 
@@ -70,8 +81,9 @@ cd server
 # Client unit tests
 cd client && npm ci && npm run test
 
-# OpenAPI HTML (same as Jenkins)
+# OpenAPI HTML + Postman (same as Jenkins)
 bash jenkins/scripts/generate-openapi.sh .
+bash jenkins/scripts/generate-postman-collection.sh . local
 bash jenkins/scripts/package-openapi-html.sh . local
 
 # Integration tests (need Docker / Testcontainers — not run in Jenkins)

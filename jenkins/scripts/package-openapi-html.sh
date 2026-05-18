@@ -20,6 +20,11 @@ fi
 rm -rf "${HTML_DIR}"
 mkdir -p "${HTML_DIR}"
 cp "${OPENAPI_JSON}" "${HTML_DIR}/openapi.json"
+POSTMAN_COLLECTION="${SERVER_DIR}/target/openapi/mercotrace.postman_collection.json"
+if [ -f "${POSTMAN_COLLECTION}" ]; then
+  cp "${POSTMAN_COLLECTION}" "${HTML_DIR}/mercotrace.postman_collection.json"
+  echo "Bundled Postman collection into HTML artifact"
+fi
 
 export MERCO_OPENAPI_JSON="${OPENAPI_JSON}"
 export MERCO_SWAGGER_HTML_DIR="${HTML_DIR}"
@@ -130,4 +135,4 @@ rm -f "${OUT_ZIP}"
 (cd "${HTML_DIR}" && zip -qr "${OUT_ZIP}" .)
 
 echo "Created ${OUT_ZIP} ($(du -h "${OUT_ZIP}" | cut -f1))"
-echo "Unzip and open index.html in a browser (works offline; openapi.json included for tooling)."
+echo "Unzip and open index.html in a browser (works offline; openapi.json + Postman collection included when generated)."

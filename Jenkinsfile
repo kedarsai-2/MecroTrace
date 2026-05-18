@@ -31,7 +31,7 @@ pipeline {
         booleanParam(
             name: 'GENERATE_OPENAPI_HTML',
             defaultValue: true,
-            description: 'Export OpenAPI spec and build downloadable Swagger UI HTML zip (no Docker DB).'
+            description: 'Export OpenAPI spec, Postman collection, and Swagger UI HTML zip (no Docker DB).'
         )
         booleanParam(
             name: 'RUN_SONAR',
@@ -128,14 +128,16 @@ pipeline {
             }
         }
 
-        stage('OpenAPI (Swagger HTML)') {
+        stage('OpenAPI (Swagger HTML + Postman)') {
             when {
                 expression { params.GENERATE_OPENAPI_HTML }
             }
             steps {
                 sh 'bash jenkins/scripts/generate-openapi.sh .'
+                sh 'bash jenkins/scripts/generate-postman-collection.sh . "${SHORT_SHA}"'
                 sh 'bash jenkins/scripts/package-openapi-html.sh . "${SHORT_SHA}"'
                 archiveArtifacts artifacts: 'server/mercotrace-openapi-*.zip', fingerprint: true, onlyIfSuccessful: true
+                archiveArtifacts artifacts: 'server/mercotrace-postman-*.json', fingerprint: true, onlyIfSuccessful: true
                 archiveArtifacts artifacts: 'server/target/swagger-html/**', fingerprint: true, onlyIfSuccessful: true
             }
         }
