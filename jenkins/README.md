@@ -58,6 +58,8 @@ Typical export size: **~197 `/api` paths**, **~265 HTTP operations**, **~168 sch
 2. **Build Artifacts** → download `mercotrace-javadoc-<sha>.zip`.
 3. Unzip → open `index.html`.
 
+The archive documents **all main application packages** (REST, services, domain, repositories, security, management, `config`, admin, contact portal, etc.). Members are shown up to **private** visibility. The overview page groups packages (REST API, configuration, domain, services, …). CI still enforces **class-level Javadoc only on** `*Resource` / `*Controller` classes under `web/rest` (Checkstyle); other types may have sparse comments but appear in the HTML.
+
 ## Local commands
 
 ```bash
