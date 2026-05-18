@@ -21,12 +21,16 @@ rm -rf "${HTML_DIR}"
 mkdir -p "${HTML_DIR}"
 cp "${OPENAPI_JSON}" "${HTML_DIR}/openapi.json"
 
-python3 <<PY
+export MERCO_OPENAPI_JSON="${OPENAPI_JSON}"
+export MERCO_SWAGGER_HTML_DIR="${HTML_DIR}"
+# Quoted heredoc: bash must not expand Python strings like "$ref" (set -u treats as unset vars).
+python3 <<'PY'
 import json
+import os
 from pathlib import Path
 
-spec_path = Path("${OPENAPI_JSON}")
-html_dir = Path("${HTML_DIR}")
+spec_path = Path(os.environ["MERCO_OPENAPI_JSON"])
+html_dir = Path(os.environ["MERCO_SWAGGER_HTML_DIR"])
 spec = json.loads(spec_path.read_text(encoding="utf-8"))
 
 # Embed spec for offline Swagger UI (passed as `spec` in index.html, not Blob URL).
@@ -46,16 +50,40 @@ api_ops = sum(
     for m in methods
     if m in HTTP
 )
-schemas = len(spec.get("components", {}).get("schemas", {}))
+schema_count = len(spec.get("components", {}).get("schemas", {}))
 summary = f"""MercoTrace OpenAPI export summary
 openapi version: {spec.get("openapi", "?")}
 paths (total): {len(paths)}
 operations (total): {ops}
 /api operations: {api_ops}
-component schemas: {schemas}
+component schemas: {schema_count}
 """
 (html_dir / "openapi-summary.txt").write_text(summary, encoding="utf-8")
 print(summary.strip())
+
+# Fail fast if the spec is unusable for Swagger UI (catches OAS 3.1 + UI regressions).
+reg = spec.get("paths", {}).get("/api/auth/register", {}).get("post", {})
+rb = (((reg.get("requestBody") or {}).get("content") or {}).get("application/json") or {}).get("schema")
+ref_key = "$ref"
+if not isinstance(rb, dict) or ref_key not in rb:
+    raise SystemExit(
+        "OpenAPI sanity check failed: POST /api/auth/register requestBody missing application/json $ref"
+    )
+ref_name = rb[ref_key].rsplit("/", 1)[-1]
+schema_defs = spec.get("components", {}).get("schemas", {})
+if ref_name not in schema_defs:
+    raise SystemExit(
+        f"OpenAPI sanity check failed: missing components.schemas.{ref_name} (register request body ref broken)"
+    )
+if schema_defs[ref_name].get("type") != "object":
+    raise SystemExit(
+        f"OpenAPI sanity check failed: {ref_name} is not type object (got {schema_defs[ref_name].get('type')!r})"
+    )
+r200 = (((reg.get("responses") or {}).get("200") or {}).get("content") or {}).get("application/json", {}).get(
+    "schema"
+)
+if not isinstance(r200, dict) or ref_key not in r200:
+    raise SystemExit("OpenAPI sanity check failed: POST /api/auth/register 200 response missing schema $ref")
 PY
 
 WORK_DIR="$(mktemp -d)"
