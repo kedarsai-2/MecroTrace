@@ -16,6 +16,8 @@ import com.mercotrace.service.AuthRefreshSessionService.InvalidRefreshTokenExcep
 import com.mercotrace.service.ContactOtpService;
 import com.mercotrace.service.ContactIdentityService;
 import com.mercotrace.service.dto.ContactDTO;
+import com.mercotrace.service.dto.ContactTokenRefreshResponse;
+import com.mercotrace.service.dto.SimpleStatusResponse;
 import com.mercotrace.service.mapper.ContactMapper;
 import com.mercotrace.web.rest.errors.BadRequestAlertException;
 import com.mercotrace.web.rest.errors.ConflictAlertException;
@@ -28,11 +30,13 @@ import com.mercotrace.web.rest.vm.ContactOtpVerifyVM;
 import com.mercotrace.web.rest.vm.ContactOtpVerifyResponseVM;
 import com.mercotrace.web.rest.vm.ContactPortalSessionVM;
 import com.mercotrace.web.rest.vm.RefreshTokenVM;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.Valid;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
-import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -42,6 +46,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseCookie;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
@@ -153,6 +158,13 @@ public class ContactAuthResource {
      * On success, returns ContactDTO and issues a CONTACT JWT via httpOnly cookie.
      */
     @PostMapping("/auth/register-contact")
+    @Operation(
+        summary = "Register contact (self-onboarding)",
+        requestBody = @io.swagger.v3.oas.annotations.parameters.RequestBody(
+            required = true,
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = ContactRegisterVM.class))
+        )
+    )
     public ResponseEntity<ContactDTO> registerContact(@Valid @RequestBody ContactRegisterVM vm) {
         String phone = contactIdentityService.normalizePhoneOrThrow(vm.getPhone());
         String email = contactIdentityService.normalizeEmail(vm.getEmail());
@@ -228,6 +240,13 @@ public class ContactAuthResource {
      * POST /portal/auth/login — login existing contact by phone/email + password.
      */
     @PostMapping("/portal/auth/login")
+    @Operation(
+        summary = "Contact portal login",
+        requestBody = @io.swagger.v3.oas.annotations.parameters.RequestBody(
+            required = true,
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = ContactRegisterVM.class))
+        )
+    )
     public ResponseEntity<ContactDTO> login(@Valid @RequestBody ContactRegisterVM vm) {
         String identifier = vm.getPhone();
         String password = vm.getPassword();
@@ -292,7 +311,14 @@ public class ContactAuthResource {
      * lookup and login/guest decision happens during OTP verification.
      */
     @PostMapping("/portal/auth/otp/request")
-    public ResponseEntity<Map<String, String>> requestOtp(
+    @Operation(
+        summary = "Request contact portal OTP",
+        requestBody = @io.swagger.v3.oas.annotations.parameters.RequestBody(
+            required = true,
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = ContactOtpRequestVM.class))
+        )
+    )
+    public ResponseEntity<SimpleStatusResponse> requestOtp(
         @Valid @RequestBody ContactOtpRequestVM vm,
         HttpServletRequest request
     ) {
@@ -335,7 +361,7 @@ public class ContactAuthResource {
             );
         }
 
-        return ResponseEntity.ok(Map.of("status", "OK"));
+        return ResponseEntity.ok(new SimpleStatusResponse("OK"));
     }
 
     /**
@@ -348,6 +374,13 @@ public class ContactAuthResource {
      * without creating or persisting any contact record.
      */
     @PostMapping("/portal/auth/otp/verify")
+    @Operation(
+        summary = "Verify contact portal OTP",
+        requestBody = @io.swagger.v3.oas.annotations.parameters.RequestBody(
+            required = true,
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = ContactOtpVerifyVM.class))
+        )
+    )
     public ResponseEntity<ContactOtpVerifyResponseVM> verifyOtp(@Valid @RequestBody ContactOtpVerifyVM vm) {
         String identifier = vm.getIdentifier();
         String otp = vm.getOtp();
@@ -523,7 +556,14 @@ public class ContactAuthResource {
     }
 
     @PostMapping("/portal/auth/refresh")
-    public ResponseEntity<Map<String, String>> refresh(
+    @Operation(
+        summary = "Refresh contact portal session",
+        requestBody = @io.swagger.v3.oas.annotations.parameters.RequestBody(
+            required = false,
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = RefreshTokenVM.class))
+        )
+    )
+    public ResponseEntity<ContactTokenRefreshResponse> refresh(
         HttpServletRequest request,
         @RequestHeader(
             value = AuthRefreshSessionService.REFRESH_TOKEN_HEADER,
@@ -544,7 +584,7 @@ public class ContactAuthResource {
             return ResponseEntity
                 .ok()
                 .headers(headers)
-                .body(Map.of("token", jwt, "refresh_token", rotated.rawToken()));
+                .body(new ContactTokenRefreshResponse(jwt, rotated.rawToken()));
         } catch (InvalidRefreshTokenException ex) {
             HttpHeaders headers = new HttpHeaders();
             refreshSessionService.addDeleteRefreshCookie(headers);

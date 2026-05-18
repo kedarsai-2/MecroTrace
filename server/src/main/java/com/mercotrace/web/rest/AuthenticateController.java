@@ -14,6 +14,9 @@ import com.mercotrace.service.AuthRefreshSessionService;
 import com.mercotrace.service.AuthRefreshSessionService.InvalidRefreshTokenException;
 import com.mercotrace.web.rest.vm.LoginVM;
 import com.mercotrace.web.rest.vm.RefreshTokenVM;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import java.security.Principal;
@@ -27,6 +30,7 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseCookie;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.authentication.AuthenticationManager;
@@ -83,6 +87,13 @@ public class AuthenticateController {
     }
 
     @PostMapping("/authenticate")
+    @Operation(
+        summary = "Authenticate (legacy JWT in body)",
+        requestBody = @io.swagger.v3.oas.annotations.parameters.RequestBody(
+            required = true,
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = LoginVM.class))
+        )
+    )
     public ResponseEntity<JWTToken> authorize(@Valid @RequestBody LoginVM loginVM) {
         UsernamePasswordAuthenticationToken authenticationToken = new UsernamePasswordAuthenticationToken(
             loginVM.getUsername(),
@@ -181,6 +192,13 @@ public class AuthenticateController {
     }
 
     @PostMapping("/auth/refresh")
+    @Operation(
+        summary = "Refresh trader session",
+        requestBody = @io.swagger.v3.oas.annotations.parameters.RequestBody(
+            required = false,
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = RefreshTokenVM.class))
+        )
+    )
     public ResponseEntity<JWTToken> refresh(
         HttpServletRequest request,
         @RequestHeader(value = AuthRefreshSessionService.REFRESH_TOKEN_HEADER, required = false) String refreshHeader,

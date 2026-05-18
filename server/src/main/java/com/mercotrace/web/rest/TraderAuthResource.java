@@ -22,6 +22,7 @@ import com.mercotrace.service.TraderService;
 import com.mercotrace.service.UserService;
 import com.mercotrace.service.UsernameAlreadyUsedException;
 import com.mercotrace.service.dto.AdminUserDTO;
+import com.mercotrace.service.dto.SimpleStatusResponse;
 import com.mercotrace.service.dto.TraderAuthDTO;
 import com.mercotrace.service.dto.TraderDTO;
 import com.mercotrace.web.rest.errors.TraderEmailAlreadyRegisteredException;
@@ -32,10 +33,12 @@ import com.mercotrace.web.rest.vm.TraderOtpRequestVM;
 import com.mercotrace.web.rest.vm.TraderOtpVerifyVM;
 import com.mercotrace.web.rest.vm.TraderRegisterVM;
 import com.mercotrace.web.rest.vm.MultiTraderAccountSwitchVM;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import java.util.HashSet;
-import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -43,6 +46,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
@@ -125,6 +129,14 @@ public class TraderAuthResource {
     }
 
     /** POST /auth/register — Register Trader (Directory Listing only) + auto-login for trader UI. */
+    @Operation(
+        summary = "Register trader",
+        description = "Create trader directory listing (pending approval) and return auth payload with tokens.",
+        requestBody = @io.swagger.v3.oas.annotations.parameters.RequestBody(
+            required = true,
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = TraderRegisterVM.class))
+        )
+    )
     @PostMapping("/register")
     public ResponseEntity<TraderAuthDTO> register(@Valid @RequestBody TraderRegisterVM vm) {
         // Enforce same password policy as frontend (min 6 chars)
@@ -290,6 +302,13 @@ public class TraderAuthResource {
      * POST /auth/login — Login trader user. Returns normalized user/trader payloads.
      * JWT is issued via secure httpOnly cookie, not used directly by the frontend.
      */
+    @Operation(
+        summary = "Trader login",
+        requestBody = @io.swagger.v3.oas.annotations.parameters.RequestBody(
+            required = true,
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = LoginVM.class))
+        )
+    )
     @PostMapping("/login")
     public ResponseEntity<TraderAuthDTO> login(@Valid @RequestBody LoginVM loginVM) {
         // Frontend sends an email and requires 6+ char password. Enforce that here.
@@ -398,6 +417,13 @@ public class TraderAuthResource {
     }
 
     @PostMapping("/select-trader")
+    @Operation(
+        summary = "Switch active trader",
+        requestBody = @io.swagger.v3.oas.annotations.parameters.RequestBody(
+            required = true,
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = MultiTraderAccountSwitchVM.class))
+        )
+    )
     public ResponseEntity<TraderAuthDTO> selectTrader(@Valid @RequestBody MultiTraderAccountSwitchVM body) {
         TraderDTO trader = multiTraderAccountRequestService.switchCurrentUserToTrader(body.getTraderId());
         User user = userRepository
@@ -409,6 +435,13 @@ public class TraderAuthResource {
 
     /** PUT /auth/profile — Update user profile. */
     @PutMapping("/profile")
+    @Operation(
+        summary = "Update trader user profile",
+        requestBody = @io.swagger.v3.oas.annotations.parameters.RequestBody(
+            required = true,
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = AdminUserDTO.class))
+        )
+    )
     public void updateProfile(@RequestBody com.mercotrace.service.dto.AdminUserDTO userDTO) {
         // Delegate to AccountResource without triggering bean validation on AdminUserDTO here.
         // AccountResource will use the current authenticated user and only the updated fields.
@@ -417,7 +450,14 @@ public class TraderAuthResource {
 
     /** POST /auth/otp/request — Request OTP for phone-based login. */
     @PostMapping("/otp/request")
-    public ResponseEntity<Map<String, String>> requestOtp(
+    @Operation(
+        summary = "Request trader OTP",
+        requestBody = @io.swagger.v3.oas.annotations.parameters.RequestBody(
+            required = true,
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = TraderOtpRequestVM.class))
+        )
+    )
+    public ResponseEntity<SimpleStatusResponse> requestOtp(
         @Valid @RequestBody TraderOtpRequestVM vm,
         HttpServletRequest request
     ) {
@@ -442,11 +482,18 @@ public class TraderAuthResource {
             throw new ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS, "Too many OTP requests. Please try again later.");
         }
 
-        return ResponseEntity.ok(Map.of("status", "OK"));
+        return ResponseEntity.ok(new SimpleStatusResponse("OK"));
     }
 
     /** POST /auth/otp/verify — Verify OTP and perform login. */
     @PostMapping("/otp/verify")
+    @Operation(
+        summary = "Verify trader OTP",
+        requestBody = @io.swagger.v3.oas.annotations.parameters.RequestBody(
+            required = true,
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = TraderOtpVerifyVM.class))
+        )
+    )
     public ResponseEntity<TraderAuthDTO> verifyOtp(@Valid @RequestBody TraderOtpVerifyVM vm) {
         String mobile = vm.getMobile();
         String otp = vm.getOtp();

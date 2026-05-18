@@ -6,6 +6,9 @@ import com.mercotrace.security.SecurityUtils;
 import com.mercotrace.service.dto.AdminUserDTO;
 import com.mercotrace.service.dto.TraderAuthDTO;
 import com.mercotrace.web.rest.vm.LoginVM;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.Valid;
 import java.time.Duration;
 import org.slf4j.Logger;
@@ -13,6 +16,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -66,6 +70,13 @@ public class AdminAuthResource {
      * On success, returns a {@link TraderAuthDTO} where {@code trader} is always {@code null}.
      */
     @PostMapping("/login")
+    @Operation(
+        summary = "Admin login",
+        requestBody = @io.swagger.v3.oas.annotations.parameters.RequestBody(
+            required = true,
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = LoginVM.class))
+        )
+    )
     public ResponseEntity<TraderAuthDTO> login(@Valid @RequestBody LoginVM loginVM) {
         if (loginVM.getPassword() == null || loginVM.getPassword().length() < 6) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Password must be at least 6 characters");

@@ -5,6 +5,7 @@ import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
+import io.swagger.v3.oas.annotations.media.Schema;
 
 /**
  * ViewModel for trader registration used by /api/auth/register.
@@ -14,6 +15,10 @@ import jakarta.validation.constraints.Size;
  *   address, city, state, pin_code, category
  * }
  */
+@Schema(
+    name = "TraderRegister",
+    description = "Trader self-registration. JSON uses snake_case for business_name, owner_name, pin_code, gst_number, rmc_apmc_code, shop_photos."
+)
 public class TraderRegisterVM {
 
     @JsonProperty("business_name")

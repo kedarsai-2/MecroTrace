@@ -6,6 +6,9 @@ import jakarta.validation.constraints.Size;
 /**
  * View Model object for storing a user's credentials.
  */
+@io.swagger.v3.oas.annotations.media.Schema(
+    description = "Login credentials (username may be email, internal login, or 10-digit mobile depending on endpoint)"
+)
 public class LoginVM {
 
     @NotNull

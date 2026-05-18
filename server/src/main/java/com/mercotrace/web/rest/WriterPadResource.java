@@ -51,7 +51,13 @@ public class WriterPadResource {
 
     @PostMapping("/sessions/load-or-create")
     @PreAuthorize("hasAuthority(\"" + AuthoritiesConstants.WRITERS_PAD_CREATE + "\")")
-    @Operation(summary = "Load or create writer pad session for lot/bid")
+    @Operation(
+        summary = "Load or create writer pad session for lot/bid",
+        requestBody = @io.swagger.v3.oas.annotations.parameters.RequestBody(
+            required = true,
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = WriterPadLoadOrCreateSessionRequest.class))
+        )
+    )
     @ApiResponses({
         @ApiResponse(
             responseCode = "200",

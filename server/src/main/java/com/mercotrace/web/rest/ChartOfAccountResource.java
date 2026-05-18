@@ -5,12 +5,12 @@ import com.mercotrace.service.ChartOfAccountService;
 import com.mercotrace.service.dto.ChartOfAccountCreateRequest;
 import com.mercotrace.service.dto.ChartOfAccountDTO;
 import com.mercotrace.service.dto.ChartOfAccountUpdateRequest;
+import com.mercotrace.service.dto.OpeningBalanceResponse;
 import com.mercotrace.web.rest.errors.BadRequestAlertException;
 import jakarta.validation.Valid;
 import java.math.BigDecimal;
 import java.net.URI;
 import java.time.LocalDate;
-import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -80,14 +80,14 @@ public class ChartOfAccountResource {
      */
     @GetMapping("/{id}/opening-balance")
     @PreAuthorize("hasAuthority(\"" + AuthoritiesConstants.CHART_OF_ACCOUNTS_VIEW + "\")")
-    public ResponseEntity<Map<String, BigDecimal>> getOpeningBalance(
+    public ResponseEntity<OpeningBalanceResponse> getOpeningBalance(
         @PathVariable Long id,
         @RequestParam(required = false) LocalDate asOfDate
     ) {
         LOG.debug("REST request to get opening balance for chart of account: {}, asOfDate={}", id, asOfDate);
         try {
             BigDecimal balance = chartOfAccountService.getOpeningBalance(id, asOfDate);
-            return ResponseEntity.ok(Map.of("openingBalance", balance));
+            return ResponseEntity.ok(new OpeningBalanceResponse(balance));
         } catch (IllegalArgumentException e) {
             throw new BadRequestAlertException(e.getMessage(), ENTITY_NAME, "notfound");
         }

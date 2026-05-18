@@ -19,6 +19,11 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.support.ServletUriComponentsBuilder;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.media.ArraySchema;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.media.Schema;
+import org.springframework.http.MediaType;
 import tech.jhipster.web.util.PaginationUtil;
 
 /**
@@ -66,6 +71,17 @@ public class UserRoleResource {
      */
     @PutMapping("/users/{id}/roles")
     @PreAuthorize("hasAuthority(\"" + AuthoritiesConstants.ADMIN + "\")")
+    @Operation(
+        summary = "Replace user roles",
+        description = "JSON array of role IDs, e.g. [1, 2, 3]",
+        requestBody = @io.swagger.v3.oas.annotations.parameters.RequestBody(
+            required = true,
+            content = @Content(
+                mediaType = MediaType.APPLICATION_JSON_VALUE,
+                array = @ArraySchema(schema = @Schema(type = "integer", format = "int64", example = "1"))
+            )
+        )
+    )
     public ResponseEntity<Void> setUserRoles(@PathVariable("id") Long userId, @RequestBody Set<Long> roleIds) {
         LOG.debug("REST request to set roles {} for user {}", roleIds, userId);
         userRoleService.setRolesForUser(userId, roleIds != null ? roleIds : Set.of());

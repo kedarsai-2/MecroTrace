@@ -27,6 +27,11 @@ import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.media.ArraySchema;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.media.Schema;
+import org.springframework.http.MediaType;
 
 /**
  * Admin-facing RBAC APIs for global admin users and roles.
@@ -136,6 +141,17 @@ public class AdminRbacResource {
      * {@code PUT /api/admin/rbac/users/:id/roles} : replace all admin roles for an admin user.
      */
     @PutMapping("/users/{id}/roles")
+    @Operation(
+        summary = "Replace admin user roles",
+        description = "JSON array of admin role IDs (same shape as PUT /api/admin/users/{id}/roles).",
+        requestBody = @io.swagger.v3.oas.annotations.parameters.RequestBody(
+            required = true,
+            content = @Content(
+                mediaType = MediaType.APPLICATION_JSON_VALUE,
+                array = @ArraySchema(schema = @Schema(type = "integer", format = "int64", example = "1"))
+            )
+        )
+    )
     public ResponseEntity<AdminUserRbacDTO> replaceAdminUserRoles(
         @PathVariable("id") Long userId,
         @NotNull @RequestBody Set<Long> roleIds
@@ -163,6 +179,13 @@ public class AdminRbacResource {
      * {@code POST /api/admin/rbac/users} : create a new admin user with a direct password.
      */
     @PostMapping("/users")
+    @Operation(
+        summary = "Create admin user",
+        requestBody = @io.swagger.v3.oas.annotations.parameters.RequestBody(
+            required = true,
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = AdminRbacUserCreateVM.class))
+        )
+    )
     public ResponseEntity<AdminUserRbacDTO> createAdminUser(@Valid @RequestBody AdminRbacUserCreateVM vm) throws URISyntaxException {
         LOG.debug("REST request to create admin user via RBAC : {}", vm.getEmail());
 
@@ -186,6 +209,13 @@ public class AdminRbacResource {
      * {@code PUT /api/admin/rbac/users/:id} : update basic profile fields and activation flag.
      */
     @PutMapping("/users/{id}")
+    @Operation(
+        summary = "Update admin user",
+        requestBody = @io.swagger.v3.oas.annotations.parameters.RequestBody(
+            required = true,
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = AdminRbacUserUpdateVM.class))
+        )
+    )
     public ResponseEntity<AdminUserRbacDTO> updateAdminUser(
         @PathVariable("id") Long userId,
         @Valid @RequestBody AdminRbacUserUpdateVM vm

@@ -6,6 +6,7 @@ import jakarta.validation.constraints.Size;
 /**
  * View Model extending the AdminUserDTO, which is meant to be used in the user management UI.
  */
+@io.swagger.v3.oas.annotations.media.Schema(description = "JHipster account registration payload (user fields plus password)")
 public class ManagedUserVM extends AdminUserDTO {
 
     public static final int PASSWORD_MIN_LENGTH = 4;
