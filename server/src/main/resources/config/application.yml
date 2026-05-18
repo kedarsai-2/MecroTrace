@@ -178,6 +178,12 @@ server:
 
 springdoc:
   show-actuator: true
+  # Use JSON media types so Swagger shows DTO schemas instead of generic */* example blobs.
+  default-produces-media-type: application/json
+  default-consumes-media-type: application/json
+  swagger-ui:
+    # Prefer schema tree over auto-generated "example" values that look random.
+    default-model-rendering: model
 
 # Properties to be exposed on the /info management endpoint
 info:

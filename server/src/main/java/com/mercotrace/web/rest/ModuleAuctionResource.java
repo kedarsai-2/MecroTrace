@@ -27,15 +27,19 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.servlet.support.ServletUriComponentsBuilder;
 import tech.jhipster.web.util.PaginationUtil;
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import com.mercotrace.web.rest.errors.ApiErrorBody;
 
 /**
  * REST controller for the Auctions (Sales Pad) module.
@@ -160,8 +164,16 @@ public class ModuleAuctionResource {
      */
     @Operation(summary = "Get or start session", description = "Returns current auction session for the lot or creates one")
     @ApiResponses({
-        @ApiResponse(responseCode = "200", description = "OK"),
-        @ApiResponse(responseCode = "404", description = "Lot not found; body: { message, status, errors }")
+        @ApiResponse(
+            responseCode = "200",
+            description = "OK",
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = AuctionSessionDTO.class))
+        ),
+        @ApiResponse(
+            responseCode = "404",
+            description = "Lot not found",
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = ApiErrorBody.class))
+        )
     })
     @GetMapping("/lots/{lotId}/session")
     @PreAuthorize("hasAuthority(\"" + AuthoritiesConstants.AUCTIONS_VIEW + "\")")
@@ -180,9 +192,17 @@ public class ModuleAuctionResource {
      */
     @Operation(summary = "Get current session", description = "Returns the current auction session for the lot without creating one")
     @ApiResponses({
-        @ApiResponse(responseCode = "200", description = "OK"),
+        @ApiResponse(
+            responseCode = "200",
+            description = "OK",
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = AuctionSessionDTO.class))
+        ),
         @ApiResponse(responseCode = "204", description = "No session exists"),
-        @ApiResponse(responseCode = "404", description = "Lot not found")
+        @ApiResponse(
+            responseCode = "404",
+            description = "Lot not found",
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = ApiErrorBody.class))
+        )
     })
     @GetMapping("/lots/{lotId}/session/current")
     @PreAuthorize("hasAuthority(\"" + AuthoritiesConstants.AUCTIONS_VIEW + "\")")
@@ -201,8 +221,16 @@ public class ModuleAuctionResource {
      */
     @Operation(summary = "Get or start self-sale re-auction session", description = "Returns active session for the self-sale unit or creates a fresh re-auction session while preserving history")
     @ApiResponses({
-        @ApiResponse(responseCode = "200", description = "OK"),
-        @ApiResponse(responseCode = "404", description = "Self-sale unit not found")
+        @ApiResponse(
+            responseCode = "200",
+            description = "OK",
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = AuctionSessionDTO.class))
+        ),
+        @ApiResponse(
+            responseCode = "404",
+            description = "Self-sale unit not found",
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = ApiErrorBody.class))
+        )
     })
     @GetMapping("/self-sale-units/{id}/session")
     @PreAuthorize("hasAuthority(\"" + AuthoritiesConstants.AUCTIONS_VIEW + "\")")
@@ -221,9 +249,17 @@ public class ModuleAuctionResource {
      */
     @Operation(summary = "Get current self-sale re-auction session", description = "Returns active self-sale session without creating one")
     @ApiResponses({
-        @ApiResponse(responseCode = "200", description = "OK"),
+        @ApiResponse(
+            responseCode = "200",
+            description = "OK",
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = AuctionSessionDTO.class))
+        ),
         @ApiResponse(responseCode = "204", description = "No active session exists"),
-        @ApiResponse(responseCode = "404", description = "Self-sale unit not found")
+        @ApiResponse(
+            responseCode = "404",
+            description = "Self-sale unit not found",
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = ApiErrorBody.class))
+        )
     })
     @GetMapping("/self-sale-units/{id}/session/current")
     @PreAuthorize("hasAuthority(\"" + AuthoritiesConstants.AUCTIONS_VIEW + "\")")
@@ -242,10 +278,22 @@ public class ModuleAuctionResource {
      */
     @Operation(summary = "Add self-sale re-auction bid", description = "Add a bid to the current self-sale unit session; 409 if quantity exceeds remaining self-sale quantity")
     @ApiResponses({
-        @ApiResponse(responseCode = "200", description = "OK"),
+        @ApiResponse(
+            responseCode = "200",
+            description = "OK",
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = AuctionSessionDTO.class))
+        ),
         @ApiResponse(responseCode = "400", description = "Validation error"),
-        @ApiResponse(responseCode = "404", description = "Self-sale unit not found"),
-        @ApiResponse(responseCode = "409", description = "Quantity conflict")
+        @ApiResponse(
+            responseCode = "404",
+            description = "Self-sale unit not found",
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = ApiErrorBody.class))
+        ),
+        @ApiResponse(
+            responseCode = "409",
+            description = "Quantity conflict",
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = ApiErrorBody.class))
+        )
     })
     @PostMapping("/self-sale-units/{id}/session/bids")
     @PreAuthorize("hasAuthority(\"" + AuthoritiesConstants.AUCTIONS_CREATE + "\")")
@@ -271,10 +319,22 @@ public class ModuleAuctionResource {
      */
     @Operation(summary = "Update self-sale re-auction bid", description = "Update rate, quantity, token advance, extra rate, preset on a self-sale re-auction bid")
     @ApiResponses({
-        @ApiResponse(responseCode = "200", description = "OK"),
+        @ApiResponse(
+            responseCode = "200",
+            description = "OK",
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = AuctionSessionDTO.class))
+        ),
         @ApiResponse(responseCode = "400", description = "Validation error"),
-        @ApiResponse(responseCode = "404", description = "Self-sale unit or bid not found"),
-        @ApiResponse(responseCode = "409", description = "Stale bid or quantity conflict")
+        @ApiResponse(
+            responseCode = "404",
+            description = "Self-sale unit or bid not found",
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = ApiErrorBody.class))
+        ),
+        @ApiResponse(
+            responseCode = "409",
+            description = "Stale bid or quantity conflict",
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = ApiErrorBody.class))
+        )
     })
     @PatchMapping("/self-sale-units/{id}/session/bids/{bidId}")
     @PreAuthorize("hasAuthority(\"" + AuthoritiesConstants.AUCTIONS_EDIT + "\")")
@@ -303,8 +363,16 @@ public class ModuleAuctionResource {
      */
     @Operation(summary = "Delete self-sale re-auction bid", description = "Remove a bid from the self-sale unit session")
     @ApiResponses({
-        @ApiResponse(responseCode = "200", description = "OK"),
-        @ApiResponse(responseCode = "404", description = "Self-sale unit or bid not found")
+        @ApiResponse(
+            responseCode = "200",
+            description = "OK",
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = AuctionSessionDTO.class))
+        ),
+        @ApiResponse(
+            responseCode = "404",
+            description = "Self-sale unit or bid not found",
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = ApiErrorBody.class))
+        )
     })
     @DeleteMapping("/self-sale-units/{id}/session/bids/{bidId}")
     @PreAuthorize("hasAuthority(\"" + AuthoritiesConstants.AUCTIONS_DELETE + "\")")
@@ -326,9 +394,21 @@ public class ModuleAuctionResource {
      */
     @Operation(summary = "Complete self-sale re-auction", description = "Marks self-sale re-auction completed and decrements remaining self-sale quantity")
     @ApiResponses({
-        @ApiResponse(responseCode = "200", description = "OK"),
-        @ApiResponse(responseCode = "404", description = "Self-sale unit or auction not found"),
-        @ApiResponse(responseCode = "409", description = "Conflict (e.g. no bids or quantity overflow)")
+        @ApiResponse(
+            responseCode = "200",
+            description = "OK",
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = AuctionResultDTO.class))
+        ),
+        @ApiResponse(
+            responseCode = "404",
+            description = "Self-sale unit or auction not found",
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = ApiErrorBody.class))
+        ),
+        @ApiResponse(
+            responseCode = "409",
+            description = "Conflict (e.g. no bids or quantity overflow)",
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = ApiErrorBody.class))
+        )
     })
     @PostMapping("/self-sale-units/{id}/complete")
     @PreAuthorize("hasAuthority(\"" + AuthoritiesConstants.AUCTIONS_APPROVE + "\")")
@@ -355,10 +435,22 @@ public class ModuleAuctionResource {
      */
     @Operation(summary = "Add bid", description = "Add a bid to the current auction session; 409 if quantity exceeds lot (use allowLotIncrease to confirm)")
     @ApiResponses({
-        @ApiResponse(responseCode = "200", description = "OK"),
+        @ApiResponse(
+            responseCode = "200",
+            description = "OK",
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = AuctionSessionDTO.class))
+        ),
         @ApiResponse(responseCode = "400", description = "Validation error"),
-        @ApiResponse(responseCode = "404", description = "Lot not found"),
-        @ApiResponse(responseCode = "409", description = "Quantity conflict; body: { message, status, errors }")
+        @ApiResponse(
+            responseCode = "404",
+            description = "Lot not found",
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = ApiErrorBody.class))
+        ),
+        @ApiResponse(
+            responseCode = "409",
+            description = "Quantity conflict; body includes field totals in errors[0]",
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = ApiErrorBody.class))
+        )
     })
     @PostMapping("/lots/{lotId}/session/bids")
     @PreAuthorize("hasAuthority(\"" + AuthoritiesConstants.AUCTIONS_CREATE + "\")")
@@ -384,10 +476,22 @@ public class ModuleAuctionResource {
      */
     @Operation(summary = "Update bid", description = "Update rate, quantity, token advance, extra rate, preset on a bid; 409 on stale version or quantity conflict")
     @ApiResponses({
-        @ApiResponse(responseCode = "200", description = "OK"),
+        @ApiResponse(
+            responseCode = "200",
+            description = "OK",
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = AuctionSessionDTO.class))
+        ),
         @ApiResponse(responseCode = "400", description = "Validation error"),
-        @ApiResponse(responseCode = "404", description = "Bid or lot not found; body: { message, status, errors }"),
-        @ApiResponse(responseCode = "409", description = "Stale bid or quantity conflict; body: { message, status, errors }")
+        @ApiResponse(
+            responseCode = "404",
+            description = "Bid or lot not found",
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = ApiErrorBody.class))
+        ),
+        @ApiResponse(
+            responseCode = "409",
+            description = "Stale bid or quantity conflict",
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = ApiErrorBody.class))
+        )
     })
     @PatchMapping("/lots/{lotId}/session/bids/{bidId}")
     @PreAuthorize("hasAuthority(\"" + AuthoritiesConstants.AUCTIONS_EDIT + "\")")
@@ -416,8 +520,16 @@ public class ModuleAuctionResource {
      */
     @Operation(summary = "Delete bid", description = "Remove a bid from the auction session")
     @ApiResponses({
-        @ApiResponse(responseCode = "200", description = "OK"),
-        @ApiResponse(responseCode = "404", description = "Bid or lot not found; body: { message, status, errors }")
+        @ApiResponse(
+            responseCode = "200",
+            description = "OK",
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = AuctionSessionDTO.class))
+        ),
+        @ApiResponse(
+            responseCode = "404",
+            description = "Bid or lot not found",
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = ApiErrorBody.class))
+        )
     })
     @DeleteMapping("/lots/{lotId}/session/bids/{bidId}")
     @PreAuthorize("hasAuthority(\"" + AuthoritiesConstants.AUCTIONS_DELETE + "\")")
@@ -439,9 +551,21 @@ public class ModuleAuctionResource {
      */
     @Operation(summary = "Complete auction", description = "Marks auction completed and returns result DTO; 409 if no bids or quantity conflict")
     @ApiResponses({
-        @ApiResponse(responseCode = "200", description = "OK"),
-        @ApiResponse(responseCode = "404", description = "Lot or auction not found"),
-        @ApiResponse(responseCode = "409", description = "Conflict (e.g. no bids); body: { message, status, errors }")
+        @ApiResponse(
+            responseCode = "200",
+            description = "OK",
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = AuctionResultDTO.class))
+        ),
+        @ApiResponse(
+            responseCode = "404",
+            description = "Lot or auction not found",
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = ApiErrorBody.class))
+        ),
+        @ApiResponse(
+            responseCode = "409",
+            description = "Conflict (e.g. no bids)",
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = ApiErrorBody.class))
+        )
     })
     @PostMapping("/lots/{lotId}/complete")
     @PreAuthorize("hasAuthority(\"" + AuthoritiesConstants.AUCTIONS_APPROVE + "\")")
@@ -486,8 +610,16 @@ public class ModuleAuctionResource {
      */
     @Operation(summary = "Get result by lot", description = "Returns completed auction result for the lot or 404")
     @ApiResponses({
-        @ApiResponse(responseCode = "200", description = "OK"),
-        @ApiResponse(responseCode = "404", description = "Not found; body: { message, status, errors }")
+        @ApiResponse(
+            responseCode = "200",
+            description = "OK",
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = AuctionResultDTO.class))
+        ),
+        @ApiResponse(
+            responseCode = "404",
+            description = "Not found",
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = ApiErrorBody.class))
+        )
     })
     @GetMapping("/results/lots/{lotId}")
     @PreAuthorize("hasAuthority(\"" + AuthoritiesConstants.AUCTIONS_VIEW + "\")")
@@ -505,8 +637,16 @@ public class ModuleAuctionResource {
      */
     @Operation(summary = "Get result by bid number", description = "Returns auction result containing the bid or 404")
     @ApiResponses({
-        @ApiResponse(responseCode = "200", description = "OK"),
-        @ApiResponse(responseCode = "404", description = "Not found; body: { message, status, errors }")
+        @ApiResponse(
+            responseCode = "200",
+            description = "OK",
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = AuctionResultDTO.class))
+        ),
+        @ApiResponse(
+            responseCode = "404",
+            description = "Not found",
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = ApiErrorBody.class))
+        )
     })
     @GetMapping("/results/bids/{bidNumber}")
     @PreAuthorize("hasAuthority(\"" + AuthoritiesConstants.AUCTIONS_VIEW + "\")")

@@ -5,7 +5,13 @@ import com.mercotrace.service.WriterPadService;
 import com.mercotrace.service.dto.WriterPadDTOs.WriterPadSessionDTO;
 import com.mercotrace.service.dto.WriterPadDTOs.WriterPadSessionWithLogDTO;
 import com.mercotrace.service.dto.WriterPadDTOs.WriterPadWeightEntryDTO;
+import com.mercotrace.web.rest.errors.ApiErrorBody;
+import com.mercotrace.web.rest.vm.WriterPadLoadOrCreateSessionRequest;
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.media.Schema;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Min;
@@ -20,6 +26,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
@@ -45,17 +52,34 @@ public class WriterPadResource {
     @PostMapping("/sessions/load-or-create")
     @PreAuthorize("hasAuthority(\"" + AuthoritiesConstants.WRITERS_PAD_CREATE + "\")")
     @Operation(summary = "Load or create writer pad session for lot/bid")
-    public ResponseEntity<?> loadOrCreateSession(@Valid @RequestBody Map<String, Object> payload) {
+    @ApiResponses({
+        @ApiResponse(
+            responseCode = "200",
+            description = "OK",
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = WriterPadSessionDTO.class))
+        ),
+        @ApiResponse(
+            responseCode = "400",
+            description = "Bad request",
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = ApiErrorBody.class))
+        ),
+        @ApiResponse(
+            responseCode = "500",
+            description = "Server error",
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = ApiErrorBody.class))
+        )
+    })
+    public ResponseEntity<?> loadOrCreateSession(@Valid @RequestBody WriterPadLoadOrCreateSessionRequest payload) {
         LOG.debug("REST request to loadOrCreate WriterPad session: {}", payload);
         try {
-            Long lotId = ((Number) payload.get("lotId")).longValue();
-            Integer bidNumber = ((Number) payload.get("bidNumber")).intValue();
-            String buyerMark = (String) payload.get("buyerMark");
-            String buyerName = (String) payload.get("buyerName");
-            String lotName = (String) payload.getOrDefault("lotName", "");
-            Integer totalBags = ((Number) payload.get("totalBags")).intValue();
-            String scaleId = (String) payload.getOrDefault("scaleId", "");
-            String scaleName = (String) payload.getOrDefault("scaleName", "");
+            Long lotId = payload.getLotId();
+            Integer bidNumber = payload.getBidNumber();
+            String buyerMark = payload.getBuyerMark();
+            String buyerName = payload.getBuyerName();
+            String lotName = payload.getLotName() != null ? payload.getLotName() : "";
+            Integer totalBags = payload.getTotalBags();
+            String scaleId = payload.getScaleId() != null ? payload.getScaleId() : "";
+            String scaleName = payload.getScaleName() != null ? payload.getScaleName() : "";
             WriterPadSessionDTO dto = writerPadService.loadOrCreateSession(
                 lotId,
                 bidNumber,
@@ -77,6 +101,18 @@ public class WriterPadResource {
     @PostMapping("/sessions/{sessionId}/weights")
     @PreAuthorize("hasAuthority(\"" + AuthoritiesConstants.WRITERS_PAD_EDIT + "\")")
     @Operation(summary = "Attach weight entry to session")
+    @ApiResponses({
+        @ApiResponse(
+            responseCode = "200",
+            description = "OK",
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = WriterPadWeightEntryDTO.class))
+        ),
+        @ApiResponse(
+            responseCode = "400",
+            description = "Bad request",
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = ApiErrorBody.class))
+        )
+    })
     public ResponseEntity<?> attachWeight(
         @PathVariable Long sessionId,
         @RequestParam("rawWeight") @NotNull BigDecimal rawWeight,
@@ -95,6 +131,18 @@ public class WriterPadResource {
     @PostMapping("/weights/{entryId}/retag")
     @PreAuthorize("hasAuthority(\"" + AuthoritiesConstants.WRITERS_PAD_EDIT + "\")")
     @Operation(summary = "Retag a weight entry to another bid")
+    @ApiResponses({
+        @ApiResponse(
+            responseCode = "200",
+            description = "OK",
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = WriterPadWeightEntryDTO.class))
+        ),
+        @ApiResponse(
+            responseCode = "400",
+            description = "Bad request",
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = ApiErrorBody.class))
+        )
+    })
     public ResponseEntity<?> retag(
         @PathVariable Long entryId,
         @RequestParam("targetBidNumber") @Min(1) Integer targetBidNumber
@@ -131,6 +179,14 @@ public class WriterPadResource {
     @GetMapping("/sessions/{sessionId}")
     @PreAuthorize("hasAuthority(\"" + AuthoritiesConstants.WRITERS_PAD_VIEW + "\")")
     @Operation(summary = "Get writer pad session with recent weight log")
+    @ApiResponses({
+        @ApiResponse(
+            responseCode = "200",
+            description = "OK",
+            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = WriterPadSessionWithLogDTO.class))
+        ),
+        @ApiResponse(responseCode = "404", description = "Session not found (empty body)")
+    })
     public ResponseEntity<WriterPadSessionWithLogDTO> getSessionWithLog(
         @PathVariable Long sessionId,
         @org.springdoc.core.annotations.ParameterObject Pageable pageable
