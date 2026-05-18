@@ -15,6 +15,10 @@ services:
     restart: unless-stopped
     user: root
     depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
       sonarqube:
         condition: service_healthy
     ports:
@@ -23,6 +27,12 @@ services:
     environment:
       JAVA_OPTS: "-Djenkins.install.runSetupWizard=true"
       SONAR_HOST_URL: "http://sonarqube:9000"
+      # Integration tests use compose DB/Redis instead of Testcontainers (see CiComposeDb.java)
+      CI_USE_COMPOSE_DB: "true"
+      SPRING_DATASOURCE_URL: "jdbc:postgresql://postgres:5432/mercotrace"
+      SPRING_DATASOURCE_USERNAME: "mercotrace"
+      SPRING_DATASOURCE_PASSWORD: "mercotrace"
+      JHIPSTER_CACHE_REDIS_SERVER: "redis://redis:6379"
     volumes:
       - jenkins_home:/var/jenkins_home
       - /var/run/docker.sock:/var/run/docker.sock
@@ -31,6 +41,36 @@ services:
       - mercotrace-ci
     group_add:
       - "${DOCKER_GID:-999}"
+
+  postgres:
+    image: postgres:17.4
+    container_name: mercotrace-postgres-ci
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: mercotrace
+      POSTGRES_USER: mercotrace
+      POSTGRES_PASSWORD: mercotrace
+    networks:
+      - mercotrace-ci
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mercotrace -d mercotrace"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  redis:
+    image: redis:8.0.0
+    container_name: mercotrace-redis-ci
+    restart: unless-stopped
+    networks:
+      - mercotrace-ci
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
 
   sonarqube:
     image: sonarqube:25.5.0.107428-community

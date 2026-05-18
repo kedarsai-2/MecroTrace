@@ -28,24 +28,29 @@ public class SqlTestContainersSpringContextCustomizerFactory implements ContextC
                 EmbeddedSQL sqlAnnotation = AnnotatedElementUtils.findMergedAnnotation(testClass, EmbeddedSQL.class);
                 if (null != sqlAnnotation) {
                     log.debug("detected the EmbeddedSQL annotation on class {}", testClass.getName());
-                    log.info("Warming up the sql database");
-                    if (null == prodTestContainer) {
-                        try {
-                            Class<? extends SqlTestContainer> containerClass = (Class<? extends SqlTestContainer>) Class.forName(
-                                this.getClass().getPackageName() + ".PostgreSqlTestContainer"
-                            );
-                            prodTestContainer = beanFactory.createBean(containerClass);
-                            beanFactory.registerSingleton(containerClass.getName(), prodTestContainer);
-                            /**
-                             * ((DefaultListableBeanFactory)beanFactory).registerDisposableBean(containerClass.getName(), prodTestContainer);
-                             */
-                        } catch (ClassNotFoundException e) {
-                            throw new RuntimeException(e);
+                    if (CiComposeDb.isEnabled()) {
+                        log.info("Using CI compose PostgreSQL (CI_USE_COMPOSE_DB=true)");
+                        testValues = CiComposeDb.withSqlProperties(testValues);
+                    } else {
+                        log.info("Warming up the sql database");
+                        if (null == prodTestContainer) {
+                            try {
+                                Class<? extends SqlTestContainer> containerClass = (Class<? extends SqlTestContainer>) Class.forName(
+                                    this.getClass().getPackageName() + ".PostgreSqlTestContainer"
+                                );
+                                prodTestContainer = beanFactory.createBean(containerClass);
+                                beanFactory.registerSingleton(containerClass.getName(), prodTestContainer);
+                                /**
+                                 * ((DefaultListableBeanFactory)beanFactory).registerDisposableBean(containerClass.getName(), prodTestContainer);
+                                 */
+                            } catch (ClassNotFoundException e) {
+                                throw new RuntimeException(e);
+                            }
                         }
+                        testValues = testValues.and("spring.datasource.url=" + prodTestContainer.getTestContainer().getJdbcUrl() + "");
+                        testValues = testValues.and("spring.datasource.username=" + prodTestContainer.getTestContainer().getUsername());
+                        testValues = testValues.and("spring.datasource.password=" + prodTestContainer.getTestContainer().getPassword());
                     }
-                    testValues = testValues.and("spring.datasource.url=" + prodTestContainer.getTestContainer().getJdbcUrl() + "");
-                    testValues = testValues.and("spring.datasource.username=" + prodTestContainer.getTestContainer().getUsername());
-                    testValues = testValues.and("spring.datasource.password=" + prodTestContainer.getTestContainer().getPassword());
                 }
                 testValues.applyTo(context);
             }

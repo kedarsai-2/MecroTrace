@@ -46,6 +46,12 @@ pipeline {
         DEPLOY_PATH = "${env.UAT_DEPLOY_PATH ?: '/var/www/uatmerco'}"
         SERVICE_NAME = "${env.UAT_SYSTEMD_SERVICE ?: 'uatmerco'}"
         SONAR_HOST_URL = "${env.SONAR_HOST_URL ?: 'http://sonarqube:9000'}"
+        // Set in jenkins/docker-compose.yml for Testcontainers-free integration tests
+        CI_USE_COMPOSE_DB = "${env.CI_USE_COMPOSE_DB ?: ''}"
+        SPRING_DATASOURCE_URL = "${env.SPRING_DATASOURCE_URL ?: ''}"
+        SPRING_DATASOURCE_USERNAME = "${env.SPRING_DATASOURCE_USERNAME ?: ''}"
+        SPRING_DATASOURCE_PASSWORD = "${env.SPRING_DATASOURCE_PASSWORD ?: ''}"
+        JHIPSTER_CACHE_REDIS_SERVER = "${env.JHIPSTER_CACHE_REDIS_SERVER ?: ''}"
     }
 
     stages {

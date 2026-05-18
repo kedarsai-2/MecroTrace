@@ -100,7 +100,21 @@ Standalone SonarQube (JHipster): `docker compose -f server/src/main/docker/sonar
 
 For Jenkins **not** using `jenkins/docker-compose.yml`, set `SONAR_HOST_URL` to a URL reachable from your agent (e.g. `http://sonarqube.company.com:9000`).
 
-## 6. Build tools on the agent
+## 6. Integration tests (PostgreSQL + Redis)
+
+The Jenkins compose stack includes **postgres** and **redis** services. With `CI_USE_COMPOSE_DB=true` (set automatically on the Jenkins service), Maven tests use those databases instead of Testcontainers.
+
+This avoids Docker-in-Docker issues when the Jenkins controller runs inside a container.
+
+Rebuild after changes:
+
+```bash
+cd jenkins && docker compose up -d --build
+```
+
+For a non-compose Jenkins agent, either enable Testcontainers (Docker socket on the agent) or set the same env vars pointing at your CI databases.
+
+## 7. Build tools on the agent
 
 The pipeline uses `agent any`. The [`jenkins/Dockerfile`](Dockerfile) controller image includes **JDK 21**, **Node.js 20**, **sonar-scanner**, git, and rsync.
 
@@ -119,7 +133,7 @@ export DOCKER_GID=$(getent group docker | cut -d: -f3)
 cd jenkins && docker compose up -d --build
 ```
 
-## 7. Customize
+## 8. Customize
 
 - Edit [`casc.yaml`](casc.yaml) credential placeholders for your org.
 - Adjust branch filters / cron in the multibranch job UI.

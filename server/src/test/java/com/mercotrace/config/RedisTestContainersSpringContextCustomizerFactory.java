@@ -28,18 +28,23 @@ public class RedisTestContainersSpringContextCustomizerFactory implements Contex
                 EmbeddedRedis redisAnnotation = AnnotatedElementUtils.findMergedAnnotation(testClass, EmbeddedRedis.class);
                 if (null != redisAnnotation) {
                     log.debug("detected the EmbeddedRedis annotation on class {}", testClass.getName());
-                    log.info("Warming up the redis database");
-                    if (null == redisBean) {
-                        redisBean = beanFactory.createBean(RedisTestContainer.class);
-                        beanFactory.registerSingleton(RedisTestContainer.class.getName(), redisBean);
-                        // ((DefaultListableBeanFactory)beanFactory).registerDisposableBean(RedisTestContainer.class.getName(), redisBean);
+                    if (CiComposeDb.isEnabled()) {
+                        log.info("Using CI compose Redis (CI_USE_COMPOSE_DB=true)");
+                        testValues = CiComposeDb.withRedisProperties(testValues);
+                    } else {
+                        log.info("Warming up the redis database");
+                        if (null == redisBean) {
+                            redisBean = beanFactory.createBean(RedisTestContainer.class);
+                            beanFactory.registerSingleton(RedisTestContainer.class.getName(), redisBean);
+                            // ((DefaultListableBeanFactory)beanFactory).registerDisposableBean(RedisTestContainer.class.getName(), redisBean);
+                        }
+                        testValues = testValues.and(
+                            "jhipster.cache.redis.server=redis://" +
+                            redisBean.getRedisContainer().getContainerIpAddress() +
+                            ":" +
+                            redisBean.getRedisContainer().getMappedPort(6379)
+                        );
                     }
-                    testValues = testValues.and(
-                        "jhipster.cache.redis.server=redis://" +
-                        redisBean.getRedisContainer().getContainerIpAddress() +
-                        ":" +
-                        redisBean.getRedisContainer().getMappedPort(6379)
-                    );
                 }
                 testValues.applyTo(context);
             }
