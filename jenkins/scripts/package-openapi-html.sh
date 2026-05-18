@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Package generated openapi.json with Swagger UI into a browsable HTML zip.
 # Embeds the spec in openapi-spec.js so index.html works via file:// (no fetch/CORS).
+# Swagger UI is initialized with `spec: window.OPENAPI_SPEC` so $ref resolves reliably offline.
 set -euo pipefail
 
 REPO_ROOT="$(cd "${1:-.}" && pwd)"
@@ -28,7 +29,7 @@ spec_path = Path("${OPENAPI_JSON}")
 html_dir = Path("${HTML_DIR}")
 spec = json.loads(spec_path.read_text(encoding="utf-8"))
 
-# Embed spec for offline Swagger UI (Blob URL avoids file:// schema resolver bugs).
+# Embed spec for offline Swagger UI (passed as `spec` in index.html, not Blob URL).
 (html_dir / "openapi-spec.js").write_text(
     "window.OPENAPI_SPEC = " + json.dumps(spec) + ";\n",
     encoding="utf-8",
@@ -80,12 +81,10 @@ cat > "${HTML_DIR}/index.html" <<'EOF'
   <script src="swagger-ui-standalone-preset.js" charset="UTF-8"></script>
   <script>
     window.onload = function () {
-      // Blob URL gives Swagger UI a real document base so #/components/schemas/* refs resolve.
-      const specUrl = URL.createObjectURL(
-        new Blob([JSON.stringify(window.OPENAPI_SPEC)], { type: 'application/json' })
-      );
+      // Pass the spec object directly so Swagger UI resolves #/components/schemas/* without
+      // relying on Blob URL document bases (some browsers show broken refs as plain "string").
       window.ui = SwaggerUIBundle({
-        url: specUrl,
+        spec: window.OPENAPI_SPEC,
         dom_id: '#swagger-ui',
         deepLinking: true,
         validatorUrl: null,
