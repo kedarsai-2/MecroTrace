@@ -33,6 +33,7 @@ import tech.jhipster.config.cache.PrefixedKeyGenerator;
 
 @Configuration
 @EnableCaching
+@Profile("!openapi-ci")
 public class CacheConfiguration {
 
     private GitProperties gitProperties;

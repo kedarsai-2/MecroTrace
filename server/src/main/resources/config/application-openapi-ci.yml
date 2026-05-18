@@ -1,0 +1,73 @@
+# Profile for Jenkins / CI OpenAPI export (H2 in-memory, no Redis, no PostgreSQL).
+spring:
+  datasource:
+    type: com.zaxxer.hikari.HikariDataSource
+    url: jdbc:h2:mem:mercotrace-openapi;DB_CLOSE_DELAY=-1;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH
+    driver-class-name: org.h2.Driver
+    username: mercotrace
+    password:
+    hikari:
+      poolName: Hikari-OpenAPI
+      auto-commit: false
+  liquibase:
+    enabled: false
+  jpa:
+    hibernate:
+      ddl-auto: create
+    properties:
+      hibernate.cache.use_second_level_cache: false
+      hibernate.cache.use_query_cache: false
+  mail:
+    host: localhost
+    port: 25
+    username:
+    password:
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.autoconfigure.data.redis.RedisAutoConfiguration
+
+server:
+  port: 18080
+
+management:
+  endpoint:
+    health:
+      show-details: always
+
+logging:
+  level:
+    ROOT: WARN
+    com.mercotrace: INFO
+
+jhipster:
+  cache:
+    redis:
+      expiration: 3600
+      server: redis://127.0.0.1:6379
+      cluster: false
+  security:
+    authentication:
+      jwt:
+        base64-secret: MjQwMjlmMDVhODg4MDUwZGJjMDllZjU5Njg3NGY3MGZjOTlkNjU0MjU5YmJlYzVjMTA5ZDEwYjlkMTM3OGE5ZmM0ZThkNWVjY2MwNmRhZjI0OTc2ZDFiZjE0ZDk2ZGMyZDk3MzY4NWFkYWRlNzlkNDdhZDQ4ODE2OTA0MjE4NzE=
+        token-validity-in-seconds: 86400
+        token-validity-in-seconds-for-remember-me: 7776000
+  mail:
+    base-url: http://127.0.0.1:18080
+
+otp:
+  fast2sms:
+    base-url: https://www.fast2sms.com/dev/bulkV2
+    api-key: openapi-ci-placeholder
+    sender-id: MERCO
+    route: dlt
+    message-id: "0"
+    flash: "0"
+
+application:
+  liquibase:
+    async-start: false
+  security:
+    access-token-validity-in-seconds: 86400
+    refresh-token-rotation-grace-seconds: 15
+    cookie:
+      secure: false

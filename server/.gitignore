@@ -74,6 +74,7 @@ out/
 /log/
 /target/
 /mercotrace-javadoc-*.zip
+/mercotrace-openapi-*.zip
 
 ######################
 # Gradle

@@ -1,4 +1,4 @@
-// CI pipeline — unit tests only (no Docker DB), optional JavaDoc, SonarQube, deploy.
+// CI pipeline — unit tests only (no Docker DB), optional OpenAPI HTML, JavaDoc, SonarQube, deploy.
 //
 // Tools: Java 21, Node 20 (client tests), SonarQubeScanner (Global Tool Configuration)
 // Credential: sonar-token (Secret text)
@@ -27,6 +27,11 @@ pipeline {
             name: 'GENERATE_JAVADOC',
             defaultValue: true,
             description: 'Generate downloadable HTML JavaDoc zip.'
+        )
+        booleanParam(
+            name: 'GENERATE_OPENAPI_HTML',
+            defaultValue: true,
+            description: 'Export OpenAPI spec and build downloadable Swagger UI HTML zip (no Docker DB).'
         )
         booleanParam(
             name: 'RUN_SONAR',
@@ -120,6 +125,18 @@ pipeline {
                     test -n "${SONAR_RUNNER_HOME}"
                     "${SONAR_RUNNER_HOME}/bin/sonar-scanner" -v
                 '''
+            }
+        }
+
+        stage('OpenAPI (Swagger HTML)') {
+            when {
+                expression { params.GENERATE_OPENAPI_HTML }
+            }
+            steps {
+                sh 'bash jenkins/scripts/generate-openapi.sh .'
+                sh 'bash jenkins/scripts/package-openapi-html.sh . "${SHORT_SHA}"'
+                archiveArtifacts artifacts: 'server/mercotrace-openapi-*.zip', fingerprint: true, onlyIfSuccessful: true
+                archiveArtifacts artifacts: 'server/target/swagger-html/**', fingerprint: true, onlyIfSuccessful: true
             }
         }
 
