@@ -1,6 +1,6 @@
 // CI pipeline — unit tests only (no Docker DB), optional OpenAPI HTML, JavaDoc, SonarQube, deploy.
 //
-// Tools: Java 21, Node 20 (client tests), SonarQubeScanner (Global Tool Configuration)
+// Tools: Java 21, Node 20 (client tests only), curl/python3 (OpenAPI/Postman), SonarQubeScanner
 // Credential: sonar-token (Secret text)
 // Env: SONAR_HOST_URL (default http://localhost:9000)
 
@@ -133,25 +133,11 @@ pipeline {
                 expression { params.GENERATE_OPENAPI_HTML }
             }
             steps {
-                script {
-                    // Postman export needs npx even when client unit tests are skipped.
-                    def nodeTool = env.JENKINS_NODEJS_INSTALLATION?.trim() ?: 'nodejs20'
-                    try {
-                        env.NODEJS_HOME = tool nodeTool
-                        env.PATH = "${env.NODEJS_HOME}/bin:${env.PATH}"
-                        echo "Using Jenkins Node.js tool: ${nodeTool} (${env.NODEJS_HOME})"
-                    } catch (ignored) {
-                        echo "Node.js tool '${nodeTool}' not configured — using node/npx from agent PATH"
-                    }
-                }
                 sh '''
                     set -euo pipefail
                     command -v java >/dev/null || { echo "java not found on PATH" >&2; exit 1; }
-                    command -v npx >/dev/null || {
-                      echo "npx not found — install Node.js 20+ or configure Jenkins Global Tool 'nodejs20' (set env JENKINS_NODEJS_INSTALLATION)" >&2
-                      exit 1
-                    }
-                    echo "node $(node --version) npx $(npx --version)"
+                    command -v curl >/dev/null || { echo "curl not found on PATH" >&2; exit 1; }
+                    command -v python3 >/dev/null || { echo "python3 not found on PATH" >&2; exit 1; }
                     bash jenkins/scripts/generate-openapi.sh .
                     bash jenkins/scripts/generate-postman-collection.sh . "${SHORT_SHA}"
                     bash jenkins/scripts/package-openapi-html.sh . "${SHORT_SHA}"

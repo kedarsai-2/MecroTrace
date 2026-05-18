@@ -15,13 +15,12 @@ Integration tests (`*IT.java`, `@IntegrationTest`) are **not** run in Jenkins.
 
 | Tool | Purpose |
 |------|---------|
-| Java 21+ | `server/mvnw test` |
-| Node.js 20+ | `client/npm run test` |
-| `curl`, `zip` | OpenAPI HTML packaging (Swagger UI download) |
-| Node.js 20+ (`npx`) | OpenAPI → Postman collection conversion (required even if client tests are off) |
-
-**Jenkins Node.js tool (recommended):** Global Tool Configuration → NodeJS → name `nodejs20` (or set job/env `JENKINS_NODEJS_INSTALLATION` to your tool name). The OpenAPI stage prepends that `bin` to `PATH` before Postman export.
+| Java 21+ | Server Maven build, OpenAPI export, Postman collection (`openapi-generator-cli`) |
+| Node.js 20+ | Client unit tests only (`npm run test`) |
+| `curl`, `zip`, `python3` | OpenAPI/Postman scripts and Swagger UI zip packaging |
 | SonarQubeScanner | Only if **RUN_SONAR** is enabled (Global Tool name: `SonarQubeScanner`) |
+
+Postman export does **not** require Node.js/npx on the agent.
 
 ## Jenkins setup
 
@@ -59,7 +58,7 @@ The same zip also contains `openapi.json` and `mercotrace.postman_collection.jso
 2. **Build Artifacts** → download `mercotrace-postman-<sha>.json`.
 3. In Postman: **Import** → select the file (Collection v2.1).
 
-The collection is generated from the same OpenAPI export as Swagger UI (`openapi-to-postmanv2`). Set collection variables / environment base URL to your server (e.g. UAT) after import.
+The collection is generated from the same OpenAPI export as Swagger UI (OpenAPI Generator `postman-collection`). Set collection variables / environment base URL to your server (e.g. UAT) after import.
 
 Uses Spring profiles `api-docs`, `openapi-ci`, `no-liquibase` (in-memory H2, Hibernate `ddl-auto: create`, no Redis/PostgreSQL/Docker).
 
