@@ -15,6 +15,9 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.servlet.support.ServletUriComponentsBuilder;
 import tech.jhipster.web.util.PaginationUtil;
 
+/**
+ * REST API for Public User.
+ */
 @RestController
 @RequestMapping("/api")
 public class PublicUserResource {

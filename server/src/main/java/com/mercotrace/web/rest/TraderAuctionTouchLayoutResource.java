@@ -15,6 +15,9 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+/**
+ * REST API for Trader Auction Touch Layout.
+ */
 @RestController
 @RequestMapping("/api/trader/auction-touch-layout")
 public class TraderAuctionTouchLayoutResource {

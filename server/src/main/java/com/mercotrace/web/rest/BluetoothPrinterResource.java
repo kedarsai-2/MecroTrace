@@ -16,6 +16,9 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
+/**
+ * REST API for Bluetooth Printer.
+ */
 @RestController
 @RequestMapping("/api/trader/bluetooth-printers")
 public class BluetoothPrinterResource {

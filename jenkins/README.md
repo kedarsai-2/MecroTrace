@@ -65,9 +65,31 @@ Add `SONAR_SCANNER_HOME` to the Jenkins agent environment if `sonar-scanner` is 
 
 | Parameter | Default | Purpose |
 |-----------|---------|---------|
-| `SONAR_ONLY` | ✓ true | SonarQube only — skip package and deploy |
-| `PROD_PACKAGE` | false | Build JARs after SonarQube (when `SONAR_ONLY` is false) |
+| `SONAR_ONLY` | ✓ true | SonarQube + JavaDoc only — skip package and deploy |
+| `GENERATE_JAVADOC` | ✓ true | HTML JavaDoc under `server/target/apidocs/` + Checkstyle on `*Resource`/`*Controller` |
+| `PROD_PACKAGE` | false | Build JARs (when `SONAR_ONLY` is false) |
 | `DEPLOY_UAT` | false | Deploy to UAT on `main` (when `SONAR_ONLY` is false) |
+
+**JavaDoc rules:** every `*Resource.java` and `*Controller.java` must have a class-level `/** ... */` comment (`checkstyle-javadoc.xml`).
+
+### Download JavaDoc HTML
+
+After a successful build with **GENERATE_JAVADOC** enabled:
+
+1. Open the build in Jenkins → **Build Artifacts** (left sidebar).
+2. Download **`mercotrace-javadoc-<git-sha>.zip`** (e.g. `mercotrace-javadoc-a1b2c3d.zip`).
+3. Unzip and open **`index.html`** in a browser.
+
+You can also browse individual files under `server/target/javadoc-html/` in the same Artifacts list.
+
+Local command:
+
+```bash
+cd server
+./mvnw -DskipTests -Pjavadoc-ci compile javadoc:javadoc
+bash ../jenkins/scripts/package-javadoc.sh .. local
+open target/javadoc-html/index.html   # or: unzip mercotrace-javadoc-local.zip
+```
 
 ## 4. Manual run (without Jenkins)
 

@@ -11,7 +11,12 @@ pipeline {
         booleanParam(
             name: 'SONAR_ONLY',
             defaultValue: true,
-            description: 'Run only SonarQube analysis (skip package and deploy).'
+            description: 'Run only SonarQube + JavaDoc (skip package and deploy).'
+        )
+        booleanParam(
+            name: 'GENERATE_JAVADOC',
+            defaultValue: true,
+            description: 'Generate HTML JavaDoc and verify REST layer has class comments.'
         )
         booleanParam(
             name: 'PROD_PACKAGE',
@@ -60,6 +65,22 @@ pipeline {
                     test -x "${SONAR_RUNNER_HOME}/bin/sonar-scanner" || { echo "ERROR: sonar-scanner missing under ${SONAR_RUNNER_HOME}/bin" >&2; exit 1; }
                     "${SONAR_RUNNER_HOME}/bin/sonar-scanner" -v
                 '''
+            }
+        }
+
+        stage('JavaDoc') {
+            when {
+                expression { params.GENERATE_JAVADOC }
+            }
+            steps {
+                dir('server') {
+                    sh '''
+                        ./mvnw -ntp -DskipTests -Pjavadoc-ci compile javadoc:javadoc checkstyle:check@verify-rest-javadoc
+                    '''
+                }
+                sh 'bash jenkins/scripts/package-javadoc.sh . "${SHORT_SHA}"'
+                archiveArtifacts artifacts: 'server/mercotrace-javadoc-*.zip', fingerprint: true, onlyIfSuccessful: true
+                archiveArtifacts artifacts: 'server/target/javadoc-html/**', fingerprint: true, onlyIfSuccessful: true
             }
         }
 

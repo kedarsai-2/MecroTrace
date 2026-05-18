@@ -22,6 +22,9 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 
+/**
+ * REST API for Trader Multi Account.
+ */
 @RestController
 @RequestMapping("/api/trader/multi-accounts")
 public class TraderMultiAccountResource {

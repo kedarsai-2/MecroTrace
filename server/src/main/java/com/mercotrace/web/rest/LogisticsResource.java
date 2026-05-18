@@ -42,6 +42,9 @@ public class LogisticsResource {
         return ResponseEntity.ok(result);
     }
 
+    /**
+     * Payload type for Daily Serials Request.
+     */
     public static class DailySerialsRequest {
         private List<String> sellerNames = List.of();
         private List<String> lotIds = List.of();

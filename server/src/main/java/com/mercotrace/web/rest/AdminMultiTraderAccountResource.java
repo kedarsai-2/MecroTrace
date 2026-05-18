@@ -23,6 +23,9 @@ import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.servlet.support.ServletUriComponentsBuilder;
 import tech.jhipster.web.util.PaginationUtil;
 
+/**
+ * REST API for Admin Multi Trader Account.
+ */
 @RestController
 @RequestMapping("/api/admin/multi-trader-accounts")
 @PreAuthorize("hasAuthority(\"" + AuthoritiesConstants.ADMIN + "\")")

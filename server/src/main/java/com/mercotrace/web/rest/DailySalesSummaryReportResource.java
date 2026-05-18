@@ -17,6 +17,9 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+/**
+ * REST API for Daily Sales Summary Report.
+ */
 @RestController
 @RequestMapping
 @Tag(name = "DailySalesSummaryReport", description = "Daily sales summary metrics for trader reports")
