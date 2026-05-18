@@ -98,21 +98,29 @@ Config: [`server/sonar-project.properties`](../server/sonar-project.properties),
 
 Standalone SonarQube (JHipster): `docker compose -f server/src/main/docker/sonar.yml up -d` on port **9001**.
 
-For Jenkins **not** using `jenkins/docker-compose.yml`, set `SONAR_HOST_URL` (e.g. `http://sonarqube.company.com:9000`) and remove or change the `args '--network=mercotrace-ci'` line in `Jenkinsfile` if the network does not exist.
+For Jenkins **not** using `jenkins/docker-compose.yml`, set `SONAR_HOST_URL` to a URL reachable from your agent (e.g. `http://sonarqube.company.com:9000`).
 
-## 6. Agent image
+## 6. Build tools on the agent
 
-The pipeline uses [`agent/Dockerfile`](agent/Dockerfile) (Node 20 + JDK 21). The Jenkins controller must have Docker available (see `docker-compose.yml` mounting `/var/run/docker.sock`).
+The pipeline uses `agent any`. The [`jenkins/Dockerfile`](Dockerfile) controller image includes **JDK 21**, **Node.js 20**, **sonar-scanner**, git, and rsync.
 
-On Linux, if Docker permission errors occur:
+After changing the Dockerfile, rebuild:
+
+```bash
+cd jenkins && docker compose up -d --build
+```
+
+On a shared Jenkins controller (not this image), install the same tools on the agent node or use **Manage Jenkins → Global Tool Configuration** for JDK 21 and Node.js 20.
+
+On Linux, if Docker permission errors occur when using the bundled compose stack:
 
 ```bash
 export DOCKER_GID=$(getent group docker | cut -d: -f3)
-cd jenkins && docker compose up -d
+cd jenkins && docker compose up -d --build
 ```
 
 ## 7. Customize
 
-- Edit [`casc.yaml`](casc.yaml) repo URL and credential placeholders for your org.
+- Edit [`casc.yaml`](casc.yaml) credential placeholders for your org.
 - Adjust branch filters / cron in the multibranch job UI.
-- For agents without Docker, change `agent { dockerfile { ... } }` in `Jenkinsfile` to `agent any` and install **JDK 21** and **Node.js 20** via Jenkins **Global Tool Configuration**.
+- `SONAR_HOST_URL` must be reachable from the Jenkins agent (e.g. `http://sonarqube:9000` on the compose network, or your org SonarQube URL).

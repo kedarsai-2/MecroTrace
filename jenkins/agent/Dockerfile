@@ -1,4 +1,5 @@
-# CI agent: Node 20 + Temurin JDK 21 + tools used by Jenkinsfile deploy stage.
+# Optional standalone CI image (same tools as jenkins/Dockerfile).
+# The Jenkinsfile uses agent any on the controller; use this image only if you run a separate Jenkins agent container.
 FROM eclipse-temurin:21-jdk-jammy
 
 ARG NODE_MAJOR=20

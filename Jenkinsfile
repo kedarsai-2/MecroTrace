@@ -1,5 +1,5 @@
 // MercoTrace CI/CD — mirrors .github/workflows/deploy-uat.yml where noted.
-// Agent image: jenkins/agent/Dockerfile (Node 20 + Temurin JDK 21).
+// Runs on the Jenkins agent (agent any). Local docker-compose image includes Node 20 + JDK 21 + sonar-scanner.
 // Credential IDs (configure in Jenkins → Manage Credentials):
 //   uat-ssh          SSH Username with private key (UAT VPS)
 //   uat-vite-api-url Secret text — VITE_API_URL for client prod build
@@ -9,15 +9,7 @@
 //   UAT_SSH_USER, UAT_SSH_HOST, UAT_DEPLOY_PATH, UAT_SYSTEMD_SERVICE, UAT_HEALTH_URL
 
 pipeline {
-    agent {
-        dockerfile {
-            filename 'jenkins/agent/Dockerfile'
-            dir '.'
-            reuseNode true
-            // Set DOCKER_AGENT_ARGS=--network=mercotrace-ci when using jenkins/docker-compose.yml
-            args "${env.DOCKER_AGENT_ARGS ?: ''}"
-        }
-    }
+    agent any
 
     parameters {
         booleanParam(

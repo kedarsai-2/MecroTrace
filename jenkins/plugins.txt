@@ -1,7 +1,6 @@
 # Bundled into jenkins/Dockerfile — versions resolved at image build time.
 configuration-as-code
 credentials-binding
-docker-workflow
 git
 junit
 pipeline-stage-view
