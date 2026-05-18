@@ -30,7 +30,9 @@ Create a **Pipeline** job → Script Path: `Jenkinsfile` → **Build Now**.
 
 | Parameter | Default | Purpose |
 |-----------|---------|---------|
-| `RUN_UNIT_TESTS` | ✓ | Server + client unit tests (no DB) |
+| `RUN_UNIT_TESTS` | ✓ | Master switch for unit tests |
+| `RUN_SERVER_UNIT_TESTS` | ✓ | Server Surefire only (no DB) |
+| `RUN_CLIENT_UNIT_TESTS` | ✓ | Client Vitest (no Docker) |
 | `GENERATE_JAVADOC` | ✓ | JavaDoc HTML zip |
 | `RUN_SONAR` | ✓ | SonarQube upload |
 | `SONAR_ONLY` | ✓ | Skip package / deploy |

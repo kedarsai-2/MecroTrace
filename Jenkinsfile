@@ -11,7 +11,17 @@ pipeline {
         booleanParam(
             name: 'RUN_UNIT_TESTS',
             defaultValue: true,
-            description: 'Run server unit tests (Surefire, no DB) and client Vitest (no Docker).'
+            description: 'Master switch: run any unit tests below (no Docker / DB).'
+        )
+        booleanParam(
+            name: 'RUN_SERVER_UNIT_TESTS',
+            defaultValue: true,
+            description: 'Server: ./mvnw -Punit-tests-ci test (Surefire only, excludes integration).'
+        )
+        booleanParam(
+            name: 'RUN_CLIENT_UNIT_TESTS',
+            defaultValue: true,
+            description: 'Client: npm run test (Vitest, no Docker).'
         )
         booleanParam(
             name: 'GENERATE_JAVADOC',
@@ -62,10 +72,15 @@ pipeline {
 
         stage('Unit tests') {
             when {
-                expression { params.RUN_UNIT_TESTS }
+                expression {
+                    params.RUN_UNIT_TESTS && (params.RUN_SERVER_UNIT_TESTS || params.RUN_CLIENT_UNIT_TESTS)
+                }
             }
             parallel {
                 stage('Server (unit)') {
+                    when {
+                        expression { params.RUN_UNIT_TESTS && params.RUN_SERVER_UNIT_TESTS }
+                    }
                     steps {
                         dir('server') {
                             sh '''
@@ -80,6 +95,9 @@ pipeline {
                     }
                 }
                 stage('Client (unit)') {
+                    when {
+                        expression { params.RUN_UNIT_TESTS && params.RUN_CLIENT_UNIT_TESTS }
+                    }
                     steps {
                         dir('client') {
                             sh 'npm ci && npm run test'
@@ -140,10 +158,15 @@ pipeline {
                                 ]) {
                                     dir('server') {
                                         sh '''
+                                            SONAR_EXTRA=""
+                                            if [ -d target/surefire-reports ]; then
+                                              SONAR_EXTRA="-Dsonar.junit.reportPaths=target/surefire-reports"
+                                            fi
                                             ./mvnw -ntp -DskipTests -Dmodernizer.skip=true compile sonar:sonar \
                                               -Dsonar.host.url="${SONAR_HOST_URL}" \
                                               -Dsonar.token="${SONAR_TOKEN}" \
-                                              -Dsonar.projectVersion="${SHORT_SHA}"
+                                              -Dsonar.projectVersion="${SHORT_SHA}" \
+                                              ${SONAR_EXTRA}
                                         '''
                                     }
                                 }
