@@ -35,18 +35,24 @@ Add `SONAR_SCANNER_HOME` to the Jenkins agent environment if `sonar-scanner` is 
 
 ## 2. Jenkins configuration
 
+**Global Tool Configuration** → **SonarQube Scanner** → add installation:
+
+| Field | Value |
+|-------|--------|
+| Name | `SonarScanner` (must match `Jenkinsfile` exactly) |
+| Install automatically | ✓ e.g. SonarQube Scanner 8.0.1.6346 from Maven Central |
+
 **Credential** (Manage Jenkins → Credentials):
 
 | ID | Type | Value |
 |----|------|--------|
 | `sonar-token` | Secret text | Your SonarQube token (`sqa_…`) |
 
-**Environment** (Manage Jenkins → System → Global properties → Environment variables):
+**Environment** (optional, Manage Jenkins → System):
 
 | Name | Value |
 |------|--------|
-| `SONAR_HOST_URL` | `http://localhost:9000` (or your SonarQube URL) |
-| `SONAR_SCANNER_HOME` | Optional — if scanner is not on `PATH` |
+| `SONAR_HOST_URL` | `http://localhost:9000` |
 
 ## 3. Create the job
 
@@ -55,7 +61,13 @@ Add `SONAR_SCANNER_HOME` to the Jenkins agent environment if `sonar-scanner` is 
 3. Script Path: `Jenkinsfile`
 4. **Build Now**
 
-No parameters needed for SonarQube-only runs.
+**Build parameters:**
+
+| Parameter | Default | Purpose |
+|-----------|---------|---------|
+| `SONAR_ONLY` | ✓ true | SonarQube only — skip package and deploy |
+| `PROD_PACKAGE` | false | Build JARs after SonarQube (when `SONAR_ONLY` is false) |
+| `DEPLOY_UAT` | false | Deploy to UAT on `main` (when `SONAR_ONLY` is false) |
 
 ## 4. Manual run (without Jenkins)
 
@@ -75,13 +87,6 @@ sonar-scanner \
 ```
 
 View results: http://localhost:9000
-
-## Optional job parameters
-
-| Parameter | Purpose |
-|-----------|---------|
-| `PROD_PACKAGE` | Build client + server after SonarQube |
-| `DEPLOY_UAT` | Deploy to UAT on `main` |
 
 ## Optional: run SonarQube server with Docker
 

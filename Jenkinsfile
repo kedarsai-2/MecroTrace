@@ -1,28 +1,31 @@
 // SonarQube static analysis — no Docker, no tests.
 //
-// Jenkins agent requirements (install on the machine that runs the job):
-//   - Java 21+  (for ./mvnw)
-//   - sonar-scanner on PATH, or set SONAR_SCANNER_HOME
-//
-// Jenkins credentials:
-//   sonar-token  — Secret text (SonarQube user token)
-//
-// Optional global env (Manage Jenkins → System):
-//   SONAR_HOST_URL  — default http://localhost:9000
+// Jenkins Global Tool Configuration → SonarQube Scanner → Name: SonarScanner
+// Jenkins credential: sonar-token (Secret text)
+// Optional env: SONAR_HOST_URL (default http://localhost:9000)
 
 pipeline {
     agent any
 
+    tools {
+        sonarScanner 'SonarScanner'
+    }
+
     parameters {
         booleanParam(
-            name: 'DEPLOY_UAT',
-            defaultValue: false,
-            description: 'Deploy to UAT after analysis (main only; requires UAT credentials).'
+            name: 'SONAR_ONLY',
+            defaultValue: true,
+            description: 'Run only SonarQube analysis (skip package and deploy).'
         )
         booleanParam(
             name: 'PROD_PACKAGE',
             defaultValue: false,
-            description: 'Build production client + server JAR after SonarQube (no tests).'
+            description: 'Build production client + server JAR after SonarQube (ignored when SONAR_ONLY is true).'
+        )
+        booleanParam(
+            name: 'DEPLOY_UAT',
+            defaultValue: false,
+            description: 'Deploy to UAT on main after package (ignored when SONAR_ONLY is true).'
         )
     }
 
@@ -37,7 +40,6 @@ pipeline {
         SONAR_HOST_URL = "${env.SONAR_HOST_URL ?: 'http://localhost:9000'}"
         DEPLOY_PATH = "${env.UAT_DEPLOY_PATH ?: '/var/www/uatmerco'}"
         SERVICE_NAME = "${env.UAT_SYSTEMD_SERVICE ?: 'uatmerco'}"
-        SONAR_SCANNER = "${env.SONAR_SCANNER_HOME ? env.SONAR_SCANNER_HOME + '/bin/sonar-scanner' : 'sonar-scanner'}"
     }
 
     stages {
@@ -52,16 +54,12 @@ pipeline {
                 sh '''
                     set -e
                     echo "SONAR_HOST_URL=${SONAR_HOST_URL}"
+                    echo "SONAR_RUNNER_HOME=${SONAR_RUNNER_HOME}"
                     java -version
                     test -x server/mvnw
-                    if command -v sonar-scanner >/dev/null 2>&1; then
-                      sonar-scanner -v
-                    elif [ -n "${SONAR_SCANNER_HOME:-}" ] && [ -x "${SONAR_SCANNER_HOME}/bin/sonar-scanner" ]; then
-                      "${SONAR_SCANNER_HOME}/bin/sonar-scanner" -v
-                    else
-                      echo "ERROR: sonar-scanner not found. Install CLI or set SONAR_SCANNER_HOME on the Jenkins agent." >&2
-                      exit 1
-                    fi
+                    test -n "${SONAR_RUNNER_HOME}" || { echo "ERROR: SONAR_RUNNER_HOME not set — check Global Tool Configuration name is SonarScanner" >&2; exit 1; }
+                    test -x "${SONAR_RUNNER_HOME}/bin/sonar-scanner" || { echo "ERROR: sonar-scanner missing under ${SONAR_RUNNER_HOME}/bin" >&2; exit 1; }
+                    "${SONAR_RUNNER_HOME}/bin/sonar-scanner" -v
                 '''
             }
         }
@@ -98,7 +96,7 @@ pipeline {
                                 ]) {
                                     dir('client') {
                                         sh '''
-                                            "${SONAR_SCANNER}" \
+                                            "${SONAR_RUNNER_HOME}/bin/sonar-scanner" \
                                               -Dsonar.host.url="${SONAR_HOST_URL}" \
                                               -Dsonar.token="${SONAR_TOKEN}" \
                                               -Dsonar.projectVersion="${SHORT_SHA}"
@@ -114,7 +112,10 @@ pipeline {
 
         stage('Package (prod)') {
             when {
-                expression { params.PROD_PACKAGE }
+                allOf {
+                    expression { !params.SONAR_ONLY }
+                    expression { params.PROD_PACKAGE }
+                }
             }
             parallel {
                 stage('Client build') {
@@ -151,6 +152,7 @@ pipeline {
         stage('Deploy UAT') {
             when {
                 allOf {
+                    expression { !params.SONAR_ONLY }
                     branch 'main'
                     expression { params.DEPLOY_UAT }
                 }
@@ -191,10 +193,10 @@ pipeline {
 
     post {
         success {
-            echo "SonarQube analysis completed for ${SHORT_SHA} — ${SONAR_HOST_URL}"
+            echo "Build ${SHORT_SHA} finished — SonarQube: ${SONAR_HOST_URL}"
         }
         failure {
-            echo 'Pipeline failed — check logs, sonar-token credential, and agent tools (Java 21, sonar-scanner).'
+            echo 'Pipeline failed — check sonar-token, SONAR_HOST_URL, and Global Tool Configuration (SonarScanner).'
         }
     }
 }
