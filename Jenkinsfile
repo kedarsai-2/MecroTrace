@@ -1,32 +1,42 @@
-// SonarQube static analysis — no Docker, no tests.
+// CI pipeline — unit tests only (no Docker DB), optional JavaDoc, SonarQube, deploy.
 //
-// Jenkins Global Tool Configuration → SonarQube Scanner → Name: SonarQubeScanner
-// Jenkins credential: sonar-token (Secret text)
-// Optional env: SONAR_HOST_URL (default http://localhost:9000)
+// Tools: Java 21, Node 20 (client tests), SonarQubeScanner (Global Tool Configuration)
+// Credential: sonar-token (Secret text)
+// Env: SONAR_HOST_URL (default http://localhost:9000)
 
 pipeline {
     agent any
 
     parameters {
         booleanParam(
-            name: 'SONAR_ONLY',
+            name: 'RUN_UNIT_TESTS',
             defaultValue: true,
-            description: 'Run only SonarQube + JavaDoc (skip package and deploy).'
+            description: 'Run server unit tests (Surefire, no DB) and client Vitest (no Docker).'
         )
         booleanParam(
             name: 'GENERATE_JAVADOC',
             defaultValue: true,
-            description: 'Generate HTML JavaDoc and verify REST layer has class comments.'
+            description: 'Generate downloadable HTML JavaDoc zip.'
+        )
+        booleanParam(
+            name: 'RUN_SONAR',
+            defaultValue: true,
+            description: 'Publish server + client analysis to SonarQube.'
+        )
+        booleanParam(
+            name: 'SONAR_ONLY',
+            defaultValue: true,
+            description: 'Skip production package and UAT deploy (tests + quality gates only).'
         )
         booleanParam(
             name: 'PROD_PACKAGE',
             defaultValue: false,
-            description: 'Build production client + server JAR after SonarQube (ignored when SONAR_ONLY is true).'
+            description: 'Build production JARs (when SONAR_ONLY is false).'
         )
         booleanParam(
             name: 'DEPLOY_UAT',
             defaultValue: false,
-            description: 'Deploy to UAT on main after package (ignored when SONAR_ONLY is true).'
+            description: 'Deploy to UAT on main (when SONAR_ONLY is false).'
         )
     }
 
@@ -50,19 +60,46 @@ pipeline {
             }
         }
 
-        stage('Check tools') {
+        stage('Unit tests') {
+            when {
+                expression { params.RUN_UNIT_TESTS }
+            }
+            parallel {
+                stage('Server (unit)') {
+                    steps {
+                        dir('server') {
+                            sh '''
+                                ./mvnw -ntp -Punit-tests-ci -Dmodernizer.skip=true test
+                            '''
+                        }
+                    }
+                    post {
+                        always {
+                            junit allowEmptyResults: true, testResults: 'server/target/surefire-reports/*.xml'
+                        }
+                    }
+                }
+                stage('Client (unit)') {
+                    steps {
+                        dir('client') {
+                            sh 'npm ci && npm run test'
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Prepare SonarQube scanner') {
+            when {
+                expression { params.RUN_SONAR }
+            }
             steps {
                 script {
                     env.SONAR_RUNNER_HOME = tool 'SonarQubeScanner'
                 }
                 sh '''
                     set -e
-                    echo "SONAR_HOST_URL=${SONAR_HOST_URL}"
-                    echo "SONAR_RUNNER_HOME=${SONAR_RUNNER_HOME}"
-                    java -version
-                    test -x server/mvnw
-                    test -n "${SONAR_RUNNER_HOME}" || { echo "ERROR: SONAR_RUNNER_HOME not set — Global Tool name must be SonarQubeScanner" >&2; exit 1; }
-                    test -x "${SONAR_RUNNER_HOME}/bin/sonar-scanner" || { echo "ERROR: sonar-scanner missing under ${SONAR_RUNNER_HOME}/bin" >&2; exit 1; }
+                    test -n "${SONAR_RUNNER_HOME}"
                     "${SONAR_RUNNER_HOME}/bin/sonar-scanner" -v
                 '''
             }
@@ -85,6 +122,9 @@ pipeline {
         }
 
         stage('SonarQube') {
+            when {
+                expression { params.RUN_SONAR }
+            }
             stages {
                 stage('Wait for SonarQube') {
                     steps {
@@ -213,10 +253,10 @@ pipeline {
 
     post {
         success {
-            echo "Build ${SHORT_SHA} finished — SonarQube: ${SONAR_HOST_URL}"
+            echo "Build ${SHORT_SHA} finished."
         }
         failure {
-            echo 'Pipeline failed — check sonar-token, SONAR_HOST_URL, and Global Tool Configuration (SonarQubeScanner).'
+            echo 'Pipeline failed — see stage logs (unit tests need Java 21 + Node 20 only; no Docker DB).'
         }
     }
 }
