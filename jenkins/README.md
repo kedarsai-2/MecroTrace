@@ -66,7 +66,14 @@ Create a **Pipeline** job → Script Path: `Jenkinsfile` → **Build Now**.
 | `GENERATE_OPENAPI_HTML` | ✓ | OpenAPI JSON + Postman collection + Swagger UI HTML zip |
 | `GENERATE_JAVADOC` | ✓ | JavaDoc HTML zip |
 
-**Sonar-only job:** enable **`SONAR_ONLY`** only. Server and client unit tests always run; results are sent to SonarQube (`mercotrace` + `mercotrace-client`). Requires `sonar-token` and the **SonarQubeScanner** global tool.
+**Sonar-only job:** enable **`SONAR_ONLY`** only.
+
+1. **Unit tests** — server (`-Punit-tests-ci`, no Docker / no `*IT` / no `@IntegrationTest`) and client (Vitest).
+2. **SonarQube** — analysis only (`-DskipTests` on Maven; does **not** start Testcontainers or re-run tests).
+
+If you see `ApplicationContext` / `Could not find a valid Docker environment`, the job is running **integration** tests (`*IT`, `@IntegrationTest`) — that should not happen with `-Punit-tests-ci`. Re-run with the current `Jenkinsfile` and `run-server-unit-tests.sh`.
+
+Requires `sonar-token` and the **SonarQubeScanner** global tool.
 
 **Client tests:** If the job previously had `RUN_UNIT_TESTS` unchecked, re-run with **`RUN_CLIENT_UNIT_TESTS`** enabled (that old parameter was removed).
 

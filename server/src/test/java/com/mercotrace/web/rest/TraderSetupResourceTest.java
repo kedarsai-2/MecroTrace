@@ -7,6 +7,7 @@
 package com.mercotrace.web.rest;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -492,7 +493,7 @@ class TraderSetupResourceTest {
         @DisplayName("adminListTraders_withAdminRole_returns200")
         void adminListTraders_withAdminRole_returns200() throws Exception {
             List<TraderDTO> content = List.of(validTraderDTO);
-            when(traderQueryService.findByCriteria(any(), any(Pageable.class)))
+            when(traderQueryService.findByCriteria(any(), any(Pageable.class), anyString()))
                 .thenReturn(new PageImpl<>(content));
 
             mockMvc
@@ -501,7 +502,7 @@ class TraderSetupResourceTest {
                 .andExpect(content().contentType(MediaType.APPLICATION_JSON))
                 .andExpect(jsonPath("$").isArray());
 
-            verify(traderQueryService).findByCriteria(any(), any(Pageable.class));
+            verify(traderQueryService).findByCriteria(any(), any(Pageable.class), anyString());
         }
 
         @Test
@@ -513,7 +514,7 @@ class TraderSetupResourceTest {
                 .perform(get(ADMIN_TRADERS_API))
                 .andExpect(status().isForbidden());
 
-            verify(traderQueryService, never()).findByCriteria(any(), any(Pageable.class));
+            verify(traderQueryService, never()).findByCriteria(any(), any(Pageable.class), anyString());
         }
 
         @Test

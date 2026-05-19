@@ -61,6 +61,13 @@ pipeline {
                         params.RUN_CLIENT_UNIT_TESTS
                 }
             }
+            steps {
+                script {
+                    if (params.SONAR_ONLY) {
+                        echo 'SONAR_ONLY: running server + client unit tests first (Sonar stage does not re-run tests).'
+                    }
+                }
+            }
             parallel {
                 stage('Server (unit)') {
                     when {
@@ -69,11 +76,7 @@ pipeline {
                         }
                     }
                     steps {
-                        dir('server') {
-                            sh '''
-                                ./mvnw -ntp -Punit-tests-ci -Dmodernizer.skip=true test
-                            '''
-                        }
+                        sh 'bash jenkins/scripts/run-server-unit-tests.sh .'
                     }
                     post {
                         always {
@@ -157,6 +160,16 @@ pipeline {
                 expression { params.SONAR_ONLY }
             }
             stages {
+                stage('Verify unit test results') {
+                    steps {
+                        sh '''#!/usr/bin/env bash
+                            set -euo pipefail
+                            test -d server/target/surefire-reports || { echo "Server unit tests did not run (no surefire-reports)" >&2; exit 1; }
+                            test -f client/target/vitest-junit.xml || { echo "Client unit tests did not run (no vitest-junit.xml)" >&2; exit 1; }
+                            echo "Unit test artifacts present — uploading analysis only (mvn sonar:sonar -DskipTests, sonar-scanner)."
+                        '''
+                    }
+                }
                 stage('Prepare scanner') {
                     steps {
                         script {
