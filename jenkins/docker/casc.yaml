@@ -18,7 +18,7 @@ credentials:
               scope: GLOBAL
               id: "uat-vite-api-url"
               description: "VITE_API_URL for UAT client production build"
-              secret: "${UAT_VITE_API_URL:-http://localhost:8080}"
+              secret: "${UAT_VITE_API_URL:-https://uat-merco.qualityoutsidethebox.org}"
           - string:
               scope: GLOBAL
               id: "sonar-token"

@@ -181,7 +181,7 @@ pipeline {
                 expression { params.GENERATE_OPENAPI_HTML }
             }
             steps {
-                sh '''
+                sh '''#!/usr/bin/env bash
                     set -euo pipefail
                     command -v java >/dev/null || { echo "java not found on PATH" >&2; exit 1; }
                     command -v curl >/dev/null || { echo "curl not found on PATH" >&2; exit 1; }
@@ -278,18 +278,20 @@ pipeline {
                     steps {
                         dir('client') {
                             script {
-                                def viteApiUrl = env.VITE_API_URL?.trim() ?: 'http://localhost:8080'
+                                def viteApiUrl = env.VITE_API_URL?.trim() ?: 'https://uat-merco.qualityoutsidethebox.org'
                                 try {
                                     withCredentials([
                                         string(credentialsId: 'uat-vite-api-url', variable: 'CRED_VITE_API_URL'),
                                     ]) {
-                                        viteApiUrl = CRED_VITE_API_URL
+                                        if (CRED_VITE_API_URL?.trim()) {
+                                            viteApiUrl = CRED_VITE_API_URL.trim()
+                                        }
                                     }
                                 } catch (ignored) {
-                                    echo "uat-vite-api-url not set, using ${viteApiUrl}"
+                                    echo "uat-vite-api-url credential not set, using ${viteApiUrl}"
                                 }
                                 withEnv(["VITE_API_URL=${viteApiUrl}"]) {
-                                    sh 'npm ci && npm run build'
+                                    sh 'npm ci && npm run build:uat'
                                 }
                             }
                         }
@@ -322,7 +324,7 @@ pipeline {
                     }
                 }
                 sshagent(credentials: ['uat-ssh']) {
-                    sh '''
+                    sh '''#!/usr/bin/env bash
                         set -euo pipefail
                         JAR_LOCAL="$(find server/target -name 'mercotrace-*.jar' -type f ! -name '*-sources.jar' | head -1)"
                         test -n "$JAR_LOCAL" || { echo "No server JAR — enable PROD_PACKAGE"; exit 1; }

@@ -22,6 +22,24 @@ Integration tests (`*IT.java`, `@IntegrationTest`) are **not** run in Jenkins.
 
 Postman export does **not** require Node.js/npx on the agent.
 
+## Ubuntu Jenkins agent
+
+On Ubuntu, Jenkins runs `sh` as **dash** (`/bin/sh`), not bash. That caused:
+
+`set: Illegal option -o pipefail`
+
+The `Jenkinsfile` OpenAPI and Deploy steps start with `#!/usr/bin/env bash` so bash is used. Ensure bash is installed (`sudo apt install bash` — usually already present).
+
+**Typical packages on the build agent:**
+
+```bash
+sudo apt update
+sudo apt install -y bash curl zip python3 openjdk-21-jdk git
+# Node 20+ only if you run client unit tests in Jenkins
+```
+
+All `jenkins/scripts/*.sh` files are already run as `bash jenkins/scripts/...` and work on Ubuntu.
+
 ## Jenkins setup
 
 **Credential:** `sonar-token` (Secret text) — required when **RUN_SONAR** is on.

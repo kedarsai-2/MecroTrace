@@ -30,7 +30,8 @@ jobs:
           VITE_API_URL: ${{ secrets.UAT_VITE_API_URL }}
         run: |
           npm ci
-          npm run build
+          export VITE_API_URL="${VITE_API_URL:-https://uat-merco.qualityoutsidethebox.org}"
+          npm run build:uat
 
       - uses: actions/upload-artifact@v4
         with:
