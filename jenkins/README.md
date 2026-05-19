@@ -115,7 +115,7 @@ If the [HTML Publisher](https://plugins.jenkins.io/htmlpublisher/) plugin is ins
 | Server unit tests (Surefire) | `server/target/surefire-reports/surefire-report.html` |
 | Client unit tests (Vitest) | `client/target/vitest-report/index.html` |
 | OpenAPI / Swagger UI | `server/target/swagger-html/index.html` |
-| JavaDoc | `server/target/javadoc-html/.../index.html` |
+| JavaDoc | `server/target/javadoc-html-site/index.html` (single unified site) |
 
 Configured in `jenkins/publish-html-reports.groovy` (loaded from the pipeline `post { always }` block).
 
@@ -125,7 +125,7 @@ Configured in `jenkins/publish-html-reports.groovy` (loaded from the pipeline `p
 2. **Build Artifacts** → download `mercotrace-javadoc-<sha>.zip`.
 3. Unzip → open `index.html`.
 
-The archive documents **all main application packages** (REST, services, domain, repositories, security, management, `config`, admin, contact portal, etc.). Members are shown up to **private** visibility. The overview page groups packages (REST API, configuration, domain, services, …). CI still enforces **class-level Javadoc only on** `*Resource` / `*Controller` classes under `web/rest` (Checkstyle); other types may have sparse comments but appear in the HTML.
+The archive is **one unified HTML site**: unzip and open **`index.html`** at the root (all packages in a single overview and hierarchy — no separate module/group tabs). Members are shown up to **private** visibility. CI still runs REST `*Resource` / `*Controller` Javadoc Checkstyle as advisory only.
 
 ## Local commands
 

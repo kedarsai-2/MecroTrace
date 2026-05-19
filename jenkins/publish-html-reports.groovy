@@ -37,18 +37,12 @@ def publishAll(def steps) {
 }
 
 def publishJavadoc(def steps) {
-    def candidates = [
-        'server/target/javadoc-html/apidocs',
-        'server/target/javadoc-html',
-        'server/target/apidocs/apidocs',
-        'server/target/apidocs',
-    ]
-    def found = candidates.find { steps.fileExists("${it}/index.html") }
-    if (!found) {
-        steps.echo 'Skipping HTML publish (JavaDoc): index.html not found under server/target'
+    def dir = 'server/target/javadoc-html-site'
+    if (!steps.fileExists("${dir}/index.html")) {
+        steps.echo 'Skipping HTML publish (JavaDoc): server/target/javadoc-html-site/index.html not found'
         return
     }
-    publishOne(steps, [name: 'JavaDoc', dir: found, files: 'index.html'])
+    publishOne(steps, [name: 'JavaDoc', dir: dir, files: 'index.html'])
 }
 
 def publishOne(def steps, Map report) {
@@ -69,8 +63,6 @@ def publishOne(def steps, Map report) {
             reportFiles              : reportFiles,
             reportName               : report.name,
             useWrapperFileDirectly   : true,
-            includeCSS               : true,
-            includeJS                : true,
         ])
         steps.echo "Published HTML report: ${report.name}"
     } catch (Throwable err) {

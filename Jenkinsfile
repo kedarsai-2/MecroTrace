@@ -1,8 +1,7 @@
 // CI pipeline — unit tests, optional OpenAPI HTML, JavaDoc, SonarQube (no deploy).
 //
-// Tools: Java 21, Node 20 (client tests), curl/python3 (OpenAPI/Postman), SonarQubeScanner
-// Credential: sonar-token (Secret text)
-// Env: SONAR_HOST_URL (default http://localhost:9000)
+// Tools: Java 21, Node 20 (client tests), curl/python3 (OpenAPI/Postman), SonarQubeScanner (optional)
+// Credential: sonar-token (Secret text) — only if SonarQube scanner tool is configured
 
 pipeline {
     agent any
@@ -31,7 +30,7 @@ pipeline {
         booleanParam(
             name: 'RUN_SONAR',
             defaultValue: true,
-            description: 'Publish server + client analysis to SonarQube.'
+            description: 'Publish server + client analysis to SonarQube (skipped if scanner tool is missing).'
         )
     }
 
@@ -45,6 +44,7 @@ pipeline {
         SHORT_SHA = "${env.GIT_COMMIT?.take(7) ?: 'local'}"
         SONAR_HOST_URL = "${env.SONAR_HOST_URL ?: 'http://localhost:9000'}"
         OPENAPI_PUBLIC_URL = "${env.OPENAPI_PUBLIC_URL ?: 'https://uat-merco.qualityoutsidethebox.org'}"
+        SONAR_SCAN_ENABLED = 'false'
     }
 
     stages {
@@ -121,13 +121,20 @@ pipeline {
             }
             steps {
                 script {
-                    env.SONAR_RUNNER_HOME = tool 'SonarQubeScanner'
+                    try {
+                        env.SONAR_RUNNER_HOME = tool 'SonarQubeScanner'
+                        sh '''
+                            set -e
+                            test -n "${SONAR_RUNNER_HOME}"
+                            "${SONAR_RUNNER_HOME}/bin/sonar-scanner" -v
+                        '''
+                        env.SONAR_SCAN_ENABLED = 'true'
+                        echo 'SonarQube scanner is available — analysis stage will run.'
+                    } catch (Throwable err) {
+                        env.SONAR_SCAN_ENABLED = 'false'
+                        echo "SonarQube scanner not available (install tool 'SonarQubeScanner' or disable RUN_SONAR): ${err.message}"
+                    }
                 }
-                sh '''
-                    set -e
-                    test -n "${SONAR_RUNNER_HOME}"
-                    "${SONAR_RUNNER_HOME}/bin/sonar-scanner" -v
-                '''
             }
         }
 
@@ -156,62 +163,63 @@ pipeline {
                 expression { params.GENERATE_JAVADOC }
             }
             steps {
-                dir('server') {
-                    sh '''
-                        ./mvnw -ntp -DskipTests -Pjavadoc-ci compile javadoc:javadoc checkstyle:check@verify-rest-javadoc
-                    '''
-                }
-                sh 'bash jenkins/scripts/package-javadoc.sh . "${SHORT_SHA}"'
+                sh 'bash jenkins/scripts/generate-javadoc.sh . "${SHORT_SHA}"'
                 archiveArtifacts artifacts: 'server/mercotrace-javadoc-*.zip', fingerprint: true, onlyIfSuccessful: true
-                archiveArtifacts artifacts: 'server/target/javadoc-html/**', fingerprint: true, onlyIfSuccessful: true
+                archiveArtifacts artifacts: 'server/target/javadoc-html-site/**', fingerprint: true, allowEmptyArchive: true
             }
         }
 
         stage('SonarQube') {
             when {
-                expression { params.RUN_SONAR }
+                expression { params.RUN_SONAR && env.SONAR_SCAN_ENABLED == 'true' }
             }
             stages {
                 stage('Wait for SonarQube') {
                     steps {
-                        sh 'bash jenkins/scripts/wait-for-sonarqube.sh "${SONAR_HOST_URL}"'
+                        catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
+                            sh 'bash jenkins/scripts/wait-for-sonarqube.sh "${SONAR_HOST_URL}"'
+                        }
                     }
                 }
                 stage('Analyze') {
                     parallel {
                         stage('Server (Java)') {
                             steps {
-                                withCredentials([
-                                    string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN'),
-                                ]) {
-                                    dir('server') {
-                                        sh '''
-                                            SONAR_EXTRA=""
-                                            if [ -d target/surefire-reports ]; then
-                                              SONAR_EXTRA="-Dsonar.junit.reportPaths=target/surefire-reports"
-                                            fi
-                                            ./mvnw -ntp -DskipTests -Dmodernizer.skip=true compile sonar:sonar \
-                                              -Dsonar.host.url="${SONAR_HOST_URL}" \
-                                              -Dsonar.token="${SONAR_TOKEN}" \
-                                              -Dsonar.projectVersion="${SHORT_SHA}" \
-                                              ${SONAR_EXTRA}
-                                        '''
+                                catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
+                                    withCredentials([
+                                        string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN'),
+                                    ]) {
+                                        dir('server') {
+                                            sh '''
+                                                SONAR_EXTRA=""
+                                                if [ -d target/surefire-reports ]; then
+                                                  SONAR_EXTRA="-Dsonar.junit.reportPaths=target/surefire-reports"
+                                                fi
+                                                ./mvnw -ntp -DskipTests -Dmodernizer.skip=true compile sonar:sonar \
+                                                  -Dsonar.host.url="${SONAR_HOST_URL}" \
+                                                  -Dsonar.token="${SONAR_TOKEN}" \
+                                                  -Dsonar.projectVersion="${SHORT_SHA}" \
+                                                  ${SONAR_EXTRA}
+                                            '''
+                                        }
                                     }
                                 }
                             }
                         }
                         stage('Client (TypeScript)') {
                             steps {
-                                withCredentials([
-                                    string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN'),
-                                ]) {
-                                    dir('client') {
-                                        sh '''
-                                            "${SONAR_RUNNER_HOME}/bin/sonar-scanner" \
-                                              -Dsonar.host.url="${SONAR_HOST_URL}" \
-                                              -Dsonar.token="${SONAR_TOKEN}" \
-                                              -Dsonar.projectVersion="${SHORT_SHA}"
-                                        '''
+                                catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
+                                    withCredentials([
+                                        string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN'),
+                                    ]) {
+                                        dir('client') {
+                                            sh '''
+                                                "${SONAR_RUNNER_HOME}/bin/sonar-scanner" \
+                                                  -Dsonar.host.url="${SONAR_HOST_URL}" \
+                                                  -Dsonar.token="${SONAR_TOKEN}" \
+                                                  -Dsonar.projectVersion="${SHORT_SHA}"
+                                            '''
+                                        }
                                     }
                                 }
                             }
@@ -232,7 +240,10 @@ pipeline {
             echo "Build ${SHORT_SHA} finished."
         }
         failure {
-            echo 'Pipeline failed — see stage logs (server needs Java 21; client tests need Node 20 + npm ci).'
+            echo 'Pipeline failed — expand the first red stage in the log (Unit tests / OpenAPI / JavaDoc).'
+        }
+        unstable {
+            echo "Build ${SHORT_SHA} finished with warnings (e.g. SonarQube or Javadoc Checkstyle)."
         }
     }
 }

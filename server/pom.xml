@@ -1033,42 +1033,10 @@
                             <!-- Document private members so the HTML zip is a full API surface. -->
                             <show>private</show>
                             <outputDirectory>${project.build.directory}/javadoc-html</outputDirectory>
-                            <!-- Include all application packages (config, security, etc.); exclude only if codegen appears. -->
+                            <doctitle>MercoTrace API Documentation</doctitle>
+                            <windowtitle>MercoTrace JavaDoc</windowtitle>
+                            <!-- Single unified site (no package groups / module tabs on the overview). -->
                             <excludePackageNames>com.mercotrace.generated</excludePackageNames>
-                            <groups>
-                                <group>
-                                    <title>REST API</title>
-                                    <packages>com.mercotrace.web.rest:com.mercotrace.contact.portal.web.rest</packages>
-                                </group>
-                                <group>
-                                    <title>Configuration</title>
-                                    <packages>com.mercotrace.config</packages>
-                                </group>
-                                <group>
-                                    <title>Domain</title>
-                                    <packages>com.mercotrace.domain</packages>
-                                </group>
-                                <group>
-                                    <title>Services</title>
-                                    <packages>com.mercotrace.service</packages>
-                                </group>
-                                <group>
-                                    <title>Repositories</title>
-                                    <packages>com.mercotrace.repository</packages>
-                                </group>
-                                <group>
-                                    <title>Security &amp; management</title>
-                                    <packages>com.mercotrace.security:com.mercotrace.management</packages>
-                                </group>
-                                <group>
-                                    <title>Admin &amp; portal</title>
-                                    <packages>com.mercotrace.admin:com.mercotrace.contact</packages>
-                                </group>
-                                <group>
-                                    <title>Other</title>
-                                    <packages>com.mercotrace</packages>
-                                </group>
-                            </groups>
                         </configuration>
                     </plugin>
                     <plugin>
