@@ -10,7 +10,7 @@ pipeline {
         booleanParam(
             name: 'SONAR_ONLY',
             defaultValue: false,
-            description: 'Sonar-only build: run server + client unit tests, then publish both to SonarQube (skips OpenAPI/JavaDoc).'
+            description: 'Sonar-only build: run server + client unit tests, then publish both to SonarQube (skips OpenAPI/JavaDoc). Sonar runs even if tests fail.'
         )
         booleanParam(
             name: 'RUN_SERVER_UNIT_TESTS',
@@ -61,13 +61,6 @@ pipeline {
                         params.RUN_CLIENT_UNIT_TESTS
                 }
             }
-            steps {
-                script {
-                    if (params.SONAR_ONLY) {
-                        echo 'SONAR_ONLY: running server + client unit tests first (Sonar stage does not re-run tests).'
-                    }
-                }
-            }
             parallel {
                 stage('Server (unit)') {
                     when {
@@ -76,7 +69,21 @@ pipeline {
                         }
                     }
                     steps {
-                        sh 'bash jenkins/scripts/run-server-unit-tests.sh .'
+                        script {
+                            if (params.SONAR_ONLY) {
+                                echo 'SONAR_ONLY: server unit tests (Sonar runs afterward even if this fails).'
+                            }
+                            def runServerTests = {
+                                sh 'bash jenkins/scripts/run-server-unit-tests.sh .'
+                            }
+                            if (params.SONAR_ONLY) {
+                                catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
+                                    runServerTests()
+                                }
+                            } else {
+                                runServerTests()
+                            }
+                        }
                     }
                     post {
                         always {
@@ -92,6 +99,9 @@ pipeline {
                     }
                     steps {
                         script {
+                            if (params.SONAR_ONLY) {
+                                echo 'SONAR_ONLY: client unit tests (Sonar runs afterward even if this fails).'
+                            }
                             def nodeTool = env.JENKINS_NODEJS_INSTALLATION?.trim() ?: 'nodejs20'
                             try {
                                 env.NODEJS_HOME = tool nodeTool
@@ -100,8 +110,17 @@ pipeline {
                             } catch (ignored) {
                                 echo "Node.js tool '${nodeTool}' not configured — using node/npm from agent PATH"
                             }
+                            def runClientTests = {
+                                sh 'bash jenkins/scripts/run-client-unit-tests.sh .'
+                            }
+                            if (params.SONAR_ONLY) {
+                                catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
+                                    runClientTests()
+                                }
+                            } else {
+                                runClientTests()
+                            }
                         }
-                        sh 'bash jenkins/scripts/run-client-unit-tests.sh .'
                     }
                     post {
                         always {
@@ -160,16 +179,6 @@ pipeline {
                 expression { params.SONAR_ONLY }
             }
             stages {
-                stage('Verify unit test results') {
-                    steps {
-                        sh '''#!/usr/bin/env bash
-                            set -euo pipefail
-                            test -d server/target/surefire-reports || { echo "Server unit tests did not run (no surefire-reports)" >&2; exit 1; }
-                            test -f client/target/vitest-junit.xml || { echo "Client unit tests did not run (no vitest-junit.xml)" >&2; exit 1; }
-                            echo "Unit test artifacts present — uploading analysis only (mvn sonar:sonar -DskipTests, sonar-scanner)."
-                        '''
-                    }
-                }
                 stage('Prepare scanner') {
                     steps {
                         script {
@@ -189,6 +198,7 @@ pipeline {
                 }
                 stage('Analyze') {
                     steps {
+                        echo 'Uploading analysis to SonarQube (does not re-run tests; uses any Surefire/Vitest reports produced above).'
                         withCredentials([
                             string(credentialsId: 'sonar-token', variable: 'SONAR_TOKEN'),
                         ]) {
@@ -215,7 +225,7 @@ pipeline {
             echo 'Pipeline failed — expand the first red stage in the log.'
         }
         unstable {
-            echo "Build ${SHORT_SHA} finished with warnings."
+            echo "Build ${SHORT_SHA} finished with warnings (e.g. unit test failures with Sonar upload)."
         }
     }
 }

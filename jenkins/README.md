@@ -68,8 +68,8 @@ Create a **Pipeline** job → Script Path: `Jenkinsfile` → **Build Now**.
 
 **Sonar-only job:** enable **`SONAR_ONLY`** only.
 
-1. **Unit tests** — server (`-Punit-tests-ci`, no Docker / no `*IT` / no `@IntegrationTest`) and client (Vitest).
-2. **SonarQube** — analysis only (`-DskipTests` on Maven; does **not** start Testcontainers or re-run tests).
+1. **Unit tests** — server (`-Punit-tests-ci`, no Docker / no `*IT` / no `@IntegrationTest`) and client (Vitest). Failures mark the build **UNSTABLE** but do not block step 2.
+2. **SonarQube** — always runs when **SONAR_ONLY** is enabled (`-DskipTests` on Maven; does **not** re-run tests).
 
 If you see `ApplicationContext` / `Could not find a valid Docker environment`, the job is running **integration** tests (`*IT`, `@IntegrationTest`) — that should not happen with `-Punit-tests-ci`. Re-run with the current `Jenkinsfile` and `run-server-unit-tests.sh`.
 
