@@ -7,7 +7,7 @@ No Docker, no database, no Testcontainers in the default pipeline — **unit tes
 | **Unit tests** | Server: Surefire + HTML report. Client: Vitest + HTML report. Zip: `mercotrace-unit-tests-<sha>.zip` |
 | **OpenAPI / Swagger** | HTML zip (`mercotrace-openapi-<sha>.zip`) + Postman collection (`mercotrace-postman-<sha>.json`) |
 | **JavaDoc** | HTML zip artifact (`mercotrace-javadoc-<sha>.zip`) |
-| **SonarQube** | Static analysis (optional) |
+| **SonarQube** | **SONAR_ONLY** build: server + client unit tests, then Sonar upload (not part of the default full CI) |
 
 Integration tests (`*IT.java`, `@IntegrationTest`) are **not** run in Jenkins.
 
@@ -18,7 +18,7 @@ Integration tests (`*IT.java`, `@IntegrationTest`) are **not** run in Jenkins.
 | Java 21+ | Server Maven build, OpenAPI export, Postman collection (`openapi-generator-cli`) |
 | Node.js 20+ | Client unit tests (`jenkins/scripts/run-client-unit-tests.sh`; configure Global Tool `nodejs20` optional) |
 | `curl`, `zip`, `python3` | OpenAPI/Postman scripts and Swagger UI zip packaging |
-| SonarQubeScanner | Only if **RUN_SONAR** is enabled (Global Tool name: `SonarQubeScanner`) |
+| SonarQubeScanner | **SONAR_ONLY** builds (Global Tool name: `SonarQubeScanner`) |
 
 Postman export does **not** require Node.js/npx on the agent.
 
@@ -50,7 +50,7 @@ sudo jenkins-plugin-cli install htmlpublisher
 sudo systemctl restart jenkins
 ```
 
-**Credential:** `sonar-token` (Secret text) — required when **RUN_SONAR** is on.
+**Credential:** `sonar-token` (Secret text) — required for **SONAR_ONLY** builds.
 
 **Optional env:** `SONAR_HOST_URL` = `http://localhost:9000`
 
@@ -60,11 +60,13 @@ Create a **Pipeline** job → Script Path: `Jenkinsfile` → **Build Now**.
 
 | Parameter | Default | Purpose |
 |-----------|---------|---------|
+| `SONAR_ONLY` | — | Unit tests (server + client) + SonarQube only; skips OpenAPI, JavaDoc, HTML publisher |
 | `RUN_SERVER_UNIT_TESTS` | ✓ | Server Surefire only (no DB) |
 | `RUN_CLIENT_UNIT_TESTS` | ✓ | Client Vitest (`@vitest/ui` required for HTML report in CI) |
 | `GENERATE_OPENAPI_HTML` | ✓ | OpenAPI JSON + Postman collection + Swagger UI HTML zip |
 | `GENERATE_JAVADOC` | ✓ | JavaDoc HTML zip |
-| `RUN_SONAR` | ✓ | SonarQube upload |
+
+**Sonar-only job:** enable **`SONAR_ONLY`** only. Server and client unit tests always run; results are sent to SonarQube (`mercotrace` + `mercotrace-client`). Requires `sonar-token` and the **SonarQubeScanner** global tool.
 
 **Client tests:** If the job previously had `RUN_UNIT_TESTS` unchecked, re-run with **`RUN_CLIENT_UNIT_TESTS`** enabled (that old parameter was removed).
 
