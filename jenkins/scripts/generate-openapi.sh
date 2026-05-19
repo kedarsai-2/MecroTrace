@@ -71,4 +71,21 @@ if [ ! -s "${OUT_FILE}" ]; then
   exit 1
 fi
 
+# Springdoc records the ephemeral CI host (127.0.0.1:18080). Point docs/Postman at the real API.
+OPENAPI_PUBLIC_URL="${OPENAPI_PUBLIC_URL:-https://uat-merco.qualityoutsidethebox.org}"
+export MERCO_OPENAPI_PUBLIC_URL="${OPENAPI_PUBLIC_URL}" MERCO_OPENAPI_JSON="${OUT_FILE}"
+python3 <<'PY'
+import json
+import os
+
+path = os.environ["MERCO_OPENAPI_JSON"]
+public = os.environ["MERCO_OPENAPI_PUBLIC_URL"].rstrip("/")
+spec = json.loads(open(path, encoding="utf-8").read())
+spec["servers"] = [
+    {"url": public, "description": "UAT API (MercoTrace backend)"},
+]
+open(path, "w", encoding="utf-8").write(json.dumps(spec, indent=2))
+print(f"OpenAPI servers[0].url set to {public}")
+PY
+
 echo "OpenAPI spec written to ${OUT_FILE} ($(wc -c < "${OUT_FILE}" | tr -d ' ') bytes)"

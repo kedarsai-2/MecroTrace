@@ -66,6 +66,8 @@ pipeline {
         SONAR_HOST_URL = "${env.SONAR_HOST_URL ?: 'http://localhost:9000'}"
         DEPLOY_PATH = "${env.UAT_DEPLOY_PATH ?: '/var/www/uatmerco'}"
         SERVICE_NAME = "${env.UAT_SYSTEMD_SERVICE ?: 'uatmerco'}"
+        // Public API base for Swagger HTML + Postman artifacts (not the CI export port 18080).
+        OPENAPI_PUBLIC_URL = "${env.OPENAPI_PUBLIC_URL ?: 'https://uat-merco.qualityoutsidethebox.org'}"
     }
 
     stages {
@@ -122,38 +124,6 @@ pipeline {
                             sh 'bash jenkins/scripts/package-unit-test-reports.sh . "${SHORT_SHA}"'
                             archiveArtifacts artifacts: 'server/mercotrace-unit-tests-*.zip', fingerprint: true, allowEmptyArchive: true
                             archiveArtifacts artifacts: 'server/target/unit-test-html/**', fingerprint: true, allowEmptyArchive: true
-                            try {
-                                if (params.RUN_SERVER_UNIT_TESTS) {
-                                    def serverReport = 'server/target/surefire-reports/surefire-report.html'
-                                    if (!fileExists(serverReport)) {
-                                        serverReport = 'server/target/surefire-reports/surefire-report.html.html'
-                                    }
-                                    if (fileExists(serverReport)) {
-                                        publishHTML([
-                                            allowMissing: true,
-                                            alwaysLinkToLastBuild: true,
-                                            keepAll: true,
-                                            reportDir: 'server/target/surefire-reports',
-                                            reportFiles: serverReport.contains('.html.html') ? 'surefire-report.html.html' : 'surefire-report.html',
-                                            reportName: 'Server unit tests (HTML)',
-                                            useWrapperFileDirectly: true,
-                                        ])
-                                    }
-                                }
-                                if (params.RUN_CLIENT_UNIT_TESTS && fileExists('client/target/vitest-report/index.html')) {
-                                    publishHTML([
-                                        allowMissing: true,
-                                        alwaysLinkToLastBuild: true,
-                                        keepAll: true,
-                                        reportDir: 'client/target/vitest-report',
-                                        reportFiles: 'index.html',
-                                        reportName: 'Client unit tests (HTML)',
-                                        useWrapperFileDirectly: true,
-                                    ])
-                                }
-                            } catch (Throwable publishErr) {
-                                echo "HTML Publisher plugin not available (install it for in-Jenkins report links): ${publishErr.message}"
-                            }
                         }
                     }
                 }
@@ -350,6 +320,11 @@ pipeline {
     }
 
     post {
+        always {
+            script {
+                load('jenkins/publish-html-reports.groovy').publishAll(this)
+            }
+        }
         success {
             echo "Build ${SHORT_SHA} finished."
         }

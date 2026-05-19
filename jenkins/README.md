@@ -42,6 +42,14 @@ All `jenkins/scripts/*.sh` files are already run as `bash jenkins/scripts/...` a
 
 ## Jenkins setup
 
+**Plugin (for HTML links on the build page):** install [HTML Publisher](https://plugins.jenkins.io/htmlpublisher/) (`htmlpublisher`). On Ubuntu:
+
+```bash
+sudo jenkins-plugin-cli install htmlpublisher
+# or: Manage Jenkins → Plugins → Available → "HTML Publisher"
+sudo systemctl restart jenkins
+```
+
 **Credential:** `sonar-token` (Secret text) — required when **RUN_SONAR** is on.
 
 **Optional env:** `SONAR_HOST_URL` = `http://localhost:9000`
@@ -80,6 +88,8 @@ The collection is generated from the same OpenAPI export as Swagger UI (OpenAPI 
 
 Uses Spring profiles `api-docs`, `openapi-ci`, `no-liquibase` (in-memory H2, Hibernate `ddl-auto: create`, no Redis/PostgreSQL/Docker).
 
+The app boots on `127.0.0.1:18080` only to export the spec; **`servers[0].url`** in `openapi.json` / Swagger UI / Postman is rewritten to **`https://uat-merco.qualityoutsidethebox.org`** (override with Jenkins env `OPENAPI_PUBLIC_URL`).
+
 Typical export size: **~197 `/api` paths**, **~265 HTTP operations**, **~168 schemas** (matches REST controllers; not limited to a subset).
 
 ## Download unit test HTML reports
@@ -88,7 +98,17 @@ Typical export size: **~197 `/api` paths**, **~265 HTTP operations**, **~168 sch
 2. **Build Artifacts** → download `mercotrace-unit-tests-<sha>.zip`.
 3. Unzip → open `index.html` → links to **Server (Surefire)** and **Client (Vitest)** reports.
 
-If the [HTML Publisher](https://plugins.jenkins.io/htmlpublisher/) plugin is installed, reports also appear on the build page under **Server unit tests (HTML)** / **Client unit tests (HTML)**.
+If the [HTML Publisher](https://plugins.jenkins.io/htmlpublisher/) plugin is installed, each build publishes (when that stage ran):
+
+| Jenkins sidebar link | Source |
+|----------------------|--------|
+| Unit tests — overview | `server/target/unit-test-html/index.html` |
+| Server unit tests (Surefire) | `server/target/surefire-reports/surefire-report.html` |
+| Client unit tests (Vitest) | `client/target/vitest-report/index.html` |
+| OpenAPI / Swagger UI | `server/target/swagger-html/index.html` |
+| JavaDoc | `server/target/javadoc-html/.../index.html` |
+
+Configured in `jenkins/publish-html-reports.groovy` (loaded from the pipeline `post { always }` block).
 
 ## Download JavaDoc HTML
 
