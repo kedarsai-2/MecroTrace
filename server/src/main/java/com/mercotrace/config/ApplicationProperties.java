@@ -1,5 +1,7 @@
 package com.mercotrace.config;
 
+import java.util.ArrayList;
+import java.util.List;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 /**
@@ -15,6 +17,8 @@ public class ApplicationProperties {
 
     private final Security security = new Security();
 
+    private final Cors cors = new Cors();
+
     // jhipster-needle-application-properties-property
 
     public Liquibase getLiquibase() {
@@ -25,7 +29,25 @@ public class ApplicationProperties {
         return security;
     }
 
+    public Cors getCors() {
+        return cors;
+    }
+
     // jhipster-needle-application-properties-property-getter
+
+    public static class Cors {
+
+        /** Merged into JHipster CORS (e.g. Jenkins HTML Swagger at http://host:9090). */
+        private List<String> extraAllowedOrigins = new ArrayList<>();
+
+        public List<String> getExtraAllowedOrigins() {
+            return extraAllowedOrigins;
+        }
+
+        public void setExtraAllowedOrigins(List<String> extraAllowedOrigins) {
+            this.extraAllowedOrigins = extraAllowedOrigins != null ? extraAllowedOrigins : new ArrayList<>();
+        }
+    }
 
     public static class Liquibase {
 

@@ -53,7 +53,7 @@ jobs:
 
       - name: Package server (prod)
         working-directory: server
-        run: ./mvnw -ntp -Pprod -DskipTests -Dmodernizer.skip=true package
+        run: ./mvnw -ntp -Pprod,api-docs -DskipTests -Dmodernizer.skip=true package
 
       - uses: actions/upload-artifact@v4
         with:

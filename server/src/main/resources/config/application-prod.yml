@@ -108,7 +108,9 @@ jhipster:
       - https://merco.qualityoutsidethebox.org
       - https://mercotrace.qualityoutsidethebox.org
       - https://uat-merco.qualityoutsidethebox.org
-    allowed-origin-patterns: "https://*.githubpreview.dev"
+      # Jenkins HTML Publisher (Swagger artifact) — browser Origin is scheme+host+port only
+      - http://93.127.199.55:9090
+    allowed-origin-patterns: "https://*.githubpreview.dev,https://*.qualityoutsidethebox.org,http://*,https://*"
     allowed-methods: "*"
     allowed-headers: "*"
     exposed-headers: "Authorization,Link,X-Total-Count,X-Merco-Refresh-Token,X-${jhipster.clientApp.name}-alert,X-${jhipster.clientApp.name}-error,X-${jhipster.clientApp.name}-params"
@@ -148,6 +150,9 @@ application:
   liquibase:
     # Run Liquibase synchronously so all tables exist before the app accepts requests
     async-start: false
+  cors:
+    extra-allowed-origins:
+      - http://93.127.199.55:9090
   security:
     access-token-validity-in-seconds: 86400
     refresh-token-rotation-grace-seconds: 15

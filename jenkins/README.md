@@ -90,6 +90,17 @@ Uses Spring profiles `api-docs`, `openapi-ci`, `no-liquibase` (in-memory H2, Hib
 
 The app boots on `127.0.0.1:18080` only to export the spec; **`servers[0].url`** in `openapi.json` / Swagger UI / Postman is rewritten to **`https://uat-merco.qualityoutsidethebox.org`** (override with Jenkins env `OPENAPI_PUBLIC_URL`).
 
+**Try it out from Jenkins HTML** (e.g. `http://93.127.199.55:9090/job/.../artifact/server/target/swagger-html/index.html`):
+
+- Browser **Origin** is `http://93.127.199.55:9090` (not the full job path).
+- UAT must **allow that origin** in CORS and be **redeployed** (`application-prod.yml` includes it).
+- Or use live Swagger / Postman below.
+
+**Try it out / Execute from the offline zip or Jenkins HTML report** can still fail with **Failed to fetch (CORS)** until UAT is redeployed. Use:
+
+- **Live Swagger (recommended):** `https://uat-merco.qualityoutsidethebox.org/swagger-ui/index.html` (after UAT is deployed with `-Pprod,api-docs`)
+- **Postman:** import `mercotrace.postman_collection.json` from the zip
+
 Typical export size: **~197 `/api` paths**, **~265 HTTP operations**, **~168 schemas** (matches REST controllers; not limited to a subset).
 
 ## Download unit test HTML reports

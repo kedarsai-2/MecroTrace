@@ -9,6 +9,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.env.Environment;
 import org.springframework.util.CollectionUtils;
+import org.springframework.util.StringUtils;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
@@ -26,9 +27,12 @@ public class WebConfigurer implements ServletContextInitializer {
 
     private final JHipsterProperties jHipsterProperties;
 
-    public WebConfigurer(Environment env, JHipsterProperties jHipsterProperties) {
+    private final ApplicationProperties applicationProperties;
+
+    public WebConfigurer(Environment env, JHipsterProperties jHipsterProperties, ApplicationProperties applicationProperties) {
         this.env = env;
         this.jHipsterProperties = jHipsterProperties;
+        this.applicationProperties = applicationProperties;
     }
 
     @Override
@@ -50,6 +54,7 @@ public class WebConfigurer implements ServletContextInitializer {
     public CorsConfigurationSource corsConfigurationSource() {
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
         CorsConfiguration config = jHipsterProperties.getCors();
+        mergeExtraCorsOrigins(config);
         if (!CollectionUtils.isEmpty(config.getAllowedOrigins()) || !CollectionUtils.isEmpty(config.getAllowedOriginPatterns())) {
             LOG.debug("Registering CORS configuration");
             source.registerCorsConfiguration("/api/**", config);
@@ -60,5 +65,23 @@ public class WebConfigurer implements ServletContextInitializer {
             source.registerCorsConfiguration("/swagger-ui.html", config);
         }
         return source;
+    }
+
+    private void mergeExtraCorsOrigins(CorsConfiguration config) {
+        var extras = applicationProperties.getCors().getExtraAllowedOrigins();
+        if (!CollectionUtils.isEmpty(extras)) {
+            extras.stream().filter(StringUtils::hasText).forEach(config::addAllowedOrigin);
+            LOG.info("CORS extra allowed origins: {}", extras);
+        }
+        String envExtras = env.getProperty("APPLICATION_CORS_EXTRA_ALLOWED_ORIGINS");
+        if (StringUtils.hasText(envExtras)) {
+            for (String origin : envExtras.split(",")) {
+                String trimmed = origin.trim();
+                if (StringUtils.hasText(trimmed)) {
+                    config.addAllowedOrigin(trimmed);
+                }
+            }
+            LOG.info("CORS extra allowed origins from env APPLICATION_CORS_EXTRA_ALLOWED_ORIGINS");
+        }
     }
 }

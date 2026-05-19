@@ -270,7 +270,7 @@ pipeline {
                 stage('Server package') {
                     steps {
                         dir('server') {
-                            sh './mvnw -ntp -Pprod -DskipTests -Dmodernizer.skip=true package'
+                            sh './mvnw -ntp -Pprod,api-docs -DskipTests -Dmodernizer.skip=true package'
                         }
                     }
                 }

@@ -41,7 +41,7 @@ class WebConfigurerTest {
         env = new MockEnvironment();
         props = new JHipsterProperties();
 
-        webConfigurer = new WebConfigurer(env, props);
+        webConfigurer = new WebConfigurer(env, props, new ApplicationProperties());
     }
 
     @Test

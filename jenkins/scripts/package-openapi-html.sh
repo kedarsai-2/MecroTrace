@@ -99,36 +99,68 @@ curl -fsSL "https://github.com/swagger-api/swagger-ui/archive/refs/tags/v${SUI_V
 unzip -q "${WORK_DIR}/swagger-ui.zip" -d "${WORK_DIR}"
 cp -R "${WORK_DIR}/swagger-ui-${SUI_VERSION}/dist/"* "${HTML_DIR}/"
 
-cat > "${HTML_DIR}/index.html" <<'EOF'
-<!DOCTYPE html>
+export MERCO_SWAGGER_HTML_DIR="${HTML_DIR}"
+python3 <<'PY'
+import json
+import os
+from pathlib import Path
+
+html_dir = Path(os.environ["MERCO_SWAGGER_HTML_DIR"])
+spec = json.loads((html_dir / "openapi.json").read_text(encoding="utf-8"))
+api_base = (spec.get("servers") or [{}])[0].get("url", "https://uat-merco.qualityoutsidethebox.org").rstrip("/")
+live_swagger = f"{api_base}/swagger-ui/index.html"
+
+(html_dir / "index.html").write_text(
+    f"""<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
   <title>MercoTrace API</title>
   <link rel="stylesheet" href="swagger-ui.css" />
+  <style>
+    .merco-cors-banner {{
+      font-family: system-ui, sans-serif;
+      margin: 0;
+      padding: 12px 16px;
+      background: #fff3cd;
+      border-bottom: 1px solid #ffc107;
+      color: #664d03;
+      line-height: 1.45;
+    }}
+    .merco-cors-banner a {{ color: #0d6efd; }}
+  </style>
 </head>
 <body>
+  <div class="merco-cors-banner">
+    <strong>Jenkins / offline Swagger:</strong> browser origin must be allowed on the API (e.g.
+    <code>http://93.127.199.55:9090</code> → redeploy UAT after CORS update). If you still see
+    <em>Failed to fetch</em>, use live Swagger (same host as the API):
+    <a href="{live_swagger}" target="_blank" rel="noopener">{live_swagger}</a>
+    or Postman (<code>mercotrace.postman_collection.json</code>).
+  </div>
   <div id="swagger-ui"></div>
   <script src="openapi-spec.js"></script>
   <script src="swagger-ui-bundle.js" charset="UTF-8"></script>
   <script src="swagger-ui-standalone-preset.js" charset="UTF-8"></script>
   <script>
-    window.onload = function () {
-      // Pass the spec object directly so Swagger UI resolves #/components/schemas/* without
-      // relying on Blob URL document bases (some browsers show broken refs as plain "string").
-      window.ui = SwaggerUIBundle({
+    window.onload = function () {{
+      window.ui = SwaggerUIBundle({{
         spec: window.OPENAPI_SPEC,
         dom_id: '#swagger-ui',
         deepLinking: true,
         validatorUrl: null,
         presets: [SwaggerUIBundle.presets.apis, SwaggerUIStandalonePreset],
         layout: 'StandaloneLayout',
-      });
-    };
+      }});
+    }};
   </script>
 </body>
 </html>
-EOF
+""",
+    encoding="utf-8",
+)
+print(f"Swagger index.html → live Try it out: {live_swagger}")
+PY
 
 echo "Packaging ${OUT_ZIP}"
 rm -f "${OUT_ZIP}"
