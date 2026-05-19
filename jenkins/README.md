@@ -16,7 +16,7 @@ Integration tests (`*IT.java`, `@IntegrationTest`) are **not** run in Jenkins.
 | Tool | Purpose |
 |------|---------|
 | Java 21+ | Server Maven build, OpenAPI export, Postman collection (`openapi-generator-cli`) |
-| Node.js 20+ | Client unit tests only (`npm run test`) |
+| Node.js 20+ | Client unit tests (`jenkins/scripts/run-client-unit-tests.sh`; configure Global Tool `nodejs20` optional) |
 | `curl`, `zip`, `python3` | OpenAPI/Postman scripts and Swagger UI zip packaging |
 | SonarQubeScanner | Only if **RUN_SONAR** is enabled (Global Tool name: `SonarQubeScanner`) |
 
@@ -60,15 +60,13 @@ Create a **Pipeline** job → Script Path: `Jenkinsfile` → **Build Now**.
 
 | Parameter | Default | Purpose |
 |-----------|---------|---------|
-| `RUN_UNIT_TESTS` | ✓ | Master switch for unit tests |
 | `RUN_SERVER_UNIT_TESTS` | ✓ | Server Surefire only (no DB) |
-| `RUN_CLIENT_UNIT_TESTS` | ✓ | Client Vitest (no Docker) |
+| `RUN_CLIENT_UNIT_TESTS` | ✓ | Client Vitest (`@vitest/ui` required for HTML report in CI) |
 | `GENERATE_OPENAPI_HTML` | ✓ | OpenAPI JSON + Postman collection + Swagger UI HTML zip |
 | `GENERATE_JAVADOC` | ✓ | JavaDoc HTML zip |
 | `RUN_SONAR` | ✓ | SonarQube upload |
-| `SONAR_ONLY` | ✓ | Skip package / deploy |
-| `PROD_PACKAGE` | off | Production build |
-| `DEPLOY_UAT` | off | UAT deploy on `main` |
+
+**Client tests:** If the job previously had `RUN_UNIT_TESTS` unchecked, re-run with **`RUN_CLIENT_UNIT_TESTS`** enabled (that old parameter was removed).
 
 ## Download OpenAPI (Swagger) HTML
 
@@ -105,7 +103,7 @@ Typical export size: **~197 `/api` paths**, **~265 HTTP operations**, **~168 sch
 
 ## Download unit test HTML reports
 
-1. Build with **RUN_UNIT_TESTS** and at least one of **RUN_SERVER_UNIT_TESTS** / **RUN_CLIENT_UNIT_TESTS**.
+1. Build with **RUN_SERVER_UNIT_TESTS** and/or **RUN_CLIENT_UNIT_TESTS** enabled.
 2. **Build Artifacts** → download `mercotrace-unit-tests-<sha>.zip`.
 3. Unzip → open `index.html` → links to **Server (Surefire)** and **Client (Vitest)** reports.
 

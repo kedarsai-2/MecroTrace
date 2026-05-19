@@ -38,7 +38,7 @@ else
 fi
 
 if [ ! -f "${STAGING}/server/index.html" ] && [ ! -f "${STAGING}/client/index.html" ]; then
-  echo "Nothing to package — enable RUN_SERVER_UNIT_TESTS and/or RUN_CLIENT_UNIT_TESTS" >&2
+  echo "Nothing to package — run server and/or client unit test stages first" >&2
   exit 1
 fi
 

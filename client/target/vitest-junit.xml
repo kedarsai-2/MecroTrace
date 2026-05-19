@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<testsuites name="vitest tests" tests="7" failures="0" errors="0" time="0.116841374">
+    <testsuite name="src/components/billing/BillingMoneyInput.test.tsx" timestamp="2026-05-19T07:32:51.712Z" hostname="sais-MacBook-Pro-2.local" tests="3" failures="0" errors="0" skipped="0" time="0.046386833">
+        <testcase classname="src/components/billing/BillingMoneyInput.test.tsx" name="BillingMoneyInput &gt; debounces live onCommit by default" time="0.035505584">
+        </testcase>
+        <testcase classname="src/components/billing/BillingMoneyInput.test.tsx" name="BillingMoneyInput &gt; liveDebounceMs=0 commits on each change" time="0.004817292">
+        </testcase>
+        <testcase classname="src/components/billing/BillingMoneyInput.test.tsx" name="BillingMoneyInput &gt; flush pending live commit on blur before debounce fires" time="0.005376">
+        </testcase>
+    </testsuite>
+    <testsuite name="src/services/api/http.test.ts" timestamp="2026-05-19T07:32:51.714Z" hostname="sais-MacBook-Pro-2.local" tests="4" failures="0" errors="0" skipped="0" time="0.070454541">
+        <testcase classname="src/services/api/http.test.ts" name="apiFetch refresh handling &gt; shares one trader refresh across parallel 401 responses and retries every request" time="0.041489916">
+        </testcase>
+        <testcase classname="src/services/api/http.test.ts" name="apiFetch refresh handling &gt; shares one contact refresh across parallel 401 responses and retries every request" time="0.002854791">
+        </testcase>
+        <testcase classname="src/services/api/http.test.ts" name="apiFetch refresh handling &gt; clears trader tokens only when the shared refresh fails" time="0.002956708">
+        </testcase>
+        <testcase classname="src/services/api/http.test.ts" name="apiFetch refresh handling &gt; shares a direct trader session refresh with an API retry refresh" time="0.022340917">
+        </testcase>
+    </testsuite>
+</testsuites>

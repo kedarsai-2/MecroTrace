@@ -1,6 +1,6 @@
-// CI pipeline — unit tests only (no Docker DB), optional OpenAPI HTML, JavaDoc, SonarQube, deploy.
+// CI pipeline — unit tests, optional OpenAPI HTML, JavaDoc, SonarQube (no deploy).
 //
-// Tools: Java 21, Node 20 (client tests only), curl/python3 (OpenAPI/Postman), SonarQubeScanner
+// Tools: Java 21, Node 20 (client tests), curl/python3 (OpenAPI/Postman), SonarQubeScanner
 // Credential: sonar-token (Secret text)
 // Env: SONAR_HOST_URL (default http://localhost:9000)
 
@@ -9,11 +9,6 @@ pipeline {
 
     parameters {
         booleanParam(
-            name: 'RUN_UNIT_TESTS',
-            defaultValue: true,
-            description: 'Master switch: run any unit tests below (no Docker / DB).'
-        )
-        booleanParam(
             name: 'RUN_SERVER_UNIT_TESTS',
             defaultValue: true,
             description: 'Server: ./mvnw -Punit-tests-ci test (Surefire only, excludes integration).'
@@ -21,7 +16,7 @@ pipeline {
         booleanParam(
             name: 'RUN_CLIENT_UNIT_TESTS',
             defaultValue: true,
-            description: 'Client: npm run test (Vitest, no Docker).'
+            description: 'Client: Vitest unit tests (npm ci + npm test, JUnit + HTML reports).'
         )
         booleanParam(
             name: 'GENERATE_JAVADOC',
@@ -38,21 +33,6 @@ pipeline {
             defaultValue: true,
             description: 'Publish server + client analysis to SonarQube.'
         )
-        booleanParam(
-            name: 'SONAR_ONLY',
-            defaultValue: true,
-            description: 'Skip production package and UAT deploy (tests + quality gates only).'
-        )
-        booleanParam(
-            name: 'PROD_PACKAGE',
-            defaultValue: false,
-            description: 'Build production JARs (when SONAR_ONLY is false).'
-        )
-        booleanParam(
-            name: 'DEPLOY_UAT',
-            defaultValue: false,
-            description: 'Deploy to UAT on main (when SONAR_ONLY is false).'
-        )
     }
 
     options {
@@ -64,9 +44,6 @@ pipeline {
     environment {
         SHORT_SHA = "${env.GIT_COMMIT?.take(7) ?: 'local'}"
         SONAR_HOST_URL = "${env.SONAR_HOST_URL ?: 'http://localhost:9000'}"
-        DEPLOY_PATH = "${env.UAT_DEPLOY_PATH ?: '/var/www/uatmerco'}"
-        SERVICE_NAME = "${env.UAT_SYSTEMD_SERVICE ?: 'uatmerco'}"
-        // Public API base for Swagger HTML + Postman artifacts (not the CI export port 18080).
         OPENAPI_PUBLIC_URL = "${env.OPENAPI_PUBLIC_URL ?: 'https://uat-merco.qualityoutsidethebox.org'}"
     }
 
@@ -80,13 +57,13 @@ pipeline {
         stage('Unit tests') {
             when {
                 expression {
-                    params.RUN_UNIT_TESTS && (params.RUN_SERVER_UNIT_TESTS || params.RUN_CLIENT_UNIT_TESTS)
+                    params.RUN_SERVER_UNIT_TESTS || params.RUN_CLIENT_UNIT_TESTS
                 }
             }
             parallel {
                 stage('Server (unit)') {
                     when {
-                        expression { params.RUN_UNIT_TESTS && params.RUN_SERVER_UNIT_TESTS }
+                        expression { params.RUN_SERVER_UNIT_TESTS }
                     }
                     steps {
                         dir('server') {
@@ -103,12 +80,20 @@ pipeline {
                 }
                 stage('Client (unit)') {
                     when {
-                        expression { params.RUN_UNIT_TESTS && params.RUN_CLIENT_UNIT_TESTS }
+                        expression { params.RUN_CLIENT_UNIT_TESTS }
                     }
                     steps {
-                        dir('client') {
-                            sh 'npm ci && CI=true npm run test'
+                        script {
+                            def nodeTool = env.JENKINS_NODEJS_INSTALLATION?.trim() ?: 'nodejs20'
+                            try {
+                                env.NODEJS_HOME = tool nodeTool
+                                env.PATH = "${env.NODEJS_HOME}/bin:${env.PATH}"
+                                echo "Using Jenkins Node.js tool: ${nodeTool}"
+                            } catch (ignored) {
+                                echo "Node.js tool '${nodeTool}' not configured — using node/npm from agent PATH"
+                            }
                         }
+                        sh 'bash jenkins/scripts/run-client-unit-tests.sh .'
                     }
                     post {
                         always {
@@ -120,7 +105,7 @@ pipeline {
             post {
                 always {
                     script {
-                        if (params.RUN_UNIT_TESTS && (params.RUN_SERVER_UNIT_TESTS || params.RUN_CLIENT_UNIT_TESTS)) {
+                        if (params.RUN_SERVER_UNIT_TESTS || params.RUN_CLIENT_UNIT_TESTS) {
                             sh 'bash jenkins/scripts/package-unit-test-reports.sh . "${SHORT_SHA}"'
                             archiveArtifacts artifacts: 'server/mercotrace-unit-tests-*.zip', fingerprint: true, allowEmptyArchive: true
                             archiveArtifacts artifacts: 'server/target/unit-test-html/**', fingerprint: true, allowEmptyArchive: true
@@ -235,88 +220,6 @@ pipeline {
                 }
             }
         }
-
-        stage('Package (prod)') {
-            when {
-                allOf {
-                    expression { !params.SONAR_ONLY }
-                    expression { params.PROD_PACKAGE }
-                }
-            }
-            parallel {
-                stage('Client build') {
-                    steps {
-                        dir('client') {
-                            script {
-                                def viteApiUrl = env.VITE_API_URL?.trim() ?: 'https://uat-merco.qualityoutsidethebox.org'
-                                try {
-                                    withCredentials([
-                                        string(credentialsId: 'uat-vite-api-url', variable: 'CRED_VITE_API_URL'),
-                                    ]) {
-                                        if (CRED_VITE_API_URL?.trim()) {
-                                            viteApiUrl = CRED_VITE_API_URL.trim()
-                                        }
-                                    }
-                                } catch (ignored) {
-                                    echo "uat-vite-api-url credential not set, using ${viteApiUrl}"
-                                }
-                                withEnv(["VITE_API_URL=${viteApiUrl}"]) {
-                                    sh 'npm ci && npm run build:uat'
-                                }
-                            }
-                        }
-                    }
-                }
-                stage('Server package') {
-                    steps {
-                        dir('server') {
-                            sh './mvnw -ntp -Pprod,api-docs -DskipTests -Dmodernizer.skip=true package'
-                        }
-                    }
-                }
-            }
-        }
-
-        stage('Deploy UAT') {
-            when {
-                allOf {
-                    expression { !params.SONAR_ONLY }
-                    branch 'main'
-                    expression { params.DEPLOY_UAT }
-                }
-            }
-            steps {
-                script {
-                    def sshUser = env.UAT_SSH_USER?.trim()
-                    def sshHost = env.UAT_SSH_HOST?.trim()
-                    if (!sshUser || !sshHost) {
-                        error 'Set UAT_SSH_USER and UAT_SSH_HOST on the Jenkins controller or job.'
-                    }
-                }
-                sshagent(credentials: ['uat-ssh']) {
-                    sh '''#!/usr/bin/env bash
-                        set -euo pipefail
-                        JAR_LOCAL="$(find server/target -name 'mercotrace-*.jar' -type f ! -name '*-sources.jar' | head -1)"
-                        test -n "$JAR_LOCAL" || { echo "No server JAR — enable PROD_PACKAGE"; exit 1; }
-                        test -d client/dist || { echo "No client/dist — enable PROD_PACKAGE"; exit 1; }
-
-                        rsync -avz -e ssh "${JAR_LOCAL}" \
-                          "${UAT_SSH_USER}@${UAT_SSH_HOST}:${DEPLOY_PATH}/backend/releases/mercotrace-${SHORT_SHA}.jar"
-                        ssh "${UAT_SSH_USER}@${UAT_SSH_HOST}" \
-                          "mkdir -p '${DEPLOY_PATH}/frontend/releases/${SHORT_SHA}'"
-                        rsync -avz --delete -e ssh client/dist/ \
-                          "${UAT_SSH_USER}@${UAT_SSH_HOST}:${DEPLOY_PATH}/frontend/releases/${SHORT_SHA}/"
-                        scp scripts/deploy-uat-remote.sh \
-                          "${UAT_SSH_USER}@${UAT_SSH_HOST}:/tmp/deploy-uat-remote-${SHORT_SHA}.sh"
-                        ssh "${UAT_SSH_USER}@${UAT_SSH_HOST}" \
-                          "chmod +x /tmp/deploy-uat-remote-${SHORT_SHA}.sh && \
-                           DEPLOY_ROOT='${DEPLOY_PATH}' RELEASE_ID='${SHORT_SHA}' SERVICE_NAME='${SERVICE_NAME}' \
-                           bash /tmp/deploy-uat-remote-${SHORT_SHA}.sh && \
-                           rm -f /tmp/deploy-uat-remote-${SHORT_SHA}.sh"
-                    '''
-                }
-            }
-        }
     }
 
     post {
@@ -329,7 +232,7 @@ pipeline {
             echo "Build ${SHORT_SHA} finished."
         }
         failure {
-            echo 'Pipeline failed — see stage logs (unit tests need Java 21 + Node 20 only; no Docker DB).'
+            echo 'Pipeline failed — see stage logs (server needs Java 21; client tests need Node 20 + npm ci).'
         }
     }
 }
